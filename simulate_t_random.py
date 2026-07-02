@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import random
+import re
 import sys
 import time as time_module
 import urllib.parse
@@ -111,14 +112,20 @@ def main(argv: list[str]) -> int:
     json_file = _arg_value(argv, "--json-file", "")
     if per_trade <= 0:
         per_trade = max(total_cash / max(sample_size, 1), 1000.0)
+    custom_stocks = _arg_value(argv, "--stocks", "")
     pool = build_random_pool()
+    custom_pool = parse_custom_stock_pool(custom_stocks, pool)
+    custom_mode = bool(custom_pool)
+    if custom_pool:
+        pool = custom_pool
+        sample_size = min(max(sample_size, len(custom_pool)), len(custom_pool))
 
     scan_size = max(sample_size * 4, sample_size + 24)
     results: List[Result] = []
     minute_map: dict[str, List[Bar]] = {}
     random.shuffle(pool)
     selected = fetch_simulation_candidates(pool, scan_size)
-    if len(selected) < scan_size:
+    if not custom_mode and len(selected) < scan_size:
         selected.extend(history_simulation_candidates(scan_size - len(selected), {stock.code for stock, _bars in selected}))
     skipped = max(0, min(len(pool), max(scan_size * 4, scan_size + 18)) - len(selected))
     for stock, bars in selected:
@@ -716,6 +723,31 @@ def build_random_pool() -> List[Stock]:
         by_code.setdefault(stock.code, stock)
     rows = list(by_code.values())
     return rows if rows else fallback_stock_pool()
+
+
+def parse_custom_stock_pool(text: str, pool: List[Stock]) -> List[Stock]:
+    tokens = re.findall(r"(?:sh|sz)?\d{6}", str(text or ""), re.I)
+    if not tokens:
+        return []
+    by_code = {stock.code: stock for stock in pool}
+    for stock in fallback_stock_pool():
+        by_code.setdefault(stock.code, stock)
+    out: list[Stock] = []
+    seen: set[str] = set()
+    for token in tokens:
+        code_match = re.search(r"(\d{6})", token)
+        if not code_match:
+            continue
+        code = code_match.group(1)
+        if code in seen:
+            continue
+        prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
+        stock = by_code.get(code) or Stock(code, code, prefix + code)
+        out.append(stock)
+        seen.add(code)
+        if len(out) >= 30:
+            break
+    return out
 
 
 def load_cached_stock_pool() -> List[Stock]:

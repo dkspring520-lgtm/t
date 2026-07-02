@@ -28,6 +28,7 @@ COMMON_NAMES = {
     "002050": "三花智控",
     "002648": "卫星化学",
     "600580": "卧龙电驱",
+    "688356": "键凯科技",
 }
 
 DEFAULT_WATCHLIST = [
@@ -56,7 +57,7 @@ def save_watchlist_text(text: str) -> dict:
 
 
 def parse_watchlist_text(text: str) -> list[StockConfig]:
-    tokens = re.split(r"[\s,，;；/]+", str(text or "").strip())
+    tokens = re.split(r"[\s,，、;；]+", str(text or "").strip())
     out: list[StockConfig] = []
     seen: set[str] = set()
     for token in tokens:

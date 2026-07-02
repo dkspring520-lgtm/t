@@ -83,7 +83,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(realtime_payload())
             return
         if path == "/api/premarket":
-            self._send_json(premarket_payload())
+            query = parse_qs(parsed_url.query)
+            code = (query.get("code") or [""])[0]
+            self._send_json(premarket_payload(code))
             return
         if path == "/api/watchlist":
             self._send_json(watchlist_payload())
@@ -228,6 +230,7 @@ def load_dashboard_settings() -> dict:
         "sample": clamp_int(data.get("sample"), defaults["sample"], 1, 30),
     }
     settings.update(load_profit_strategy_settings())
+    settings.update(public_extra_settings(data))
     settings.update(public_ai_settings(data))
     return {"ok": True, **settings}
 
@@ -240,6 +243,7 @@ def save_dashboard_settings(data: dict) -> dict:
         "trade": clamp_int(data.get("trade"), 20000, 1000, 100000000),
         "sample": clamp_int(data.get("sample"), 10, 1, 30),
     })
+    settings.update(sanitize_extra_settings(data, current))
     settings.update(sanitize_ai_settings(data, current))
     try:
         SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -250,8 +254,44 @@ def save_dashboard_settings(data: dict) -> dict:
     save_strategy_options(data)
     out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
     out.update(load_profit_strategy_settings())
+    out.update(public_extra_settings(settings))
     out.update(public_ai_settings(settings))
     return {"ok": True, **out}
+
+
+def sanitize_extra_settings(data: dict, current: dict) -> dict:
+    keep = {}
+    text_fields = {
+        "marketDataApi": 220,
+        "newsApi": 220,
+        "quoteApi": 220,
+        "customStrategy": 2200,
+        "strategyMode": 32,
+        "maxSignalsPerDay": 8,
+        "lowBuyDev": 12,
+        "highSellDev": 12,
+        "signalCooldown": 8,
+    }
+    for key, limit in text_fields.items():
+        if key in data:
+            keep[key] = str(data.get(key) or "").strip()[:limit]
+        elif key in current:
+            keep[key] = str(current.get(key) or "").strip()[:limit]
+    return keep
+
+
+def public_extra_settings(data: dict) -> dict:
+    return {
+        "marketDataApi": str(data.get("marketDataApi") or ""),
+        "newsApi": str(data.get("newsApi") or ""),
+        "quoteApi": str(data.get("quoteApi") or ""),
+        "customStrategy": str(data.get("customStrategy") or ""),
+        "strategyMode": str(data.get("strategyMode") or "官方默认策略"),
+        "maxSignalsPerDay": str(data.get("maxSignalsPerDay") or "2"),
+        "lowBuyDev": str(data.get("lowBuyDev") or "-1.20"),
+        "highSellDev": str(data.get("highSellDev") or "1.40"),
+        "signalCooldown": str(data.get("signalCooldown") or "10"),
+    }
 
 
 def read_dashboard_settings_file() -> dict:
@@ -503,7 +543,7 @@ PREMARKET_FUTURES = [
 ]
 
 
-def premarket_payload() -> dict:
+def premarket_payload(code: str = "") -> dict:
     rows = []
     market_context = cached_market_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
@@ -514,7 +554,7 @@ def premarket_payload() -> dict:
                 rows.append(item)
     order = {name: i for i, (name, *_rest) in enumerate(PREMARKET_FUTURES)}
     rows.sort(key=lambda row: order.get(row["name"], 99))
-    target = premarket_target_stock()
+    target = premarket_target_stock(code)
     bias = premarket_stock_bias(rows, target)
     data = {"ok": True, "updatedAt": datetime.now().strftime("%m-%d %H:%M"), "rows": rows, "target": bias, "zijin": bias}
     MARKET_CONTEXT_CACHE["ts"] = datetime.now().timestamp()
@@ -522,7 +562,15 @@ def premarket_payload() -> dict:
     return data
 
 
-def premarket_target_stock() -> dict:
+def premarket_target_stock(code: str = "") -> dict:
+    if code:
+        try:
+            from monitor_config import parse_stock_token
+            stock = parse_stock_token(code)
+            if stock:
+                return {"name": stock.name, "code": stock.code, "symbol": stock.symbol}
+        except Exception:
+            pass
     try:
         from monitor_config import load_watchlist
         stock = (load_watchlist() or [None])[0]
@@ -1162,10 +1210,10 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
     name = str(quote.get("name") or stock.name)
     change = float(quote.get("change") or 0.0)
     amount = float(quote.get("amount") or 0.0)
-    category = stock_category(name)
+    category = stock_category(f"{name}{stock.code}")
     daily_profile = daily_stock_analysis_profile(name, category["name"], change, amount)
     trend_score = 2 if change >= 2 else 1 if change >= 0.5 else -1 if change <= -2.5 else 0
-    money_score = 2 if amount >= 800000 else 1 if amount >= 200000 else 0
+    money_score = money_activity_score(amount)
     risk_penalty = 1 if abs(change) >= 6 else 0
     medium = medium_term_profile(name, category["name"], change, amount, daily_profile)
     growth = aggressive_growth_profile(stock.code, name, category["name"], change, amount) if aggressive else {"score": 0, "label": "稳健", "logic": "稳健中期筛选", "risk": "按趋势和成交量确认"}
@@ -1191,6 +1239,8 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
         "categoryReason": category["reason"],
         "price": float(quote.get("price") or 0.0),
         "change": change,
+        "amountWan": amount,
+        "amountText": format_amount_wan(amount),
         "score": score,
         "reasons": [
             category["reason"],
@@ -1201,14 +1251,20 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
             f"资金观察：{daily_profile['money']}",
             "单股研究：融合技术面、行业催化、资金活跃度、风险控制和3个月情景预测",
         ],
-        "agents": [
-            f"技术员：{tech}，{daily_profile['daily']}",
-            f"新闻员：{daily_profile['news']}",
-            f"基本面员：{category['reason']}，未来看{forecast['basis']}",
-            f"资金员：成交活跃度 {money_score}，{daily_profile['money']}",
-            f"风控员：{risk}，{growth['risk'] if aggressive else medium['risk']}",
-            f"决策员：{tier['decision']}",
-        ],
+        "agents": research_agents(
+            tech,
+            name,
+            stock.code,
+            category,
+            change,
+            amount,
+            daily_profile,
+            medium,
+            forecast,
+            risk,
+            growth["risk"] if aggressive else medium["risk"],
+            tier["decision"],
+        ),
         "dailyAnalysis": daily_profile,
         "mediumAnalysis": medium,
         "mediumScore": medium["score"],
@@ -1255,9 +1311,64 @@ def local_screener_rows(aggressive: bool = False, review: bool = False) -> list[
     return diversify_screener_rows(rows, limit=10, aggressive=aggressive or review)
 
 
+def research_agents(
+    tech: str,
+    name: str,
+    code: str,
+    category: dict,
+    change: float,
+    amount: float,
+    daily_profile: dict,
+    medium: dict,
+    forecast: dict,
+    risk: str,
+    risk_detail: str,
+    decision: str,
+) -> list[str]:
+    cat = category["name"]
+    if change >= 2.5:
+        tech_detail = f"短线偏强但不追高，等回踩黄线或放量突破确认，当前涨跌{change:+.2f}%"
+    elif change >= 0.3:
+        tech_detail = f"温和走强，适合观察是否沿均线抬升，当前涨跌{change:+.2f}%"
+    elif change <= -2.5:
+        tech_detail = f"弱势回落，先等止跌K线和量能收缩，当前涨跌{change:+.2f}%"
+    else:
+        tech_detail = f"震荡区间，方向未选出，当前涨跌{change:+.2f}%"
+
+    news_map = {
+        "资源周期": "重点跟踪金价、铜价、美元、矿山并购和海外扰动",
+        "AI科技": "重点跟踪算力订单、光模块、服务器链和海外科技股反馈",
+        "新能源": "重点跟踪产业链价格、装机、储能和政策边际变化",
+        "消费医药": "重点跟踪业绩兑现、集采政策、创新药/医疗需求和估值修复",
+        "金融蓝筹": "重点跟踪成交额、政策预期、指数方向和利率环境",
+    }
+    basic_map = {
+        "资源周期": "周期弹性强，核心变量是商品价格和产能兑现",
+        "AI科技": "弹性来自景气预期，必须防估值和拥挤交易风险",
+        "新能源": "行业分化明显，只选量价改善和业绩修复方向",
+        "消费医药": "更看确定性、估值修复和中期业绩兑现",
+        "金融蓝筹": "偏指数配置属性，适合趋势确认后跟随",
+    }
+    money_text = money_activity_label(amount)
+    if amount >= 50000:
+        money_detail = f"{money_text}，可以纳入重点观察，但避免急拉追入"
+    elif amount >= 10000:
+        money_detail = f"{money_text}，流动性够观察，等待连续性"
+    else:
+        money_detail = f"{money_text}，资金不够主动，信号需要降权"
+    return [
+        f"技术员：{tech}；{tech_detail}；{daily_profile['daily']}",
+        f"新闻员：{news_map.get(cat, '重点跟踪公告、行业景气和政策变化')}；{daily_profile['news']}",
+        f"基本面员：{basic_map.get(cat, category['reason'])}；未来1-3个月看{forecast['basis']}",
+        f"资金员：{money_detail}",
+        f"风控员：{risk}；{risk_detail}",
+        f"决策员：{decision}",
+    ]
+
+
 def apply_selection_review_panel(row: dict) -> dict:
     change = float(row.get("change") or 0)
-    amount = float(row.get("price") or 0) * 0 + float(row.get("mediumScore") or 0)
+    amount = float(row.get("amountWan") or 0)
     medium_score = int(row.get("mediumScore") or 0)
     growth_score = int((row.get("growthAnalysis") or {}).get("score") or 0)
     base_score = int(row.get("score") or 0)
@@ -1277,7 +1388,7 @@ def apply_selection_review_panel(row: dict) -> dict:
         f"TradingAgents：行业{category}，中期分{medium_score}/10，先看催化和趋势共振",
         f"UZI评审：商业/基本面/风险综合 {uzi_score}/10，结论：{row['tier']}",
         f"Kronos路径员：选股阶段做波动适配 {kronos_score}/10，盘中再用分钟线确认路径",
-        f"资金员：当前涨跌{change:+.2f}%，避免追高，关注放量突破或回踩承接",
+        f"资金员：成交额{format_amount_wan(amount)}，当前涨跌{change:+.2f}%，避免追高，关注放量突破或回踩承接",
         f"风控员：候选不等于买入，必须经过盘中黄线/VWAP二次确认",
         f"决策员：{row['decision']}",
     ]
@@ -1330,7 +1441,7 @@ def diversify_screener_rows(rows: list[dict], limit: int = 10, aggressive: bool 
 def research_tier(score: int, change: float, amount: float, category: str, medium_score: int = 0) -> dict:
     if medium_score >= 7 and score >= 10:
         tier = "中期核心"
-    elif score >= 9 and amount >= 200000:
+    elif score >= 9 and amount >= 50000:
         tier = "重点跟踪"
     elif score >= 7:
         tier = "观察池"
@@ -1342,7 +1453,7 @@ def research_tier(score: int, change: float, amount: float, category: str, mediu
         use_case = "1-3月潜力"
     elif category in {"资源周期", "AI科技", "新能源"} and score >= 7:
         use_case = "适合波段跟踪"
-    elif amount >= 200000 and 0.3 <= abs(change) <= 4.5:
+    elif amount >= 10000 and 0.3 <= abs(change) <= 4.5:
         use_case = "适合做T观察"
     elif abs(change) >= 6:
         use_case = "只看不追"
@@ -1387,9 +1498,9 @@ def medium_term_profile(name: str, category: str, change: float, amount: float, 
         catalyst = "公告、行业景气、资金持续流入"
         risk = "题材不清晰，容易轮动失败"
 
-    if amount >= 800000:
+    if amount >= 50000:
         score += 2
-    elif amount >= 200000:
+    elif amount >= 10000:
         score += 1
     if 0.3 <= change <= 4.5:
         score += 2
@@ -1481,19 +1592,48 @@ def three_month_forecast(medium_score: int, score: int, change: float, amount: f
     return {"label": label, "expected": expected, "confidence": confidence, "basis": basis}
 
 
+def money_activity_score(amount_wan: float) -> int:
+    amount = float(amount_wan or 0)
+    if amount >= 50000:
+        return 2
+    if amount >= 10000:
+        return 1
+    return 0
+
+
+def money_activity_label(amount_wan: float) -> str:
+    amount = float(amount_wan or 0)
+    if amount >= 50000:
+        return f"成交活跃，成交额{format_amount_wan(amount)}"
+    if amount >= 10000:
+        return f"成交正常，成交额{format_amount_wan(amount)}"
+    if amount > 0:
+        return f"成交偏弱，成交额{format_amount_wan(amount)}"
+    return "成交额暂未获取，资金项降权"
+
+
+def format_amount_wan(amount_wan: float) -> str:
+    amount = float(amount_wan or 0)
+    if amount >= 10000:
+        return f"{amount / 10000:.2f}亿"
+    if amount > 0:
+        return f"{amount:.0f}万"
+    return "--"
+
+
 def daily_stock_analysis_profile(name: str, category: str, change: float, amount: float) -> dict:
     """A light local adapter inspired by daily_stock_analysis style reports.
 
     It keeps the research page fast and usable without depending on the external
     project's runtime. Gemini can still enhance the wording when available.
     """
-    amount_level = "活跃" if amount >= 800000 else "正常" if amount >= 200000 else "偏弱"
+    amount_level = "活跃" if amount >= 50000 else "正常" if amount >= 10000 else "偏弱"
     score = 0
     if category in {"资源周期", "AI科技", "新能源"}:
         score += 1
-    if amount >= 800000:
+    if amount >= 50000:
         score += 2
-    elif amount >= 200000:
+    elif amount >= 10000:
         score += 1
     if change >= 2:
         daily = "日线动量偏强，适合加入强势跟踪"
@@ -1523,10 +1663,10 @@ def daily_stock_analysis_profile(name: str, category: str, change: float, amount
         news = "重点看公告、行业消息和资金是否持续放大"
         risk = "题材不清晰时降低权重"
 
-    money = f"成交额级别{amount_level}，需要继续观察连续性"
-    if amount >= 800000 and change >= 0:
+    money = f"成交额{format_amount_wan(amount)}，级别{amount_level}，需要继续观察连续性"
+    if amount >= 50000 and change >= 0:
         money = "成交活跃且价格未弱，资金承接较好"
-    elif amount >= 800000 and change < 0:
+    elif amount >= 50000 and change < 0:
         money = "放量下跌，需确认是否为洗盘而非派发"
     return {"score": max(score, -1), "daily": daily, "news": news, "money": money, "risk": risk}
 
@@ -1570,6 +1710,14 @@ def gemini_status_payload() -> dict:
 
 
 def stock_category(name: str) -> dict:
+    overrides = {
+        "688356": {"name": "消费医药", "base": 3, "reason": "医药高分子材料与医疗应用相关"},
+    }
+    for code, item in overrides.items():
+        if code in name:
+            return item
+    if any(x in name for x in ["恒瑞", "迈瑞", "药明", "键凯", "制药", "医药", "医疗", "生物", "药", "医", "疫苗", "诊断", "器械"]):
+        return {"name": "消费医药", "base": 3, "reason": "医药、医疗器械或生命科学相关"}
     if any(x in name for x in ["中际", "新易盛", "中兴", "工业富联", "中科曙光", "浪潮信息", "科技", "电子", "智能", "软件", "信息", "通信", "芯", "半导", "数据", "网络", "光电"]):
         return {"name": "AI科技", "base": 5, "reason": "AI算力/通信链条弹性较高"}
     if any(x in name for x in ["紫金", "神火", "神华", "中国铝业", "洛阳钼业", "卫星化学", "矿", "黄金", "铜", "铝", "钼", "煤", "钢", "稀土", "石化", "化学"]):
@@ -1578,7 +1726,7 @@ def stock_category(name: str) -> dict:
         return {"name": "新能源", "base": 4, "reason": "新能源与汽车产业链"}
     if any(x in name for x in ["招商", "中信", "平安", "东方财富", "天风", "银行", "证券", "保险"]):
         return {"name": "金融蓝筹", "base": 3, "reason": "金融权重，适合趋势确认"}
-    if any(x in name for x in ["茅台", "五粮液", "恒瑞", "迈瑞", "药明", "制药", "医药", "医疗", "生物", "药", "酒", "食品", "消费"]):
+    if any(x in name for x in ["茅台", "五粮液", "酒", "食品", "消费"]):
         return {"name": "消费医药", "base": 3, "reason": "消费医药核心资产"}
     return {"name": "综合观察", "base": 2, "reason": "基础股票池观察标的"}
 
@@ -1769,6 +1917,9 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         json_file = str(options.get("json_file") or "")
         if json_file:
             cmd.extend(["--json-file", json_file])
+        stocks = str(options.get("stocks") or "").strip()
+        if stocks:
+            cmd.extend(["--stocks", stocks])
         if name == "simulate5":
             days = clamp_int(options.get("days"), 5, 1, 60)
             cmd.extend(["--days", str(days)])
@@ -2218,7 +2369,7 @@ LANDING_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>金属雷达 - A股资源股盘中信号系统</title>
+<title>T神器 - A股资源股盘中信号系统</title>
 <style>
 :root{--ink:#17202a;--muted:#667481;--line:#e8eef2;--red:#eb5b68;--green:#2fb878;--gold:#d7a032;--blue:#2563eb}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#f7fbfb}
@@ -2227,7 +2378,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
 </head>
 <body>
 <div class="page">
-  <nav class="nav"><a class="brand" href="/landing"><span class="mark">R</span><span>金属雷达</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="#deploy">部署</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
+  <nav class="nav"><a class="brand" href="/landing"><span class="mark">R</span><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="#deploy">部署</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
   <section class="hero">
     <div>
       <span class="eyebrow">面向A股资源股与日内做T的实时雷达</span>
@@ -2239,7 +2390,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
     </div>
     <div class="product">
       <div class="screen">
-        <div class="screen-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>Command Center</span></div>
+        <div class="screen-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>T神器控制台</span></div>
         <div class="dash">
           <div class="metrics"><div class="metric"><span>盘前分</span><b>82</b></div><div class="metric"><span>黄金</span><b class="pos">+0.55%</b></div><div class="metric"><span>铜</span><b class="pos">+2.63%</b></div><div class="metric"><span>美元</span><b>+0.09%</b></div></div>
           <div class="row"><div><span class="name">紫金矿业</span><span class="code">601899</span></div><span class="pill buy">低吸观察</span><svg class="chart" viewBox="0 0 220 42"><polyline points="0,28 22,30 44,26 66,31 88,21 110,18 132,20 154,14 176,17 198,12 220,13" fill="none" stroke="#eb5b68" stroke-width="3" stroke-linecap="round"/></svg><b class="pos">偏多</b></div>
@@ -2305,7 +2456,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
   </div>
 </section>
 <section class="cta"><div><h2>先把本地版跑稳定，再做云端收费。</h2><p>当前版本已具备商业化雏形：监控、模拟、选股、盘前风向、微信提醒。</p></div><div class="hero-actions"><a class="btn primary" href="/">进入控制台</a><a class="btn" href="/register">注册体验账号</a></div></section>
-<footer class="footer">金属雷达 · A股资源股盘中信号系统 · 策略研究工具，不承诺收益。</footer>
+<footer class="footer">T神器 · A股资源股盘中信号系统 · 策略研究工具，不承诺收益。</footer>
 </body>
 </html>"""
 
@@ -2315,7 +2466,7 @@ AUTH_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>账号 - 金属雷达</title>
+<title>账号 - T神器</title>
 <style>
 :root{--ink:#17202a;--muted:#6b7785;--line:#e8eef2;--blue:#2563eb;--green:#2fb878;--bg:#f5faf9}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#7cefed,transparent 30%),linear-gradient(135deg,#81989f,#f7fbfb 42%,#fff);display:flex;align-items:center;justify-content:center;padding:18px}
@@ -2325,7 +2476,7 @@ a,button,input{font:inherit}a{text-decoration:none;color:inherit}.card{width:min
 <body>
 <main class="card">
   <section class="hero">
-    <div class="brand">金属雷达 · 商业内测账号</div>
+    <div class="brand">T神器 · 商业内测账号</div>
     <h1>把策略、提醒和复盘绑定到你的账号。</h1>
     <p>当前是本地内测版：账号会保存在本机，用于模拟会员权限、策略草稿和后续商业化流程。</p>
     <div class="points">
@@ -2376,7 +2527,7 @@ ACCOUNT_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>会员中心 - 金属雷达</title>
+<title>会员中心 - T神器</title>
 <style>
 :root{--ink:#17202a;--muted:#6b7785;--line:#e8eef2;--blue:#2563eb;--green:#2fb878;--bg:#f5faf9}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#7cefed,transparent 30%),linear-gradient(135deg,#81989f,#f7fbfb 42%,#fff);padding:24px}a,button{font:inherit;text-decoration:none;color:inherit}button{height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 14px;font-weight:950;cursor:pointer;box-shadow:0 8px 20px rgba(20,38,48,.06)}button.primary{background:#17202a;color:#fff;border-color:#17202a}.shell{width:min(1180px,100%);margin:auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.brand{font-size:24px;font-weight:950}.sub{color:var(--muted)}.actions{display:flex;gap:9px;flex-wrap:wrap}.panel{background:rgba(255,255,255,.93);border:1px solid rgba(255,255,255,.9);border-radius:24px;box-shadow:0 28px 80px rgba(25,45,50,.18);padding:22px}.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin-top:14px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px}.card h2,.card h3{margin:0 0 10px}.kv{display:grid;grid-template-columns:150px 1fr;border-top:1px solid #eef2f4}.kv div{padding:12px 0;border-bottom:1px solid #eef2f4}.kv div:nth-child(odd){color:#6b7785;font-weight:900}.plan{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.price{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fff}.price.active{border-color:#9ee4bd;background:#f2fff7}.price b{font-size:20px}.price ul{margin:10px 0 0;padding-left:18px;color:#52616f}.empty{text-align:center;padding:50px;color:#52616f}@media(max-width:850px){.grid,.plan{grid-template-columns:1fr}.top{display:block}.actions{margin-top:10px}}
@@ -2419,7 +2570,7 @@ COMMERCIAL_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>商业功能中心 - 金属雷达</title>
+<title>商业功能中心 - T神器</title>
 <style>
 :root{--ink:#17202a;--muted:#6b7785;--line:#e8eef2;--red:#eb5b68;--green:#2fb878;--blue:#2563eb;--bg:#f5faf9}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#7cefed,transparent 30%),linear-gradient(135deg,#81989f,#f7fbfb 42%,#fff)}
@@ -2528,13 +2679,13 @@ HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>A股做T监控</title>
+<title>T神器</title>
 <style>
 :root{--bg:#eef6f6;--panel:#ffffff;--ink:#20252b;--muted:#7b8792;--line:#e9eef1;--green:#35b978;--red:#ec5f6b;--blue:#2563eb;--yellow:#d99a1b}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;font:13px/1.5 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 90% 0,#79eee9 0,transparent 36%),linear-gradient(135deg,#79939b,#eaf5f5 42%,#f7fbfb);overflow:hidden}
 button,input{font:inherit}button{height:34px;border:1px solid var(--line);border-radius:11px;background:linear-gradient(180deg,#fff,#f9fbfb);padding:0 13px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);transition:transform .12s ease,box-shadow .12s ease,border-color .12s ease}button:hover{transform:translateY(-1px);box-shadow:0 12px 24px rgba(31,46,56,.10);border-color:#dbe5ea}button.primary{background:#20252b;color:#fff;border-color:#20252b}button:disabled{opacity:.6;cursor:wait}
 .shell{min-height:100vh;padding:18px;display:flex;align-items:center;justify-content:center}.panel{position:relative;width:min(1560px,calc(100vw - 28px));height:min(920px,calc(100vh - 28px));background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:22px;box-shadow:0 28px 80px rgba(25,45,50,.20);padding:18px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr);gap:12px;overflow:hidden}.top{display:flex;align-items:center;justify-content:space-between}.title{font-size:22px;font-weight:950}.sub{color:var(--muted);font-size:12px}.top-actions{display:flex;gap:8px;align-items:center}.settings-panel,.ai-panel{position:absolute;right:18px;top:62px;z-index:10;width:min(430px,calc(100vw - 44px));background:rgba(255,255,255,.98);border:1px solid var(--line);border-radius:16px;box-shadow:0 22px 60px rgba(31,46,56,.18);padding:12px}.settings-panel[hidden],.ai-panel[hidden]{display:none}.settings-head,.ai-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:950}.settings-group{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.settings-title{font-size:11px;color:var(--muted);font-weight:950;margin:0 0 8px}.settings-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.settings-actions button{box-shadow:none}.settings-note{font-size:11px;color:#64727f;line-height:1.6}.ai-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.ai-config-grid label{font-size:11px;color:#64727f;font-weight:900}.ai-config-grid label.wide{grid-column:1/-1}.ai-config-grid input,.ai-config-grid select{width:100%;height:34px;margin-top:4px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;color:#20252b;font-weight:800}.settings-messages{max-height:170px;overflow:auto;border-top:1px solid var(--line);padding-top:10px;color:#4f5b66;line-height:1.65}.ai-panel{top:112px;width:min(520px,calc(100vw - 44px));max-height:68vh;overflow:auto}.ai-body{font-size:12px;line-height:1.75;color:#39444d}.ai-body b{display:block;margin:8px 0 3px}.ai-chip{display:inline-flex;margin:0 5px 5px 0;border-radius:999px;background:#eef7ff;color:#2563eb;padding:4px 8px;font-weight:900}
-.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.field{position:relative}.field span{position:absolute;top:1px;left:10px;font-size:9px;color:var(--muted);font-weight:800}.field input{height:34px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 10px 0;width:116px}.stock-manager{display:flex;align-items:center;gap:8px;flex:1 1 520px;min-width:420px;padding:7px 9px;border:1px solid #dfe7eb;border-radius:17px;background:linear-gradient(180deg,#fff,#f8fbfb);box-shadow:0 12px 28px rgba(31,46,56,.07)}.stock-manager-title{font-size:11px;color:#64727f;font-weight:950;white-space:nowrap}.stock-manager input,.stock-manager select{height:30px;border:1px solid #e3e9ed;border-radius:10px;background:#fff;padding:0 10px;font-weight:800;color:#20252b}.stock-manager input{width:128px}.stock-manager select{width:150px}.watch-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:180px;flex:1}.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:linear-gradient(180deg,#edf6ff,#e8f2ff);color:#2563eb;padding:5px 9px;font-weight:850;box-shadow:inset 0 0 0 1px rgba(37,99,235,.05)}.tag button{height:18px;width:18px;border:0;border-radius:50%;padding:0;background:#dcecff;color:#2563eb;box-shadow:none;line-height:18px}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.field{position:relative}.field span{position:absolute;top:1px;left:10px;font-size:9px;color:var(--muted);font-weight:800}.field input{height:34px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 10px 0;width:116px}.stock-manager{display:flex;align-items:center;gap:8px;flex:1 1 520px;min-width:420px;padding:7px 9px;border:1px solid #dfe7eb;border-radius:17px;background:linear-gradient(180deg,#fff,#f8fbfb);box-shadow:0 12px 28px rgba(31,46,56,.07)}.stock-manager-title{font-size:11px;color:#64727f;font-weight:950;white-space:nowrap}.stock-manager input{height:30px;border:1px solid #e3e9ed;border-radius:10px;background:#fff;padding:0 10px;font-weight:800;color:#20252b;width:190px}.watch-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:180px;flex:1}.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:linear-gradient(180deg,#edf6ff,#e8f2ff);color:#2563eb;padding:5px 9px;font-weight:850;box-shadow:inset 0 0 0 1px rgba(37,99,235,.05);cursor:pointer}.tag.active{background:#20252b;color:#fff}.tag button{height:18px;width:18px;border:0;border-radius:50%;padding:0;background:#dcecff;color:#2563eb;box-shadow:none;line-height:18px}.tag.active button{background:rgba(255,255,255,.18);color:#fff}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
 .premarket{display:grid;grid-template-columns:230px minmax(0,1fr) 330px;gap:10px;align-items:stretch}.pm-card{background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:17px;padding:10px 12px;box-shadow:0 12px 28px rgba(31,46,56,.06)}.pm-title{font-size:12px;color:var(--muted);font-weight:900}.pm-score{font-size:26px;font-weight:950;letter-spacing:.2px}.pm-signal{display:inline-flex;border-radius:999px;padding:4px 9px;font-weight:950;background:#eef7ff;color:#2563eb}.pm-signal.bull{background:#fff0f1;color:var(--red)}.pm-signal.bear{background:#ebfff2;color:var(--green)}.pm-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:8px}.pm-item{background:linear-gradient(180deg,#fbfdfd,#f6faf9);border:1px solid #eef2f4;border-radius:13px;padding:8px 9px}.pm-item b{display:block;font-size:12px}.pm-item span{font-size:12px;font-weight:950}.pm-reasons{font-size:12px;color:#52606c;line-height:1.7}
 .live{min-height:0;overflow:auto;overflow-x:hidden;background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 34px rgba(31,46,56,.08)}.monitor-table{min-width:0;width:100%}.monitor-head,.monitor-row{display:grid;grid-template-columns:178px 92px minmax(210px,.9fr) 78px 106px 146px minmax(210px,1fr) 74px;gap:10px;align-items:center}.monitor-head{position:sticky;top:0;z-index:2;height:40px;padding:0 14px;background:linear-gradient(180deg,#fbfdfd,#f6faf9);border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.monitor-row{min-height:92px;padding:8px 14px;border-bottom:1px solid #edf1f3}.monitor-row:hover{background:#fbfdfd}.monitor-row:last-child{border-bottom:0}.monitor-row.strong-signal{background:linear-gradient(90deg,rgba(236,95,107,.08),rgba(255,255,255,0));box-shadow:inset 4px 0 0 rgba(236,95,107,.75)}.rank-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:9px;background:#aab4bd}.rank-dot.up{background:var(--red)}.rank-dot.down{background:var(--green)}.live-name{font-size:15px;font-weight:950}.live-code,.live-time{color:var(--muted);margin-left:5px}.live-price{font-size:23px;font-weight:950}.live-pos{color:var(--red)}.live-neg{color:var(--green)}.live-chart{width:100%;height:72px;display:block}.kv{font-size:12px;color:var(--muted);line-height:1.6}.kv b{display:block;color:var(--ink);font-size:15px}.signal-pill{display:inline-flex;border-radius:999px;padding:5px 9px;background:#eef3f6;color:#52606c;font-weight:900}.signal-pill.hot{background:#fff0f1;color:#ec5f6b}.live-signal{font-size:12px;color:#4f5b66;line-height:1.55;margin-top:4px}.money-line{border-radius:13px;background:linear-gradient(180deg,#f8fbfb,#f3f7f8);padding:8px 10px;color:#52606c;font-size:12px;line-height:1.48;max-height:72px;overflow:hidden}.signal-toasts{position:absolute;right:18px;top:116px;z-index:30;display:flex;flex-direction:column;gap:10px;width:min(390px,calc(100vw - 44px));pointer-events:none}.signal-toast{pointer-events:auto;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:16px;box-shadow:0 20px 55px rgba(15,25,35,.26);padding:12px 14px;animation:toastIn .18s ease-out}.signal-toast.buy{background:linear-gradient(135deg,#e5484d,#7f1d1d)}.signal-toast.sell{background:linear-gradient(135deg,#16a34a,#14532d)}.signal-toast .toast-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}.signal-toast .toast-name{font-weight:950;font-size:15px}.signal-toast .toast-signal{border-radius:999px;background:rgba(255,255,255,.18);padding:3px 8px;font-size:12px;font-weight:900;white-space:nowrap}.signal-toast .toast-price{color:rgba(255,255,255,.82);font-size:12px}.signal-toast .toast-reason{color:#fff;font-size:12px;line-height:1.55;margin-bottom:7px}.signal-toast .toast-agents{color:rgba(255,255,255,.86);font-size:12px;line-height:1.6}.signal-toast button{height:24px;padding:0 7px;border:0;border-radius:8px;background:rgba(255,255,255,.16);color:#fff;box-shadow:none}.signal-toast.fade{opacity:0;transform:translateY(-6px);transition:.25s}.op{display:flex;gap:6px;flex-wrap:wrap}.op button{height:28px;padding:0 9px;border-radius:8px;color:#2563eb;background:#eef7ff;border-color:#dbeafe;box-shadow:none}.op button.ai{color:#fff;background:#20252b;border-color:#20252b}.empty-live{padding:42px;text-align:center;color:var(--muted);font-weight:850}@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
 .bottom{display:none}.box{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;min-width:0;min-height:0}.head{height:42px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);font-weight:900}.badge{font-size:11px;color:#35a66d;background:#eafff1;border-radius:999px;padding:4px 9px}.content{padding:12px 14px;overflow:auto;line-height:1.75}.empty{color:var(--muted)}pre{margin:0;padding:12px 14px;flex:1;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.65 "Microsoft YaHei UI",Consolas,monospace}.msg{margin:0 0 8px}.msg time{color:var(--muted);margin-right:8px}.wechat-focus{outline:2px solid #8fe8b1;box-shadow:0 0 0 5px rgba(69,201,129,.14)}
@@ -2545,7 +2696,7 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
 <div class="shell"><main class="panel">
   <div id="signalToasts" class="signal-toasts"></div>
   <div class="top">
-    <div><div class="title">Command Center</div><div class="sub">多股票实时监控</div></div>
+    <div><div class="title">T神器控制台</div><div class="sub">多股票实时监控</div></div>
     <div class="top-actions"><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
   </div>
   <div id="settingsPanel" class="settings-panel" hidden>
@@ -2578,6 +2729,31 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
       </div>
       <div id="aiConfigStatus" class="settings-note">AI Key 只保存在本机配置，界面不会明文回显。</div>
     </div>
+    <div class="settings-group">
+      <div class="settings-title">第三方API接口</div>
+      <div class="ai-config-grid">
+        <label class="wide">行情接口<input id="marketDataApi" placeholder="可填 MiniQMT / Level2 / 自建行情API地址" /></label>
+        <label class="wide">新闻接口<input id="newsApi" placeholder="可填新闻API、RSS聚合或热点接口地址" /></label>
+        <label class="wide">备用报价接口<input id="quoteApi" placeholder="可留空，当前默认使用本地腾讯/东方财富数据" /></label>
+      </div>
+      <div class="settings-note">未配置时继续使用本地默认数据源；配置后后续可接入更稳定的商业行情。</div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-title">自定义做T策略</div>
+      <div class="ai-config-grid">
+        <label>策略模式<select id="strategyMode"><option>官方默认策略</option><option>自定义策略</option><option>AI复核优先</option></select></label>
+        <label>单股每日提醒<input id="maxSignalsPerDay" type="number" min="1" max="6" placeholder="2" /></label>
+        <label>低吸偏离%<input id="lowBuyDev" type="number" step="0.05" placeholder="-1.20" /></label>
+        <label>高抛偏离%<input id="highSellDev" type="number" step="0.05" placeholder="1.40" /></label>
+        <label>提醒冷却分钟<input id="signalCooldown" type="number" min="1" max="120" placeholder="10" /></label>
+        <label class="wide">策略说明<input id="customStrategy" placeholder="例如：围绕黄线，低开急跌只等右侧拐头；冲高无量先反T。" /></label>
+      </div>
+      <div class="settings-actions">
+        <button onclick="saveAiSettings()">保存全部设置</button>
+        <button onclick="location.href='/simulation'">去模拟验证</button>
+      </div>
+      <div class="settings-note">自定义策略会同步给模拟测试和监控参数，正式买卖提醒仍以量价确认和风控为准。</div>
+    </div>
   </div>
   <div id="aiPanel" class="ai-panel" hidden>
     <div class="ai-head"><span>Gemini盘中研判</span><button onclick="toggleAi(false)">关闭</button></div>
@@ -2587,15 +2763,7 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
     <div class="stock-manager">
       <span class="stock-manager-title">多股监控</span>
       <div id="watchTags" class="watch-tags"></div>
-      <select id="stockPreset" title="常用股票">
-        <option value="sh601899">紫金矿业</option>
-        <option value="sh601012">隆基绿能</option>
-        <option value="sz000063">中兴通讯</option>
-        <option value="sh600519">贵州茅台</option>
-        <option value="sz300502">新易盛</option>
-        <option value="sz002050">三花智控</option>
-      </select>
-      <input id="stockCodeInput" placeholder="输入代码" title="如 601899 或 sh601899" />
+      <input id="stockCodeInput" placeholder="输入股票代码，如 601899" title="如 601899 或 sh601899" />
       <button onclick="addWatchStock()">添加</button>
       <input id="watchInput" type="hidden" value="sh601899,sh601012" />
     </div>
@@ -2627,16 +2795,17 @@ function syncInputCards(){const o=simOptions();if($('cash'))$('cash').textConten
 async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){mainOptions={cash:Number(s.cash||100000),trade:Number(s.trade||20000),sample:Number(s.sample||10)};fillAiSettings(s)}}catch(e){}syncInputCards()}
 function saveSettingsDebounced(){clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(simOptions())}).catch(()=>{})}
-function fillAiSettings(s){if($('aiProvider'))$('aiProvider').value=s.aiProvider||'Gemini';if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
-function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'Gemini',aiModel:$('aiModel')?.value||'gemini-2.5-flash',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',...extra}}
+function fillAiSettings(s){if($('aiProvider'))$('aiProvider').value=s.aiProvider||'Gemini';if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
+function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'Gemini',aiModel:$('aiModel')?.value||'gemini-2.5-flash',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',marketDataApi:$('marketDataApi')?.value||'',newsApi:$('newsApi')?.value||'',quoteApi:$('quoteApi')?.value||'',customStrategy:$('customStrategy')?.value||'',strategyMode:$('strategyMode')?.value||'官方默认策略',maxSignalsPerDay:$('maxSignalsPerDay')?.value||'2',lowBuyDev:$('lowBuyDev')?.value||'-1.20',highSellDev:$('highSellDev')?.value||'1.40',signalCooldown:$('signalCooldown')?.value||'10',...extra}}
 async function saveAiSettings(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在保存AI配置...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions())})).json();if(data.ok){if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI配置已保存。')}else throw new Error('保存失败')}catch(e){if(msg)msg.textContent='保存失败：'+(e.message||e)}}
 async function clearAiKey(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在清除Key...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions({aiClearKey:true,aiKey:''}))})).json();if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI Key 已清除。')}catch(e){if(msg)msg.textContent='清除失败：'+(e.message||e)}}
 async function checkAiFromSettings(){await saveAiSettings();const msg=$('aiConfigStatus');if(msg)msg.textContent='正在检测AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),10000);const data=await (await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(msg)msg.textContent=(data.ok?'检测通过：':'检测失败：')+(data.message||'无返回');append((data.ok?'AI检测通过：':'AI检测失败：')+(data.message||''))}catch(e){if(msg)msg.textContent='检测超时或网络不可达。'}}
-let watchStocks=[];
+let watchStocks=[],premarketTargetCode='';
 async function loadWatchlist(){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text||'';renderWatchTags()}}catch(e){}}
 async function saveWatchlist(){const text=watchStocks.map(s=>s.symbol).join(',');try{const data=await (await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text;renderWatchTags();append('已保存监控股票：'+watchStocks.map(s=>s.name+s.code).join('、'));loadPremarket();loadRealtime()}else append('保存失败：'+(data.error||'未知原因'))}catch(e){append('保存失败：'+e.message)}}
-function renderWatchTags(){const el=$('watchTags');if(!el)return;el.innerHTML=(watchStocks||[]).map((s,i)=>`<span class="tag">${escapeHtml(s.name)} ${escapeHtml(s.code)}<button onclick="removeWatchStock(${i})" title="移除">×</button></span>`).join('')||'<span class="sub">请添加要监控的股票</span>'}
-function addWatchStock(){const preset=$('stockPreset')?.value||'';const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw||preset);if(!token)return;const exists=watchStocks.some(s=>s.symbol===token);if(!exists){watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist()}if($('stockCodeInput'))$('stockCodeInput').value=''}
+function renderWatchTags(){const el=$('watchTags');if(!el)return;if(!premarketTargetCode&&watchStocks[0])premarketTargetCode=watchStocks[0].code;el.innerHTML=(watchStocks||[]).map((s,i)=>`<span class="tag ${premarketTargetCode===s.code?'active':''}" onclick="selectPremarket('${escapeHtml(s.code)}')" title="点击切换盘前风向">${escapeHtml(s.name)} ${escapeHtml(s.code)}<button onclick="event.stopPropagation();removeWatchStock(${i})" title="移除">×</button></span>`).join('')||'<span class="sub">请添加要监控的股票</span>'}
+function selectPremarket(code){premarketTargetCode=code;renderWatchTags();loadPremarket()}
+function addWatchStock(){const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw);if(!token){append('请输入股票代码，例如 601899。');return}const exists=watchStocks.some(s=>s.symbol===token);if(!exists){watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist()}if($('stockCodeInput'))$('stockCodeInput').value=''}
 function removeWatchStock(index){watchStocks.splice(index,1);saveWatchlist()}
 function normalizeStockToken(raw){let v=String(raw||'').trim().toLowerCase();const m=v.match(/(sh|sz)?(\d{6})/);if(!m)return '';const code=m[2];const prefix=(m[1]||(code.startsWith('6')||code.startsWith('5')?'sh':'sz'));return prefix+code}
 function stockName(symbol){const code=symbol.slice(2);return ({'601899':'紫金矿业','601012':'隆基绿能','000063':'中兴通讯','600519':'贵州茅台','300502':'新易盛','002050':'三花智控','600580':'卧龙电驱'})[code]||code}
@@ -2646,12 +2815,12 @@ function updateStats(s,persist=true){if(!Object.keys(s).length)return;if($('cash
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});append('已恢复最近一次模拟：'+(latest.time||''))}}catch(e){}}
 function renderReview(review,history){const parts=[];if(review.headline)parts.push(`<b>本轮复盘</b><div>${escapeHtml(review.headline)}</div>`);if((review.suggestions||[]).length)parts.push('<b>下一轮优化</b><ul>'+review.suggestions.map(x=>`<li>${escapeHtml(x)}</li>`).join('')+'</ul>');if(history&&history.runs){const fails=(history.failures||[]).map(x=>`${escapeHtml(x.type)} ${x.count}次`).join('；')||'暂无高频问题';parts.push(`<b>累计统计</b><div>${history.runs} 次模拟，${history.trades} 笔交易，总胜率 ${history.winRate}，总盈亏 ${history.pnl}。问题：${fails}</div>`)}$('review').innerHTML=parts.join('')||'<b>策略复盘</b>模拟后自动显示失败原因和下一轮优化方向。'}
 async function loadRealtime(){try{const data=await (await fetch('/api/realtime',{cache:'no-store'})).json();renderRealtime(data.stocks||[])}catch(e){$('live').innerHTML='<div class="empty-live">实时监控暂不可用：'+escapeHtml(e.message)+'</div>'}}
-async function loadPremarket(){try{const data=await (await fetch('/api/premarket',{cache:'no-store'})).json();renderPremarket(data)}catch(e){$('pmReason').textContent='外盘读取失败：'+e.message}}
+async function loadPremarket(){try{const q=premarketTargetCode?'?code='+encodeURIComponent(premarketTargetCode):'';const data=await (await fetch('/api/premarket'+q,{cache:'no-store'})).json();renderPremarket(data)}catch(e){$('pmReason').textContent='外盘读取失败：'+e.message}}
 function renderPremarket(data){const z=data.target||data.zijin||{},rows=data.rows||[];const signal=z.signal||'观望';const cls=signal==='偏多'?'bull':signal==='偏空'?'bear':'';if($('pmTargetTitle'))$('pmTargetTitle').textContent=(z.name||'目标股')+'开盘前风向';document.querySelector('.pm-score').textContent=(z.score??'--')+'分';const pill=document.querySelector('.pm-signal');pill.textContent=signal+'｜'+(z.category||'综合')+'｜刷新 '+(data.updatedAt||'--');pill.className='pm-signal '+cls;$('pmList').innerHTML=rows.length?rows.map(r=>{const ch=Number(r.change||0),c=ch>=0?'live-pos':'live-neg';const price=Number(r.price||0);return `<div class="pm-item"><b>${escapeHtml(r.name)}</b><span class="${c}">${price>=100?price.toFixed(1):price.toFixed(2)} ${ch>=0?'+':''}${ch.toFixed(2)}%</span><div class="sub">${escapeHtml(r.time||'时间未知')}</div></div>`}).join(''):'<div class="muted">暂无外盘数据</div>';$('pmReason').innerHTML=`<b>${escapeHtml(z.action||'等待盘中确认')}</b><br>${(z.reasons||[]).map(escapeHtml).join('<br>')}<br><span class="sub">外盘为 Yahoo 5分钟快照，按当前主监控股票降权计算，只作为盘前方向。</span>`}
 function renderRealtime(rows){if(!rows.length){$('live').innerHTML='<div class="empty-live">暂无监控股票，请先添加代码。</div>';return}$('live').innerHTML=`<div class="monitor-table"><div class="monitor-head"><span>股票</span><span>现价</span><span>日内曲线</span><span>涨跌</span><span>均价/偏离</span><span>买卖点</span><span>多角色结论</span><span>操作</span></div>${rows.map(r=>{maybeBeep(r);showSignalToast(r);const change=Number(r.change||0);const cls=change>=0?'live-pos':'live-neg';const tradable=/低吸|高抛|买入|卖出/.test(r.signal||'');const closed=r.marketStatus==='休市中';const signal=closed?'休市中':(r.signal||'观察');const dot=change>=0?'up':'down';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[(r.smartMoney&&r.smartMoney.text)||'主力行为：普通行情模式，仅供辅助参考']).map(escapeHtml).join('<br>');return `<div class="monitor-row ${tradable?'strong-signal':''}"><div><span class="rank-dot ${dot}"></span><span class="live-name">${escapeHtml(r.name)}</span><span class="live-code">${escapeHtml(r.code)}</span><div class="kv">更新时间 ${escapeHtml(r.time||'--:--')}</div></div><div class="live-price ${cls}">${Number(r.price||0).toFixed(2)}</div><div>${liveSpark(r)}</div><div class="${cls}" style="font-weight:950">${change.toFixed(2)}%</div><div class="kv"><b>${Number(r.avg||0).toFixed(2)}</b>偏离 ${Number(r.dev||0).toFixed(2)}%</div><div><span class="signal-pill ${tradable?'hot':''}">${escapeHtml(signal)}</span><div class="live-signal">${escapeHtml(r.reason||'暂无高质量买卖点')}</div></div><div class="money-line">${agents}</div><div class="op"><button class="ai" onclick="aiIntraday('${escapeHtml(r.code)}')">AI</button><button onclick="focusStock('${escapeHtml(r.code)}')">详情</button></div></div>`}).join('')}</div>`}
 function alertSide(sig){if(/低吸|买入/.test(sig||''))return 'buy';if(/高抛|卖出/.test(sig||''))return 'sell';return ''}
 function showSignalToast(r){const sig=r.signal||'',side=alertSide(sig);if(!side)return;const today=new Date().toISOString().slice(0,10);const dailyKey=`toast:${today}:${r.code}:${side}`;if(Number(localStorage.getItem(dailyKey)||0)>=1)return;const key=[r.code,side].join(':');const now=Date.now();if(toastKeys.has(key)&&now-toastKeys.get(key)<600000)return;toastKeys.set(key,now);localStorage.setItem(dailyKey,'1');const box=$('signalToasts');if(!box)return;const isBuy=side==='buy';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[]).slice(0,4).map(escapeHtml).join('<br>');const el=document.createElement('div');el.className='signal-toast '+(isBuy?'buy':'sell');el.innerHTML=`<div class="toast-top"><div><div class="toast-name">${escapeHtml(r.name)} ${escapeHtml(r.code)}</div><div class="toast-price">${escapeHtml(r.time||'--:--')}｜现价 ${Number(r.price||0).toFixed(2)}｜偏离 ${Number(r.dev||0).toFixed(2)}%</div></div><span class="toast-signal">${isBuy?'买入':'卖出'}｜${escapeHtml(sig)}</span><button title="关闭">×</button></div><div class="toast-reason">${escapeHtml(r.reason||'等待量价确认')}</div><div class="toast-agents">${agents||'多角色结论生成中'}</div>`;box.prepend(el);const close=()=>{el.classList.add('fade');setTimeout(()=>el.remove(),260)};el.querySelector('button').onclick=close;setTimeout(close,60000);[...box.children].slice(2).forEach(x=>x.remove())}
-function focusStock(code){append('已查看：'+code+'。当前为行视图，后续可扩展独立分时详情页。')}
+function focusStock(code){location.href='/research?code='+encodeURIComponent(code)}
 async function aiIntraday(code){toggleAi(true);const body=$('aiBody');body.innerHTML='<span class="ai-chip">Gemini</span><span class="ai-chip">大方向</span><span class="ai-chip">路径预判</span><span class="ai-chip">买卖点复核</span><br>正在集中讨论当前买卖点...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),11000);const data=await (await fetch('/api/gemini_intraday?code='+encodeURIComponent(code),{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(!data.ok){body.textContent=data.message||'Gemini 暂无返回';return}const a=data.analysis||{},s=data.stock||{};const agents=Array.isArray(a.agents)?a.agents:[];const key=formatKeyPrices(a.keyPrices);const path=formatPathForecast(a.pathForecast);body.innerHTML=`<span class="ai-chip">${escapeHtml(s.股票||code)}</span><span class="ai-chip">现价 ${escapeHtml(s.现价??'--')}</span><span class="ai-chip">昨收 ${escapeHtml(s.昨收??'--')}</span><span class="ai-chip">黄线偏离 ${escapeHtml(s.黄线偏离??'--')}%</span><b>大方向</b>${escapeHtml(a.macroView||a.trend||'观察')}<b>今日路径预判</b>${escapeHtml(path)}<b>关键价位</b>${escapeHtml(key)}<b>买卖点复核</b>${escapeHtml(a.pointReview||'当前未形成最优买卖点，先按观察处理')}<b>趋势判断</b>${escapeHtml(a.trend||'证据不足，先观察')}<b>操作计划</b>${escapeHtml(a.action||'不强行交易')}<br>买入：${escapeHtml(a.buyPlan||'等待低位确认')}<br>卖出：${escapeHtml(a.sellPlan||'等待高位确认')}<b>失效条件</b>${escapeHtml(a.invalidation||'跌破/突破关键价后重新评估')}<b>多角色研判</b>${agents.map(escapeHtml).join('<br>')||'暂无多角色返回'}<p class="sub">模型：${escapeHtml(data.model||'Gemini')}。该观点30分钟内会同步给监控观察员参考。</p>`;loadRealtime()}catch(e){body.textContent='Gemini 分析超时或网络不可达：'+(e.message||e)}}
 function formatPathForecast(v){if(!v)return '证据不足，暂按震荡处理';if(typeof v==='string')return v;const map={mostLikely:'主路径',alternative:'备选路径',bullish:'偏多路径',bearish:'偏空路径',neutral:'震荡路径'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
 function formatKeyPrices(v){if(!v)return '等待确认';if(typeof v==='string')return v;const map={support:'支撑位',resistance:'压力位',vwap:'黄线均价',buyLow:'低吸区',sellHigh:'高抛区',stopLoss:'止损位',takeProfit:'止盈位'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
@@ -2676,7 +2845,7 @@ SIMULATION_HTML = r"""<!doctype html>
 :root{--ink:#20252b;--muted:#7b8792;--line:#e9eef1;--green:#35b978;--red:#ec5f6b;--yellow:#d99a1b}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:13px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}
 button,input{font:inherit}button{height:36px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06)}button.primary{background:#20252b;color:#fff;border-color:#20252b}button:disabled{opacity:.6;cursor:wait}
-.page{min-height:100vh;padding:14px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:9px}.top,.controls,.panel,.metric,.progress{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:16px;box-shadow:0 14px 38px rgba(25,45,50,.12)}.top{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}.title{font-size:20px;font-weight:950}.sub,.muted{color:var(--muted)}.controls{padding:9px 11px;display:flex;flex-wrap:wrap;gap:8px;align-items:end}.field span{display:block;font-size:10px;color:var(--muted);font-weight:850}.field input{width:132px;height:32px;border:1px solid var(--line);border-radius:10px;padding:0 10px}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.metric{padding:10px 13px}.metric .k{font-size:10px;color:var(--muted);font-weight:850}.metric .v{font-size:19px;font-weight:950}.win{color:var(--yellow)}.pos{color:var(--green)!important}.neg{color:var(--red)!important}.layout{display:grid;grid-template-rows:minmax(0,1fr) auto;gap:9px;min-height:0}.panel{overflow:hidden;display:flex;flex-direction:column;min-height:0}.head{height:38px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-weight:950}.badge{font-size:11px;color:#35a66d;background:#eafff1;border-radius:999px;padding:4px 9px}.rows{flex:1;overflow:auto;padding:0}.sim-table{min-width:1120px}.sim-head,.sim-row{display:grid;grid-template-columns:190px 110px minmax(320px,1fr) 90px 130px minmax(240px,.75fr);gap:12px;align-items:center}.sim-head{position:sticky;top:0;z-index:2;height:34px;padding:0 14px;background:#f8fbfb;border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.sim-row{min-height:68px;border-bottom:1px solid #f1f3f4;padding:7px 14px}.sim-row:last-child{border-bottom:0}.stock{font-weight:950;font-size:14px}.code{color:var(--muted);margin-left:6px}.reason{color:#56616b;font-size:12px;line-height:1.45}.status{font-weight:900}.chart{width:100%;height:52px;display:block}.empty{padding:40px 12px;text-align:center;color:var(--muted)}.side{display:grid;grid-template-columns:1fr 1fr;gap:9px;min-height:138px;max-height:178px}.content{padding:10px 14px;overflow:auto;line-height:1.58;font-size:12px}.content b{display:block;margin:4px 0}.content ul{margin:4px 0 0;padding-left:18px}.run-item{border-bottom:1px solid #f2f4f5;padding:6px 0}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}.progress{display:none;padding:8px 10px}.progress.on{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{border:1px solid #eef2f4;border-radius:11px;padding:7px 8px;background:#f9fbfb}.step b{display:block;font-size:12px}.step span{font-size:11px;color:var(--muted)}.step.active{border-color:#bdebd2;background:#effff5}.step.done b{color:var(--green)}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
+.page{min-height:100vh;padding:14px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:9px}.top,.controls,.panel,.metric,.progress{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:16px;box-shadow:0 14px 38px rgba(25,45,50,.12)}.top{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}.title{font-size:20px;font-weight:950}.sub,.muted{color:var(--muted)}.controls{padding:9px 11px;display:flex;flex-wrap:wrap;gap:8px;align-items:end}.field span{display:block;font-size:10px;color:var(--muted);font-weight:850}.field input{width:132px;height:32px;border:1px solid var(--line);border-radius:10px;padding:0 10px}.field.wide input{width:220px}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.metric{padding:10px 13px}.metric .k{font-size:10px;color:var(--muted);font-weight:850}.metric .v{font-size:19px;font-weight:950}.win{color:var(--yellow)}.pos{color:var(--green)!important}.neg{color:var(--red)!important}.layout{display:grid;grid-template-rows:minmax(0,1fr) auto;gap:9px;min-height:0}.panel{overflow:hidden;display:flex;flex-direction:column;min-height:0}.head{height:38px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-weight:950}.badge{font-size:11px;color:#35a66d;background:#eafff1;border-radius:999px;padding:4px 9px}.rows{flex:1;overflow:auto;padding:0}.sim-table{min-width:1120px}.sim-head,.sim-row{display:grid;grid-template-columns:190px 110px minmax(320px,1fr) 90px 130px minmax(240px,.75fr);gap:12px;align-items:center}.sim-head{position:sticky;top:0;z-index:2;height:34px;padding:0 14px;background:#f8fbfb;border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.sim-row{min-height:68px;border-bottom:1px solid #f1f3f4;padding:7px 14px}.sim-row:last-child{border-bottom:0}.stock{font-weight:950;font-size:14px}.code{color:var(--muted);margin-left:6px}.reason{color:#56616b;font-size:12px;line-height:1.45}.status{font-weight:900}.chart{width:100%;height:52px;display:block}.empty{padding:40px 12px;text-align:center;color:var(--muted)}.side{display:grid;grid-template-columns:1fr 1fr;gap:9px;min-height:138px;max-height:178px}.content{padding:10px 14px;overflow:auto;line-height:1.58;font-size:12px}.content b{display:block;margin:4px 0}.content ul{margin:4px 0 0;padding-left:18px}.run-item{border-bottom:1px solid #f2f4f5;padding:6px 0}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}.progress{display:none;padding:8px 10px}.progress.on{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{border:1px solid #eef2f4;border-radius:11px;padding:7px 8px;background:#f9fbfb}.step b{display:block;font-size:12px}.step span{font-size:11px;color:var(--muted)}.step.active{border-color:#bdebd2;background:#effff5}.step.done b{color:var(--green)}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
 @media(max-width:1050px){.metrics{grid-template-columns:repeat(2,1fr)}.sim-table{min-width:980px}.side{grid-template-columns:1fr;max-height:none}}
 </style>
 </head>
@@ -2687,6 +2856,7 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
     <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
+    <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="syncCards()" /></label>
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
@@ -2721,7 +2891,7 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
 const $=id=>document.getElementById(id);let tradeManual=false,settingsTimer=null;
 window.addEventListener('DOMContentLoaded',()=>{loadSettings();loadHistory();restoreLatestSim();});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();saveSettings();try{const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
 let progressTimer=null,progressStep=0;
@@ -2783,7 +2953,7 @@ function renderSingleDetail(r){const agents=Array.isArray(r.agents)?r.agents:[];
 async function researchSingle(){const code=($('singleInput').value||'').trim();if(!code){$('status').textContent='请输入股票代码，例如 600580。';return}setBusy(true);$('status').textContent='正在进行单股多因子研究...';try{const mode=$('singleMode').value||'local';const res=await fetch('/api/single_research?code='+encodeURIComponent(code)+'&mode='+encodeURIComponent(mode),{cache:'no-store'});const data=await res.json();if(!data.ok)throw new Error(data.message||'单股研究失败');$('status').textContent=(data.message||'单股研究完成')+(data.updatedAt?'｜更新时间 '+esc(data.updatedAt):'');renderSingleDetail(data.stock)}catch(e){$('status').textContent='单股研究失败：'+(e.message||e)}finally{setBusy(false)}}
 async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 Gemini 增强，超时会自动切回本地结果...':(mode==='review'?'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...':mode==='aggressive'?'正在扫描激进成长弹性池...':'正在按当前时间加载稳健中期初筛...');$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="8" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='review'?'评审团选股已完成。':mode==='aggressive'?'激进成长已完成。':mode==='local'?'稳健中期已完成。':'选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'Gemini 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('local');$('rows').innerHTML=`<tr><td colspan="8" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
 async function checkGemini(){setBusy(true);$('status').textContent='正在检测 Gemini...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),7000);const data=await(await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);$('status').textContent=(data.ok?'Gemini 可用：':'Gemini 异常：')+(data.message||'无返回')}catch(e){$('status').textContent='Gemini 检测超时或网络不可达，本地选股仍可使用。'}finally{setBusy(false)}}
-document.addEventListener('DOMContentLoaded',()=>loadData('local'));
+document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('local')}});
 </script>
 </body>
 </html>"""
@@ -2796,3 +2966,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
