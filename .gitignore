@@ -1,0 +1,90 @@
+# Runtime caches and generated data
+__pycache__/
+*.py[cod]
+.pytest_cache/
+minute_cache/
+backups/
+node_modules/
+
+# Logs and local runtime state
+*.log
+*.pid
+*.out.txt
+*.bak
+*.bak*
+*.manual_backup
+*_backup.json
+*_cache.json
+monitor_data.jsonl
+simulation_history.jsonl
+last_sim_result.json
+last_signal.txt
+signal_log.json
+decision_log.json
+monitor_result.json
+seconds_monitor_state.json
+global_events_seen.json
+
+# Local user/account/config data
+commercial_users.json
+dashboard_settings.json
+monitor_watchlist.json
+runtime_vendor_config.json
+*.env
+1.env
+
+# Local probes and temporary scripts
+tmp_*.py
+probe_*.py
+raw_probe.py
+_main_check.js
+apply_*.patch
+
+# Legacy generated copies
+dashboard_live.py
+dashboard_server.py
+longi_*.py
+trend_30min.py
+run_30min.py
+hermes_*.py
+start_hermes.bat
+
+# Local legacy/experimental scripts not part of public release
+after_hours*.py
+auto_runner.py
+auto_trade_config.py
+bootstrap_agent_socket.py
+close_analysis.py
+closing_analysis.py
+dabao_daily.py
+dabao_trader.py
+daily_news_card.py
+evening_analysis.py
+fix_monitor.py
+global_news_card.py
+launcher.py
+midday_review.py
+monitor.py
+monitor_fallback.py
+morning_analysis.py
+news_card.py
+news_rss.py
+pre_open_check.*
+review.py
+stock_close_review.py
+strategy_601899*
+test_local.sh
+test_notify.bat
+tradingagents_injector.py
+package.json
+package-lock.json
+
+# Credentials or private bridge scripts
+hermes_keepalive.log
+*.context-tokens.json
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
