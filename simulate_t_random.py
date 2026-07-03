@@ -8,6 +8,7 @@ import concurrent.futures
 import contextlib
 import io
 import json
+import os
 import random
 import re
 import sys
@@ -23,7 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STOCK_POOL_CACHE = BASE_DIR / "a_share_pool_cache.json"
 MINUTE_CACHE_DIR = BASE_DIR / "minute_cache"
 SIM_HISTORY_PATH = BASE_DIR / "simulation_history.jsonl"
-ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
+ADAPTIVE_STRATEGY_PATH = Path(os.environ.get("ADAPTIVE_STRATEGY_PATH") or BASE_DIR / "adaptive_strategy.json")
 DEFAULT_STRATEGY = {
     "buy_min_dev": -1.15,
     "buy_max_dev": -2.8,

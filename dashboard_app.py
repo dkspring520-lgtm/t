@@ -214,8 +214,13 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
 
+def account_strategy_path(email: str | None = None) -> Path:
+    return user_data_path(email, "adaptive_strategy.json")
+
+
 def run_task(name: str, options: dict | None = None) -> dict:
     json_path = BASE_DIR / "last_sim_result.json" if name in {"simulate", "simulate5"} else None
+    email = REQUEST_EMAIL.get("")
     if json_path:
         try:
             json_path.unlink()
@@ -223,7 +228,7 @@ def run_task(name: str, options: dict | None = None) -> dict:
             pass
         options = dict(options or {})
         options["json_file"] = str(json_path)
-        save_strategy_options(options)
+        save_strategy_options(options, email)
     commands = build_commands(name, options or {})
     if not commands:
         return {"ok": False, "summary": "鏈煡浠诲姟", "detail": "", "stats": {}, "stocks": []}
@@ -231,7 +236,7 @@ def run_task(name: str, options: dict | None = None) -> dict:
     outputs: list[str] = []
     ok = True
     for cmd in commands:
-        code, out = run_cmd(cmd)
+        code, out = run_cmd(cmd, {"ADAPTIVE_STRATEGY_PATH": str(account_strategy_path(email))})
         outputs.append(out)
         if code != 0:
             ok = False
@@ -271,8 +276,8 @@ def load_dashboard_settings(email: str | None = None) -> dict:
         "trade": clamp_int(data.get("trade"), defaults["trade"], 1000, 100000000),
         "sample": clamp_int(data.get("sample"), defaults["sample"], 1, 30),
     }
-    settings.update(load_profit_strategy_settings())
     settings.update(public_extra_settings(data))
+    settings.update(load_profit_strategy_settings(email))
     settings.update(public_ai_settings(data))
     return {"ok": True, **settings}
 
@@ -293,10 +298,11 @@ def save_dashboard_settings(data: dict, email: str | None = None) -> dict:
         out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
         out.update(public_ai_settings(settings))
         return {"ok": False, **out}
-    save_strategy_options(data)
+    save_strategy_options(data, email)
     out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
-    out.update(load_profit_strategy_settings())
+    out.update(load_profit_strategy_settings(email))
     out.update(public_extra_settings(settings))
+    out.update(load_profit_strategy_settings(email))
     out.update(public_ai_settings(settings))
     return {"ok": True, **out}
 
@@ -623,11 +629,13 @@ def dashboard_watchlist_text(stocks=None, email: str | None = None) -> str:
 
 def realtime_payload(email: str | None = None) -> dict:
     try:
+        import stock_t_signal as signal_mod
         from stock_t_signal import analyze_observation, fetch_minutes, fetch_quote, _format_time, _vwap
     except Exception as exc:
         return {"ok": False, "stocks": [], "error": str(exc)}
 
     rows = []
+    signal_mod.ADAPTIVE_STRATEGY_PATH = account_strategy_path(email)
     market_context = cached_market_context()
     for stock in dashboard_watchlist(email):
         try:
@@ -2193,27 +2201,48 @@ PROFIT_STRATEGY_FIELDS = {
 }
 
 
-def load_profit_strategy_settings() -> dict:
+def load_profit_strategy_settings(email: str | None = None) -> dict:
     try:
-        data = json.loads(ADAPTIVE_STRATEGY_PATH.read_text(encoding="utf-8"))
+        data = json.loads(account_strategy_path(email).read_text(encoding="utf-8"))
     except Exception:
         data = {}
-    return {
+    out = {
         key: clamp_float(data.get(key), default, low, high)
         for key, (default, low, high) in PROFIT_STRATEGY_FIELDS.items()
     }
+    out.update({
+        "maxSignalsPerDay": str(clamp_int(data.get("max_signals_per_day"), 2, 1, 6)),
+        "lowBuyDev": str(clamp_float(data.get("buy_min_dev"), -1.20, -3.00, -0.50)),
+        "highSellDev": str(clamp_float(data.get("sell_min_dev"), 1.40, 0.50, 3.00)),
+        "signalCooldown": str(clamp_int(data.get("signal_cooldown_minutes"), 10, 1, 120)),
+    })
+    return out
 
 
-def save_strategy_options(options: dict) -> None:
+def save_strategy_options(options: dict, email: str | None = None) -> None:
     incoming = {
         key: clamp_float(options.get(key), default, low, high)
         for key, (default, low, high) in PROFIT_STRATEGY_FIELDS.items()
         if key in options
     }
+    if "lowBuyDev" in options:
+        incoming["buy_min_dev"] = clamp_float(options.get("lowBuyDev"), -1.20, -3.00, -0.50)
+        incoming["buy_max_dev"] = min(incoming["buy_min_dev"] - 0.55, -1.60)
+    if "highSellDev" in options:
+        incoming["sell_min_dev"] = clamp_float(options.get("highSellDev"), 1.40, 0.50, 3.00)
+        incoming["sell_max_dev"] = max(incoming["sell_min_dev"] + 0.55, 1.80)
+    if "maxSignalsPerDay" in options:
+        incoming["max_signals_per_day"] = clamp_int(options.get("maxSignalsPerDay"), 2, 1, 6)
+    if "signalCooldown" in options:
+        incoming["signal_cooldown_minutes"] = clamp_int(options.get("signalCooldown"), 10, 1, 120)
+    if "strategyMode" in options:
+        incoming["strategy_mode"] = str(options.get("strategyMode") or "官方默认策略")[:32]
+    if "customStrategy" in options:
+        incoming["custom_strategy_note"] = str(options.get("customStrategy") or "")[:2200]
     if not incoming:
         return
     try:
-        current = json.loads(ADAPTIVE_STRATEGY_PATH.read_text(encoding="utf-8"))
+        current = json.loads(account_strategy_path(email).read_text(encoding="utf-8"))
         if not isinstance(current, dict):
             current = {}
     except Exception:
@@ -2222,7 +2251,7 @@ def save_strategy_options(options: dict) -> None:
     current.setdefault("last_notes", ["用户自定义低利润目标，优先提高单笔兑现率"])
     current["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        ADAPTIVE_STRATEGY_PATH.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        account_strategy_path(email).write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -2243,10 +2272,12 @@ def clamp_int(value: object, default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
-def run_cmd(cmd: list[str]) -> tuple[int, str]:
+def run_cmd(cmd: list[str], extra_env: dict | None = None) -> tuple[int, str]:
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    if extra_env:
+        env.update({str(k): str(v) for k, v in extra_env.items() if v is not None})
     env.pop("HERMES_SEND_TARGET", None)
     env["DISABLE_HERMES"] = "1"
     try:
@@ -3014,6 +3045,7 @@ function toggleSettings(force){const el=$('settingsPanel');if(!el)return;const s
 function toggleAi(force){const el=$('aiPanel');if(!el)return;const show=typeof force==='boolean'?force:el.hasAttribute('hidden');if(show)el.removeAttribute('hidden');else el.setAttribute('hidden','')}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 let mainOptions={cash:100000,trade:20000,sample:10};
+let signalPrefs={maxSignalsPerDay:2,signalCooldown:10};
 function simOptions(){return mainOptions}
 async function run(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');append('正在：'+(labels[name]||name));try{const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(simOptions())});const data=await res.json();append(data.summary||'完成。');$('status').textContent=data.ok?'完成':'失败'}catch(e){append('执行失败：'+e.message);$('status').textContent='失败'}$('loading').classList.remove('on');setBusy(false)}
 function syncTradeAmount(){}
@@ -3021,7 +3053,7 @@ function syncInputCards(){const o=simOptions();if($('cash'))$('cash').textConten
 async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){mainOptions={cash:Number(s.cash||100000),trade:Number(s.trade||20000),sample:Number(s.sample||10)};fillAiSettings(s)}}catch(e){}syncInputCards()}
 function saveSettingsDebounced(){clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(simOptions())}).catch(()=>{})}
-function fillAiSettings(s){if($('aiProvider'))$('aiProvider').value=({OpenAI:'OpenAICompatible','OpenAI兼容':'OpenAICompatible',OpenAICompatible:'OpenAICompatible'}[s.aiProvider]||(s.aiProvider||'Gemini'));if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
+function fillAiSettings(s){signalPrefs.maxSignalsPerDay=Number(s.maxSignalsPerDay||2);signalPrefs.signalCooldown=Number(s.signalCooldown||10);if($('aiProvider'))$('aiProvider').value=({OpenAI:'OpenAICompatible','OpenAI兼容':'OpenAICompatible',OpenAICompatible:'OpenAICompatible'}[s.aiProvider]||(s.aiProvider||'Gemini'));if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
 function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'Gemini',aiModel:$('aiModel')?.value||'gemini-2.5-flash',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',marketDataApi:$('marketDataApi')?.value||'',newsApi:$('newsApi')?.value||'',quoteApi:$('quoteApi')?.value||'',customStrategy:$('customStrategy')?.value||'',strategyMode:$('strategyMode')?.value||'官方默认策略',maxSignalsPerDay:$('maxSignalsPerDay')?.value||'2',lowBuyDev:$('lowBuyDev')?.value||'-1.20',highSellDev:$('highSellDev')?.value||'1.40',signalCooldown:$('signalCooldown')?.value||'10',...extra}}
 async function saveAiSettings(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在保存AI配置...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions())})).json();if(data.ok){if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI配置已保存。')}else throw new Error('保存失败')}catch(e){if(msg)msg.textContent='保存失败：'+(e.message||e)}}
 async function clearAiKey(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在清除Key...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions({aiClearKey:true,aiKey:''}))})).json();if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI Key 已清除。')}catch(e){if(msg)msg.textContent='清除失败：'+(e.message||e)}}
@@ -3045,7 +3077,7 @@ async function loadPremarket(){try{const q=premarketTargetCode?'?code='+encodeUR
 function renderPremarket(data){const z=data.target||data.zijin||{},rows=data.rows||[];const signal=z.signal||'观望';const cls=signal==='偏多'?'bull':signal==='偏空'?'bear':'';if($('pmTargetTitle'))$('pmTargetTitle').textContent=(z.name||'目标股')+'开盘前风向';document.querySelector('.pm-score').textContent=(z.score??'--')+'分';const pill=document.querySelector('.pm-signal');pill.textContent=signal+'｜'+(z.category||'综合')+'｜刷新 '+(data.updatedAt||'--');pill.className='pm-signal '+cls;$('pmList').innerHTML=rows.length?rows.map(r=>{const ch=Number(r.change||0),c=ch>=0?'live-pos':'live-neg';const price=Number(r.price||0);return `<div class="pm-item"><b>${escapeHtml(r.name)}</b><span class="${c}">${price>=100?price.toFixed(1):price.toFixed(2)} ${ch>=0?'+':''}${ch.toFixed(2)}%</span><div class="sub">${escapeHtml(r.time||'时间未知')}</div></div>`}).join(''):'<div class="muted">暂无外盘数据</div>';$('pmReason').innerHTML=`<b>${escapeHtml(z.action||'等待盘中确认')}</b><br>${(z.reasons||[]).map(escapeHtml).join('<br>')}<br><span class="sub">外盘为 Yahoo 5分钟快照，按当前主监控股票降权计算，只作为盘前方向。</span>`}
 function renderRealtime(rows){if(!rows.length){$('live').innerHTML='<div class="empty-live">暂无监控股票，请先添加代码。</div>';return}$('live').innerHTML=`<div class="monitor-table"><div class="monitor-head"><span>股票</span><span>现价</span><span>日内曲线</span><span>涨跌</span><span>均价/偏离</span><span>买卖点</span><span>多角色结论</span><span>操作</span></div>${rows.map(r=>{maybeBeep(r);showSignalToast(r);const change=Number(r.change||0);const cls=change>=0?'live-pos':'live-neg';const tradable=/低吸|高抛|买入|卖出/.test(r.signal||'');const closed=r.marketStatus==='休市中';const signal=closed?'休市中':(r.signal||'观察');const dot=change>=0?'up':'down';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[(r.smartMoney&&r.smartMoney.text)||'主力行为：普通行情模式，仅供辅助参考']).map(escapeHtml).join('<br>');return `<div class="monitor-row ${tradable?'strong-signal':''}"><div><span class="rank-dot ${dot}"></span><span class="live-name">${escapeHtml(r.name)}</span><span class="live-code">${escapeHtml(r.code)}</span><div class="kv">更新时间 ${escapeHtml(r.time||'--:--')}</div></div><div class="live-price ${cls}">${Number(r.price||0).toFixed(2)}</div><div>${liveSpark(r)}</div><div class="${cls}" style="font-weight:950">${change.toFixed(2)}%</div><div class="kv"><b>${Number(r.avg||0).toFixed(2)}</b>偏离 ${Number(r.dev||0).toFixed(2)}%</div><div><span class="signal-pill ${tradable?'hot':''}">${escapeHtml(signal)}</span><div class="live-signal">${escapeHtml(r.reason||'暂无高质量买卖点')}</div></div><div class="money-line">${agents}</div><div class="op"><button class="ai" onclick="aiIntraday('${escapeHtml(r.code)}')">AI</button><button onclick="focusStock('${escapeHtml(r.code)}')">详情</button></div></div>`}).join('')}</div>`}
 function alertSide(sig){if(/低吸|买入/.test(sig||''))return 'buy';if(/高抛|卖出/.test(sig||''))return 'sell';return ''}
-function showSignalToast(r){const sig=r.signal||'',side=alertSide(sig);if(!side)return;const today=new Date().toISOString().slice(0,10);const dailyKey=`toast:${today}:${r.code}:${side}`;if(Number(localStorage.getItem(dailyKey)||0)>=1)return;const key=[r.code,side].join(':');const now=Date.now();if(toastKeys.has(key)&&now-toastKeys.get(key)<600000)return;toastKeys.set(key,now);localStorage.setItem(dailyKey,'1');const box=$('signalToasts');if(!box)return;const isBuy=side==='buy';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[]).slice(0,4).map(escapeHtml).join('<br>');const el=document.createElement('div');el.className='signal-toast '+(isBuy?'buy':'sell');el.innerHTML=`<div class="toast-top"><div><div class="toast-name">${escapeHtml(r.name)} ${escapeHtml(r.code)}</div><div class="toast-price">${escapeHtml(r.time||'--:--')}｜现价 ${Number(r.price||0).toFixed(2)}｜偏离 ${Number(r.dev||0).toFixed(2)}%</div></div><span class="toast-signal">${isBuy?'买入':'卖出'}｜${escapeHtml(sig)}</span><button title="关闭">×</button></div><div class="toast-reason">${escapeHtml(r.reason||'等待量价确认')}</div><div class="toast-agents">${agents||'多角色结论生成中'}</div>`;box.prepend(el);const close=()=>{el.classList.add('fade');setTimeout(()=>el.remove(),260)};el.querySelector('button').onclick=close;setTimeout(close,60000);[...box.children].slice(2).forEach(x=>x.remove())}
+function showSignalToast(r){const sig=r.signal||'',side=alertSide(sig);if(!side)return;const today=new Date().toISOString().slice(0,10);const dailyKey=`toast:${today}:${r.code}:${side}`;if(Number(localStorage.getItem(dailyKey)||0)>=Math.max(1,signalPrefs.maxSignalsPerDay||2))return;const key=[r.code,side].join(':');const now=Date.now();if(toastKeys.has(key)&&now-toastKeys.get(key)<Math.max(1,signalPrefs.signalCooldown||10)*60000)return;toastKeys.set(key,now);localStorage.setItem(dailyKey,String(Number(localStorage.getItem(dailyKey)||0)+1));const box=$('signalToasts');if(!box)return;const isBuy=side==='buy';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[]).slice(0,4).map(escapeHtml).join('<br>');const el=document.createElement('div');el.className='signal-toast '+(isBuy?'buy':'sell');el.innerHTML=`<div class="toast-top"><div><div class="toast-name">${escapeHtml(r.name)} ${escapeHtml(r.code)}</div><div class="toast-price">${escapeHtml(r.time||'--:--')}｜现价 ${Number(r.price||0).toFixed(2)}｜偏离 ${Number(r.dev||0).toFixed(2)}%</div></div><span class="toast-signal">${isBuy?'买入':'卖出'}｜${escapeHtml(sig)}</span><button title="关闭">×</button></div><div class="toast-reason">${escapeHtml(r.reason||'等待量价确认')}</div><div class="toast-agents">${agents||'多角色结论生成中'}</div>`;box.prepend(el);const close=()=>{el.classList.add('fade');setTimeout(()=>el.remove(),260)};el.querySelector('button').onclick=close;setTimeout(close,60000);[...box.children].slice(2).forEach(x=>x.remove())}
 function focusStock(code){location.href='/research?code='+encodeURIComponent(code)}
 async function aiIntraday(code){toggleAi(true);const body=$('aiBody');body.innerHTML='<span class="ai-chip">Gemini</span><span class="ai-chip">大方向</span><span class="ai-chip">路径预判</span><span class="ai-chip">买卖点复核</span><br>正在集中讨论当前买卖点...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),11000);const data=await (await fetch('/api/gemini_intraday?code='+encodeURIComponent(code),{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(!data.ok){body.textContent=data.message||'Gemini 暂无返回';return}const a=data.analysis||{},s=data.stock||{};const agents=Array.isArray(a.agents)?a.agents:[];const key=formatKeyPrices(a.keyPrices);const path=formatPathForecast(a.pathForecast);body.innerHTML=`<span class="ai-chip">${escapeHtml(s.股票||code)}</span><span class="ai-chip">现价 ${escapeHtml(s.现价??'--')}</span><span class="ai-chip">昨收 ${escapeHtml(s.昨收??'--')}</span><span class="ai-chip">黄线偏离 ${escapeHtml(s.黄线偏离??'--')}%</span><b>大方向</b>${escapeHtml(a.macroView||a.trend||'观察')}<b>今日路径预判</b>${escapeHtml(path)}<b>关键价位</b>${escapeHtml(key)}<b>买卖点复核</b>${escapeHtml(a.pointReview||'当前未形成最优买卖点，先按观察处理')}<b>趋势判断</b>${escapeHtml(a.trend||'证据不足，先观察')}<b>操作计划</b>${escapeHtml(a.action||'不强行交易')}<br>买入：${escapeHtml(a.buyPlan||'等待低位确认')}<br>卖出：${escapeHtml(a.sellPlan||'等待高位确认')}<b>失效条件</b>${escapeHtml(a.invalidation||'跌破/突破关键价后重新评估')}<b>多角色研判</b>${agents.map(escapeHtml).join('<br>')||'暂无多角色返回'}<p class="sub">模型：${escapeHtml(data.model||'Gemini')}。该观点30分钟内会同步给监控观察员参考。</p>`;loadRealtime()}catch(e){body.textContent='Gemini 分析超时或网络不可达：'+(e.message||e)}}
 function formatPathForecast(v){if(!v)return '证据不足，暂按震荡处理';if(typeof v==='string')return v;const map={mostLikely:'主路径',alternative:'备选路径',bullish:'偏多路径',bearish:'偏空路径',neutral:'震荡路径'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}

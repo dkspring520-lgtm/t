@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
-ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
+ADAPTIVE_STRATEGY_PATH = Path(os.environ.get("ADAPTIVE_STRATEGY_PATH") or BASE_DIR / "adaptive_strategy.json")
 DEFAULT_STRATEGY = {
     "buy_min_dev": -1.15,
     "buy_max_dev": -2.8,
@@ -489,15 +490,17 @@ def load_adaptive_strategy() -> dict:
     strategy = dict(DEFAULT_STRATEGY)
     try:
         data = json.loads(ADAPTIVE_STRATEGY_PATH.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            for key, default in DEFAULT_STRATEGY.items():
-                value = data.get(key)
-                if isinstance(default, int):
-                    strategy[key] = int(value)
-                else:
-                    strategy[key] = float(value)
     except Exception:
-        pass
+        data = {}
+    if isinstance(data, dict):
+        for key, default in DEFAULT_STRATEGY.items():
+            if key not in data:
+                continue
+            try:
+                value = data.get(key)
+                strategy[key] = int(value) if isinstance(default, int) else float(value)
+            except Exception:
+                strategy[key] = default
     return strategy
 
 
