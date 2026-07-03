@@ -1181,44 +1181,41 @@ def fast_quote(symbol: str) -> dict:
         return {}
 
 
-def screener_payload_v2(mode: str = "local") -> dict:
-    aggressive = mode in {"aggressive", "growth"}
-    review_mode = mode in {"review", "uzi", "agents"}
-    rows = local_screener_rows(aggressive=aggressive or review_mode, review=review_mode)
-    gemini_configured = bool(load_gemini_key())
-    use_gemini = mode in {"gemini", "ai"}
-    ai_enabled = apply_gemini_agents_fast(rows[:1]) if use_gemini and gemini_configured else False
+def screener_payload_v2(mode: str = "review") -> dict:
+    review_mode = mode in {"review", "uzi", "agents", "local"}
+    use_ai = mode in {"gemini", "ai"}
+    rows = local_screener_rows(aggressive=False, review=True)
+    ai_configured = ai_research_configured()
+    ai_enabled = apply_ai_agents_fast(rows[:10]) if use_ai and ai_configured else False
     if ai_enabled:
         ai_status = "enabled"
-        ai_message = "Gemini 已接入，已生成候选股的多Agent摘要。"
-    elif use_gemini and gemini_configured:
+        ai_message = "AI选股已完成：已生成候选股的多Agent摘要。"
+    elif use_ai and ai_configured:
         ai_status = "timeout_or_error"
-        ai_message = f"Gemini 本次超时或返回异常，已切回本地规则。原因：{LAST_GEMINI_ERROR or '返回内容不可解析或超时'}"
-    elif use_gemini:
+        ai_message = f"AI本次超时或返回异常，已切回评审选股。原因：{LAST_GEMINI_ERROR or '返回内容不可解析或超时'}"
+    elif use_ai:
         ai_status = "not_configured"
-        ai_message = "未读取到 Gemini Key，当前使用本地多因子规则。"
-    elif review_mode:
-        ai_status = "review_panel"
-        ai_message = "评审团选股已完成：TradingAgents + UZI评审 + Kronos路径因子共同筛选10只。"
+        ai_message = "未配置AI Key或第三方中转地址，当前使用评审选股。"
     else:
-        ai_status = "local"
-        ai_message = "当前使用激进成长选股：更重视弹性、题材和放量启动。" if aggressive else "当前使用稳健中期选股：更重视确定性、行业景气和资金持续性。"
+        ai_status = "review_panel" if review_mode else "review_panel"
+        ai_message = "评审选股已完成：TradingAgents + UZI评审 + Kronos路径因子共同筛选10只。"
     for row in rows:
         row["agents"] = normalize_local_agents(row.get("agents", []))
     return {
         "ok": True,
-        "mode": mode,
+        "mode": "ai" if use_ai else "review",
         "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "aiEnabled": ai_enabled,
         "aiStatus": ai_status,
         "aiMessage": ai_message,
-        "geminiConfigured": gemini_configured,
+        "geminiConfigured": ai_configured,
+        "aiConfigured": ai_configured,
         "geminiError": LAST_GEMINI_ERROR,
-        "stocks": rows,
+        "stocks": rows[:10],
     }
 
 
-def single_research_payload(code: str, mode: str = "local") -> dict:
+def single_research_payload(code: str, mode: str = "review") -> dict:
     try:
         from monitor_config import parse_stock_token
     except Exception as exc:
@@ -1226,11 +1223,19 @@ def single_research_payload(code: str, mode: str = "local") -> dict:
     stock = parse_stock_token(code)
     if not stock:
         return {"ok": False, "message": "请输入6位股票代码，例如 600580。", "stock": None}
-    aggressive = mode in {"aggressive", "growth"}
-    row = research_row_for_stock(stock, aggressive=aggressive, single=True)
+    use_ai = mode in {"gemini", "ai"}
+    row = research_row_for_stock(stock, aggressive=False, single=True)
+    message = f"{row['name']} {row['code']} 单股研究已完成。"
+    if use_ai:
+        if ai_research_configured() and apply_ai_agents_fast([row]):
+            message = f"{row['name']} {row['code']} AI研究已完成。"
+        elif ai_research_configured():
+            message = f"{row['name']} {row['code']} AI暂未返回，已使用评审研究。"
+        else:
+            message = f"{row['name']} {row['code']} 未配置AI，已使用评审研究。"
     return {
         "ok": True,
-        "message": f"{row['name']} {row['code']} 单股研究已完成。",
+        "message": message,
         "updatedAt": datetime.now().strftime("%m-%d %H:%M"),
         "stock": row,
     }
@@ -1247,7 +1252,7 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
     money_score = money_activity_score(amount)
     risk_penalty = 1 if abs(change) >= 6 else 0
     medium = medium_term_profile(name, category["name"], change, amount, daily_profile)
-    growth = aggressive_growth_profile(stock.code, name, category["name"], change, amount) if aggressive else {"score": 0, "label": "稳健", "logic": "稳健中期筛选", "risk": "按趋势和成交量确认"}
+    growth = aggressive_growth_profile(stock.code, name, category["name"], change, amount) if aggressive else {"score": 0, "label": "评审", "logic": "多Agent评审筛选", "risk": "按趋势和成交量确认"}
     score = max(category["base"] + trend_score + money_score + daily_profile["score"] + medium["score"] + growth["score"] - risk_penalty, 0)
     risk = "波动偏大，轻仓观察" if risk_penalty else "等待量价确认"
     tech = "强势跟踪" if change >= 1 else "等待放量" if change >= -2.5 else "先等止跌"
@@ -1301,7 +1306,7 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
         "mediumScore": medium["score"],
         "forecast": forecast,
         "growthAnalysis": growth,
-        "screenMode": "激进成长" if aggressive else "稳健中期",
+        "screenMode": "AI选股" if aggressive else "评审研究",
         "horizon": medium["horizon"],
         "tier": tier["tier"],
         "useCase": tier["useCase"],
@@ -1798,7 +1803,79 @@ def stock_category(name: str) -> dict:
 
 
 def apply_gemini_agents(rows: list[dict]) -> bool:
+    return apply_ai_agents_fast(rows)
+
+
+def ai_research_configured() -> bool:
+    ai = load_ai_config()
+    if ai.get("provider") == "OpenAICompatible":
+        return bool(ai.get("key") and ai.get("base"))
+    return bool(load_gemini_key())
+
+
+def apply_ai_agents_fast(rows: list[dict]) -> bool:
+    ai = load_ai_config()
+    if ai.get("provider") == "OpenAICompatible":
+        return apply_openai_compatible_agents_fast(rows)
     return apply_gemini_agents_fast(rows)
+
+
+def apply_openai_compatible_agents_fast(rows: list[dict]) -> bool:
+    global LAST_GEMINI_ERROR
+    LAST_GEMINI_ERROR = ""
+    ai = load_ai_config()
+    key = str(ai.get("key") or "").strip()
+    base = normalize_openai_base(str(ai.get("base") or "").strip())
+    if not key or not base or not rows:
+        LAST_GEMINI_ERROR = "未配置第三方AI中转地址或Key"
+        return False
+    compact = [
+        {
+            "name": row.get("name"),
+            "code": row.get("code"),
+            "category": row.get("category"),
+            "price": row.get("price"),
+            "change": row.get("change"),
+            "score": row.get("score"),
+            "reasons": row.get("reasons", []),
+        }
+        for row in rows
+    ]
+    prompt = (
+        "你是A股多Agent选股评审团，用技术员、新闻员、基本面员、资金员、风控员、决策员视角。"
+        "只返回JSON数组，每项包含code和agents数组。agents三到五行，必须中文、具体、不要模板化。候选股："
+        + json.dumps(compact, ensure_ascii=False)
+    )
+    payload = {
+        "model": str(ai.get("model") or "gpt-4o-mini"),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 900,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{base}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            method="POST",
+        )
+        data = json.loads(gemini_open(req, timeout=8).read().decode("utf-8", "replace"))
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        parsed = parse_json_array(text)
+    except Exception as exc:
+        LAST_GEMINI_ERROR = f"{type(exc).__name__}: {str(exc)[:300]}"
+        return False
+    by_code = {str(item.get("code")): item for item in parsed if isinstance(item, dict)}
+    updated = 0
+    for row in rows:
+        item = by_code.get(str(row.get("code")))
+        agents = item.get("agents") if item else None
+        if isinstance(agents, list) and len(agents) >= 2:
+            row["agents"] = [str(value)[:160] for value in agents[:5]]
+            updated += 1
+    if updated <= 0:
+        LAST_GEMINI_ERROR = "AI返回内容没有匹配到 code/agents JSON"
+    return updated > 0
 
 
 def apply_gemini_agents_fast(rows: list[dict]) -> bool:
@@ -2962,12 +3039,12 @@ RESEARCH_HTML = r"""<!doctype html>
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">稳健中期 + 激进成长 + 评审团选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><button class="primary" id="localBtn" onclick="loadData('local')">稳健中期</button><button id="growthBtn" onclick="loadData('aggressive')">激进成长</button><button id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI增强</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
+  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
   <div class="status" id="status">准备加载本地选股...</div>
   <section class="single-bar">
     <b>单股研究</b>
     <input id="singleInput" placeholder="输入代码，如 600580" onkeydown="if(event.key==='Enter')researchSingle()" />
-    <select id="singleMode"><option value="local">稳健中期</option><option value="aggressive">激进成长</option></select>
+    <select id="singleMode"><option value="review">评审研究</option><option value="gemini">AI研究</option></select>
     <button id="singleBtn" onclick="researchSingle()">开始研究</button>
     <span class="muted">输出技术、消息、基本面、资金、风控和3个月预测</span>
   </section>
@@ -2977,7 +3054,7 @@ RESEARCH_HTML = r"""<!doctype html>
 <script>
 const $=id=>document.getElementById(id);let allRows=[],activeCategory='全部';
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
-function setBusy(on){['localBtn','growthBtn','reviewBtn','geminiBtn','checkBtn','singleBtn'].forEach(id=>{const el=$(id);if(el)el.disabled=on})}
+function setBusy(on){['reviewBtn','geminiBtn','checkBtn','singleBtn'].forEach(id=>{const el=$(id);if(el)el.disabled=on})}
 function normalizeList(data){if(Array.isArray(data))return data;if(Array.isArray(data.stocks))return data.stocks;if(Array.isArray(data.rows))return data.rows;return[]}
 function clsChange(v){const n=Number(v);return n>0?'up':n<0?'down':''}
 function renderCategories(){const map=new Map();allRows.forEach(r=>map.set(r.category||'综合观察',(map.get(r.category||'综合观察')||0)+1));const cats=[['全部',allRows.length],...Array.from(map.entries())];$('categories').innerHTML=cats.map(([name,count])=>`<button class="cat ${name===activeCategory?'active':''}" data-cat="${esc(name)}"><span>${esc(name)}</span><small>${count}只</small></button>`).join('');document.querySelectorAll('.cat').forEach(btn=>btn.addEventListener('click',()=>{activeCategory=btn.dataset.cat||'全部';renderCategories();renderRows()}))}
@@ -2986,9 +3063,9 @@ function renderRows(){const rows=currentRows();$('count').textContent=rows.lengt
 function showDetail(idx){const r=currentRows()[idx];if(!r)return;const agents=Array.isArray(r.agents)?r.agents:[];const reasons=Array.isArray(r.reasons)?r.reasons:[];const daily=r.dailyAnalysis||{},medium=r.mediumAnalysis||{},forecast=r.forecast||{};$('detail').style.display='block';$('detail').innerHTML=`<h3>${esc(r.name)} <span class="code">${esc(r.code)}</span></h3><p><span class="tag">${esc(r.category||'综合观察')}</span> <span class="tag">${esc(r.tier||'等待确认')}</span> <span class="tag">${esc(r.useCase||'等待放量')}</span> <span class="tag">3个月 ${esc(forecast.label||'观察')}</span> <span class="tag">弹性 ${esc(forecast.expected||'--')}</span> <span class="tag">中期分 ${esc(r.mediumScore??'--')}/10</span></p><p class="muted">${esc(r.decision||r.categoryReason||'本地多因子观察')}</p><div class="agents">${agents.map(esc).join('<br>')}</div><p><b>未来1-3个月预测</b><br>结论：${esc(forecast.label||'观察')}｜预估弹性：${esc(forecast.expected||'--')}｜置信度：${esc(forecast.confidence||'--')}<br>依据：${esc(forecast.basis||'行业催化+趋势资金')}</p><p><b>未来1-3个月逻辑</b><br>逻辑：${esc(medium.logic||'等待更多数据')}<br>催化：${esc(medium.catalyst||'等待消息确认')}<br>风险：${esc(medium.risk||'控制仓位')}<br>周期：${esc(r.horizon||'1-3个月观察')}</p><p><b>全方面调研框架</b><br>日线：${esc(daily.daily||'等待更多数据')}<br>新闻：${esc(daily.news||'等待新闻确认')}<br>资金：${esc(daily.money||'等待成交确认')}<br>结论：${esc(r.decision||'等待价格、成交量和消息共振')}</p><p class="muted">${reasons.map(x=>'· '+esc(x)).join('<br>')}</p>`}
 function renderSingleDetail(r){const agents=Array.isArray(r.agents)?r.agents:[];const reasons=Array.isArray(r.reasons)?r.reasons:[];const daily=r.dailyAnalysis||{},medium=r.mediumAnalysis||{},forecast=r.forecast||{};$('detail').style.display='block';$('detail').innerHTML=`<h3>单股研究：${esc(r.name)} <span class="code">${esc(r.code)}</span></h3><p><span class="tag">${esc(r.category||'综合观察')}</span> <span class="tag">${esc(r.tier||'等待确认')}</span> <span class="tag">${esc(r.useCase||'等待放量')}</span> <span class="tag">价格 ${esc(r.price??'--')}</span> <span class="tag">涨跌 ${esc(r.change??'--')}%</span> <span class="tag">评分 ${esc(r.score??'--')}</span></p><p><b>多Agent结论</b></p><div class="agents">${agents.map(esc).join('<br>')}</div><p><b>3个月预测</b><br>结论：${esc(forecast.label||'观察')}｜预估弹性：${esc(forecast.expected||'--')}｜置信度：${esc(forecast.confidence||'--')}｜依据：${esc(forecast.basis||'行业催化+趋势资金')}</p><p><b>研究拆解</b><br>技术：${esc(daily.daily||'等待更多数据')}<br>消息：${esc(daily.news||'等待新闻确认')}<br>基本面/行业：${esc(medium.logic||'等待更多数据')}<br>资金：${esc(daily.money||'等待成交确认')}<br>风控：${esc(medium.risk||daily.risk||'控制仓位')}</p><p class="muted">${reasons.map(x=>'· '+esc(x)).join('<br>')}</p>`;$('detail').scrollIntoView({behavior:'smooth',block:'start'})}
 async function researchSingle(){const code=($('singleInput').value||'').trim();if(!code){$('status').textContent='请输入股票代码，例如 600580。';return}setBusy(true);$('status').textContent='正在进行单股多因子研究...';try{const mode=$('singleMode').value||'local';const res=await fetch('/api/single_research?code='+encodeURIComponent(code)+'&mode='+encodeURIComponent(mode),{cache:'no-store'});const data=await res.json();if(!data.ok)throw new Error(data.message||'单股研究失败');$('status').textContent=(data.message||'单股研究完成')+(data.updatedAt?'｜更新时间 '+esc(data.updatedAt):'');renderSingleDetail(data.stock)}catch(e){$('status').textContent='单股研究失败：'+(e.message||e)}finally{setBusy(false)}}
-async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 AI 增强，超时会自动切回本地结果...':(mode==='review'?'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...':mode==='aggressive'?'正在扫描激进成长弹性池...':'正在按当前时间加载稳健中期初筛...');$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="8" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='review'?'评审团选股已完成。':mode==='aggressive'?'激进成长已完成。':mode==='local'?'稳健中期已完成。':'选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'AI 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('local');$('rows').innerHTML=`<tr><td colspan="8" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
+async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 AI 选股，超时会自动切回评审选股...':'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...';$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="8" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='gemini'?'AI选股已完成。':'评审团选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'AI 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('review');$('rows').innerHTML=`<tr><td colspan="8" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
 async function checkAi(){setBusy(true);$('status').textContent='正在检测 AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),7000);const data=await(await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);$('status').textContent=(data.ok?'AI 可用：':'AI 异常：')+(data.message||'无返回')}catch(e){$('status').textContent='AI 检测超时或网络不可达，本地选股仍可使用。'}finally{setBusy(false)}}
-document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('local')}});
+document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('review')}});
 </script>
 </body>
 </html>"""
