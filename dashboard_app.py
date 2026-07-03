@@ -52,6 +52,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
+        if self._requires_login(path) and not current_email(self):
+            if path.startswith("/api/"):
+                self._send_json({"ok": False, "loggedIn": False, "message": "请先登录后使用。"}, status=401)
+            else:
+                self._redirect(f"/login?next={urllib.parse.quote(self.path or '/', safe='')}")
+            return
         if path in {"/", "/index.html"}:
             self._send_html(HTML)
             return
@@ -125,6 +131,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if self._requires_login(path) and not current_email(self):
+            self._send_json({"ok": False, "loggedIn": False, "message": "请先登录后使用。"}, status=401)
+            return
         if path.startswith("/api/run/"):
             name = path.rsplit("/", 1)[-1]
             self._send_json(run_task(name, self._read_json()))
@@ -153,6 +162,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *args: object) -> None:
         return
 
+    def _requires_login(self, path: str) -> bool:
+        public_paths = {"/landing", "/login", "/register", "/account", "/api/account", "/api/login", "/api/register", "/api/logout", "/api/status"}
+        if path in public_paths:
+            return False
+        return path in {"/", "/index.html", "/commercial", "/research", "/simulation"} or path.startswith("/api/")
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
     def _send_html(self, html: str) -> None:
         data = html.encode("utf-8")
         self.send_response(200)
@@ -161,9 +181,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_json(self, payload: dict) -> None:
+    def _send_json(self, payload: dict, status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -304,9 +324,16 @@ def read_dashboard_settings_file() -> dict:
 
 def sanitize_ai_settings(data: dict, current: dict) -> dict:
     provider = str(data.get("aiProvider") or current.get("aiProvider") or "Gemini").strip()
-    if provider not in {"Gemini", "OpenAI"}:
+    provider_alias = {
+        "OpenAI兼容": "OpenAICompatible",
+        "OpenAI Compatible": "OpenAICompatible",
+        "OpenAI": "OpenAICompatible",
+        "OpenAICompatible": "OpenAICompatible",
+    }
+    provider = provider_alias.get(provider, provider)
+    if provider not in {"Gemini", "OpenAICompatible"}:
         provider = "Gemini"
-    model_default = "gemini-2.5-flash" if provider == "Gemini" else "gpt-4.1-mini"
+    model_default = "gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini"
     ai = {
         "aiProvider": provider,
         "aiModel": str(data.get("aiModel") or current.get("aiModel") or model_default).strip()[:80],
@@ -332,9 +359,13 @@ def public_ai_settings(data: dict) -> dict:
         if not fallback_key:
             env = load_desktop_env()
             fallback_key = env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or env.get("API_KEY") or ""
+    provider = str(data.get("aiProvider") or "Gemini")
+    if provider in {"OpenAI", "OpenAI Compatible", "OpenAI兼容"}:
+        provider = "OpenAICompatible"
     return {
-        "aiProvider": str(data.get("aiProvider") or "Gemini"),
-        "aiModel": str(data.get("aiModel") or "gemini-2.5-flash"),
+        "aiProvider": provider,
+        "aiProviderLabel": "OpenAI兼容" if provider == "OpenAICompatible" else "Gemini",
+        "aiModel": str(data.get("aiModel") or ("gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini")),
         "aiBase": str(data.get("aiBase") or ""),
         "aiProxy": str(data.get("aiProxy") or ""),
         "aiKeyConfigured": bool(key or fallback_key),
@@ -1683,8 +1714,8 @@ def normalize_local_agents(agents: list) -> list[str]:
 
 def gemini_status_payload() -> dict:
     ai_config = load_ai_config()
-    if ai_config.get("provider") not in {"", "Gemini"}:
-        return {"ok": False, "configured": bool(ai_config.get("key")), "message": "当前盘中AI接口暂只支持 Gemini，OpenAI 接入为商业版预留。"}
+    if ai_config.get("provider") == "OpenAICompatible":
+        return openai_compatible_status_payload(ai_config)
     key = load_gemini_key()
     if not key:
         return {"ok": False, "configured": False, "message": "未读取到 Gemini Key。请在设置里填写 Key，或在桌面 1.env 写入 GEMINI_API_KEY。"}
@@ -1707,6 +1738,41 @@ def gemini_status_payload() -> dict:
         return {"ok": True, "configured": True, "model": model, "message": "Gemini Key 可用。", "sample": text[:80]}
     except Exception as exc:
         return {"ok": False, "configured": True, "message": f"Gemini 请求失败：{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def openai_compatible_status_payload(ai_config: dict) -> dict:
+    key = str(ai_config.get("key") or "").strip()
+    base = normalize_openai_base(str(ai_config.get("base") or "").strip())
+    model = str(ai_config.get("model") or "gpt-4o-mini").strip()
+    if not base:
+        return {"ok": False, "configured": bool(key), "message": "请填写第三方中转 API 地址，例如 https://你的域名/v1。"}
+    if not key:
+        return {"ok": False, "configured": False, "message": "请填写第三方中转 API Key。"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "只回复：正常"}],
+        "temperature": 0,
+        "max_tokens": 32,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{base}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            method="POST",
+        )
+        data = json.loads(gemini_open(req, timeout=10).read().decode("utf-8", "replace"))
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return {"ok": True, "configured": True, "model": model, "message": "第三方AI中转可用。", "sample": str(text)[:80]}
+    except Exception as exc:
+        return {"ok": False, "configured": True, "message": f"第三方AI中转请求失败：{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def normalize_openai_base(base: str) -> str:
+    base = str(base or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return base if base.endswith("/v1") else f"{base}/v1"
 
 
 def stock_category(name: str) -> dict:
@@ -1850,8 +1916,10 @@ def load_gemini_key() -> str:
 def load_ai_config() -> dict:
     settings = read_dashboard_settings_file()
     provider = str(settings.get("aiProvider") or "Gemini").strip()
+    if provider in {"OpenAI", "OpenAI Compatible", "OpenAI兼容"}:
+        provider = "OpenAICompatible"
     key = str(settings.get("aiKey") or "").strip()
-    model = str(settings.get("aiModel") or ("gemini-2.5-flash" if provider == "Gemini" else "gpt-4.1-mini")).strip()
+    model = str(settings.get("aiModel") or ("gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini")).strip()
     base = str(settings.get("aiBase") or "").strip()
     proxy = str(settings.get("aiProxy") or "").strip()
     return {"provider": provider, "key": key, "model": model, "base": base, "proxy": proxy}
@@ -2369,7 +2437,7 @@ LANDING_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>T神器 - A股资源股盘中信号系统</title>
+<title>T神器 - A股做T盘中信号系统</title>
 <style>
 :root{--ink:#17202a;--muted:#667481;--line:#e8eef2;--red:#eb5b68;--green:#2fb878;--gold:#d7a032;--blue:#2563eb}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#f7fbfb}
@@ -2378,12 +2446,12 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
 </head>
 <body>
 <div class="page">
-  <nav class="nav"><a class="brand" href="/landing"><span class="mark">R</span><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="#deploy">部署</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
+  <nav class="nav"><a class="brand" href="/landing"><span class="mark">T</span><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
   <section class="hero">
     <div>
-      <span class="eyebrow">面向A股资源股与日内做T的实时雷达</span>
-      <h1>紫金矿业专属盘中信号系统</h1>
-      <p class="lead">把黄金、铜、美元、分时黄线、量能和主力行为合成一个清晰的盘中判断：偏多、观望、风险，以及可执行的买卖价格带。</p>
+      <span class="eyebrow">面向A股日内做T的实时信号雷达</span>
+      <h1>做T神器：盘中买卖点与策略控制台</h1>
+      <p class="lead">把分时黄线、VWAP偏离、量能结构、板块联动和AI复核合成一个清晰的盘中判断：低吸、高抛、接回、止损，以及可执行的价格带。</p>
       <div class="hero-actions"><a class="btn primary" href="/">打开本地控制台</a><a class="btn" href="/commercial">打开功能中心</a><a class="btn" href="#pricing">查看商业化方案</a></div>
       <div class="proof"><div><b>秒级监控</b><span>盘中刷新</span></div><div><b>黄线战法</b><span>VWAP核心</span></div><div><b>微信提醒</b><span>强信号推送</span></div></div>
       <p class="warn">提示：本系统用于策略研究和风险提醒，不构成投资建议。</p>
@@ -2404,7 +2472,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
   <h2 class="section-title">从工具到产品</h2>
   <p class="section-sub">商业化版本重点不是花哨页面，而是让用户每天开盘前和盘中知道该看什么。</p>
   <div class="cards">
-    <div class="card"><h3>盘前资源风向</h3><p>跟踪黄金、白银、铜、原油、美元和离岸人民币，形成紫金矿业盘前偏多/偏空评分。</p></div>
+    <div class="card"><h3>盘前市场风向</h3><p>跟踪黄金、白银、铜、原油、美元、离岸人民币和板块消息，形成重点股票盘前偏多/偏空评分。</p></div>
     <div class="card"><h3>盘中主力雷达</h3><p>围绕黄线均线、VWAP偏离、量能结构和趋势动量，识别吸筹、拉升、派发与假突破。</p></div>
     <div class="card"><h3>强信号提醒</h3><p>只在高质量买卖点出现时提醒，输出价格带、止损位和接回位，避免无意义刷屏。</p></div>
   </div>
@@ -2412,29 +2480,9 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
 <section class="band">
   <h2 class="section-title">适合的用户</h2>
   <div class="cards">
-    <div class="card"><h3>资源股持仓用户</h3><p>重点关注紫金矿业、有色、黄金铜链条，开盘前先看外盘方向。</p></div>
+    <div class="card"><h3>持仓做T用户</h3><p>重点关注自选股票、行业板块和外盘方向，开盘前先判断高开低走或低开修复概率。</p></div>
     <div class="card"><h3>日内做T用户</h3><p>需要黄线附近的低吸、高抛、接回信号，而不是简单涨跌提醒。</p></div>
     <div class="card"><h3>策略研究用户</h3><p>通过模拟测试和失败复盘，持续优化触发条件和股票池。</p></div>
-  </div>
-</section>
-<section id="deploy" class="band">
-  <h2 class="section-title">商业端部署路线</h2>
-  <p class="section-sub">先轻量上线，验证有人愿意用，再把行情、策略、会员和消息服务拆开。</p>
-  <div class="steps">
-    <div class="step"><b>01</b><h3>本地验证</h3><p>继续在你的电脑跑监控、模拟和微信提醒，先把紫金矿业单股逻辑磨稳。</p></div>
-    <div class="step"><b>02</b><h3>演示站</h3><p>云端放官网、价格页、功能演示和用户预约，不承载真实秒级行情。</p></div>
-    <div class="step"><b>03</b><h3>小范围内测</h3><p>接入账号、订阅、日志和消息队列，给少数用户开通多股监控。</p></div>
-    <div class="step"><b>04</b><h3>正式收费</h3><p>拆分行情源、策略引擎、AI复核、微信提醒和用户数据，支持稳定扩容。</p></div>
-  </div>
-</section>
-<section class="band">
-  <h2 class="section-title">服务器准备</h2>
-  <p class="section-sub">现在不用一次买很贵的服务器。商业化早期先够用、可迁移、易维护。</p>
-  <div class="table">
-    <div class="table-row"><strong>当前阶段</strong><div>本地电脑 + 本地网页</div><div>不需要服务器，适合继续打磨策略和界面。</div></div>
-    <div class="table-row"><strong>演示网站</strong><div>1台轻量云服务器或静态托管</div><div>2核2G即可，主要放官网和产品介绍。</div></div>
-    <div class="table-row"><strong>内测版本</strong><div>2核4G + 数据库</div><div>用于账号、订阅、日志、模拟历史和消息队列。</div></div>
-    <div class="table-row"><strong>收费版本</strong><div>后端API + 行情服务 + 队列</div><div>建议独立行情进程，避免AI分析卡住实时提醒。</div></div>
   </div>
 </section>
 <section class="band">
@@ -2448,15 +2496,15 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
 </section>
 <section id="pricing" class="band">
   <h2 class="section-title">商业化定价</h2>
-  <p class="section-sub">不做永久免费，直接走低门槛试用 + 月付 + 包年，筛选真正需要做T纪律工具的用户。</p>
+  <p class="section-sub">价格简单，功能直接：先用起来，再决定是否长期使用。</p>
   <div class="pricing">
-    <div class="price"><h3>体验版</h3><div class="money">¥19.9/7天</div><ul class="list"><li>单股实时监控</li><li>基础正反T提醒</li><li>盘前走势预判</li><li>基础模拟测试</li></ul></div>
-    <div class="price featured"><h3>专业版</h3><div class="money">¥59/月</div><ul class="list"><li>多股实时监控</li><li>正反T买卖点提醒</li><li>模拟测试与复盘</li><li>选股研究与AI复核</li></ul></div>
-    <div class="price"><h3>包年版</h3><div class="money">¥399/年</div><ul class="list"><li>包含专业版全部功能</li><li>优先更新策略模板</li><li>优先支持与参数建议</li><li>后续新功能优先体验</li></ul></div>
+    <div class="price"><h3>体验版</h3><div class="money">免费试用</div><ul class="list"><li>基础单股监控</li><li>盘前方向预览</li><li>模拟测试体验</li><li>策略研究预览</li></ul></div>
+    <div class="price featured"><h3>月卡</h3><div class="money">¥9.9/月</div><ul class="list"><li>多股实时监控</li><li>正反T价格带提醒</li><li>模拟测试与复盘</li><li>选股研究与AI复核</li></ul></div>
+    <div class="price"><h3>永久版</h3><div class="money">¥99</div><ul class="list"><li>包含月卡核心功能</li><li>永久使用当前版本</li><li>策略模板持续更新</li><li>优先体验新增功能</li></ul></div>
   </div>
 </section>
-<section class="cta"><div><h2>先把本地版跑稳定，再做云端收费。</h2><p>当前版本已具备商业化雏形：监控、模拟、选股、盘前风向、微信提醒。</p></div><div class="hero-actions"><a class="btn primary" href="/">进入控制台</a><a class="btn" href="/register">注册体验账号</a></div></section>
-<footer class="footer">T神器 · A股资源股盘中信号系统 · 策略研究工具，不承诺收益。</footer>
+<section class="cta"><div><h2>让做T从感觉变成纪律。</h2><p>盘前看方向，盘中等价格带，收盘复盘策略。</p></div><div class="hero-actions"><a class="btn primary" href="/">进入控制台</a><a class="btn" href="/register">注册体验账号</a></div></section>
+<footer class="footer">T神器 · A股做T盘中信号系统 · 策略研究工具，不承诺收益。</footer>
 </body>
 </html>"""
 
@@ -2480,9 +2528,9 @@ a,button,input{font:inherit}a{text-decoration:none;color:inherit}.card{width:min
     <h1>把策略、提醒和复盘绑定到你的账号。</h1>
     <p>当前是本地内测版：账号会保存在本机，用于模拟会员权限、策略草稿和后续商业化流程。</p>
     <div class="points">
-      <div class="point"><b>体验版</b><span>19.9元试用7天</span></div>
-      <div class="point"><b>专业版</b><span>59元/月，多股监控</span></div>
-      <div class="point"><b>包年版</b><span>399元/年，优先更新</span></div>
+      <div class="point"><b>体验版</b><span>注册后可试用基础能力</span></div>
+      <div class="point"><b>月卡</b><span>9.9元/月，多股监控</span></div>
+      <div class="point"><b>永久版</b><span>99元，长期使用</span></div>
       <div class="point"><b>云端可迁移</b><span>后续接数据库和支付</span></div>
     </div>
   </section>
@@ -2501,11 +2549,13 @@ a,button,input{font:inherit}a{text-decoration:none;color:inherit}.card{width:min
 const mode='__MODE__';
 const isRegister=mode==='register';
 document.getElementById('title').textContent=isRegister?'注册体验账号':'登录';
-document.getElementById('desc').textContent=isRegister?'注册后自动登录，默认进入体验版账号。':'登录后进入会员中心。';
+const params=new URLSearchParams(location.search);
+const next=params.get('next')||'/';
+document.getElementById('desc').textContent=isRegister?'注册后自动登录，默认进入体验版账号。':'登录后进入你的操作台。';
 document.getElementById('nicknameBox').hidden=!isRegister;
 document.getElementById('submitBtn').textContent=isRegister?'注册并登录':'登录';
 document.getElementById('switchLink').textContent=isRegister?'已有账号？登录':'没有账号？注册';
-document.getElementById('switchLink').href=isRegister?'/login':'/register';
+document.getElementById('switchLink').href=(isRegister?'/login':'/register')+(next?('?next='+encodeURIComponent(next)):'');
 async function submitAuth(){
   const msg=document.getElementById('msg');msg.textContent='正在处理...';msg.className='msg';
   const payload={email:email.value.trim(),password:password.value,nickname:nickname.value.trim()};
@@ -2514,7 +2564,7 @@ async function submitAuth(){
     const data=await res.json();
     if(!data.ok){msg.textContent=data.message||'操作失败';msg.className='msg bad';return}
     msg.textContent=data.message||'成功';
-    setTimeout(()=>location.href='/account',350);
+    setTimeout(()=>location.href=next,350);
   }catch(e){msg.textContent='网络或本地服务异常';msg.className='msg bad'}
 }
 </script>
@@ -2556,7 +2606,7 @@ async function loadAccount(){
       <div class="card"><h3>账号信息</h3><div class="kv"><div>邮箱</div><div>${a.email||'--'}</div><div>昵称</div><div>${a.nickname||'--'}</div><div>套餐</div><div>${a.plan||'体验版'}</div><div>注册时间</div><div>${a.createdAt||'--'}</div><div>监控额度</div><div>${a.watchLimit||1} 只股票</div><div>AI复核额度</div><div>${a.aiReviewLimit||5} 次/日</div></div></div>
       <div class="card"><h3>快捷入口</h3><p><a href="/"><button class="primary">进入控制台</button></a></p><p><a href="/commercial"><button>配置商业功能</button></a></p><p><a href="/simulation"><button>打开模拟测试</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
     </div>
-    <div class="card" style="margin-top:14px"><h3>套餐规划</h3><div class="plan"><div class="price active"><b>体验版</b><p>¥19.9 / 7天</p><ul><li>单股监控</li><li>基础正反T提醒</li><li>盘前走势预判</li></ul></div><div class="price"><b>专业版</b><p>¥59 / 月</p><ul><li>多股实时监控</li><li>模拟测试与复盘</li><li>AI买卖点复核</li></ul></div><div class="price"><b>包年版</b><p>¥399 / 年</p><ul><li>专业版全部功能</li><li>优先更新</li><li>优先支持</li></ul></div></div></div>`;
+    <div class="card" style="margin-top:14px"><h3>套餐规划</h3><div class="plan"><div class="price active"><b>体验版</b><p>免费试用</p><ul><li>基础单股监控</li><li>盘前方向预览</li><li>模拟测试体验</li></ul></div><div class="price"><b>月卡</b><p>¥9.9 / 月</p><ul><li>多股实时监控</li><li>模拟测试与复盘</li><li>AI买卖点复核</li></ul></div><div class="price"><b>永久版</b><p>¥99</p><ul><li>核心功能长期使用</li><li>策略模板更新</li><li>优先体验新增功能</li></ul></div></div></div>`;
 }
 async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login'}
 loadAccount();
@@ -2630,26 +2680,11 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}button{height:36px;bo
     <div class="head">收费方案</div>
     <div class="body">
       <div class="cards">
-        <div class="card"><h3>体验版</h3><div class="price-line">¥19.9 / 7天</div><p>单股监控、基础正反T提醒、盘前走势预判、基础模拟测试。</p></div>
-        <div class="card"><h3>专业版</h3><div class="price-line">¥59 / 月</div><p>多股监控、买卖点提醒、模拟复盘、选股研究、AI复核。</p></div>
-        <div class="card"><h3>包年版</h3><div class="price-line">¥399 / 年</div><p>专业版全部功能，优先更新策略模板，优先支持和参数建议。</p></div>
+        <div class="card"><h3>体验版</h3><div class="price-line">免费试用</div><p>基础单股监控、盘前方向预览、模拟测试体验。</p></div>
+        <div class="card"><h3>月卡</h3><div class="price-line">¥9.9 / 月</div><p>多股监控、买卖点提醒、模拟复盘、选股研究、AI复核。</p></div>
+        <div class="card"><h3>永久版</h3><div class="price-line">¥99</div><p>核心功能长期使用，策略模板更新，优先体验新增功能。</p></div>
       </div>
       <p class="warn">对外文案只写“辅助决策、纪律管理、研究参考”，不要承诺收益。</p>
-    </div>
-  </section>
-  <section class="panel" style="margin-top:14px">
-    <div class="head">还需要做什么</div>
-    <div class="body">
-      <div class="todo">
-        <div><b>账号与权限</b><span>把本地账号换成数据库账号，按体验版、专业版、包年版限制功能。</span></div>
-        <div><b>支付闭环</b><span>接微信/支付宝支付，支付成功后自动开通套餐和到期时间。</span></div>
-        <div><b>策略模板</b><span>保存官方默认策略，专业版允许复制后自定义，所有策略必须先跑模拟验证。</span></div>
-        <div><b>云端官网</b><span>部署官网、价格页、登录页、免责声明和用户协议。</span></div>
-        <div><b>数据合规</b><span>确认行情源授权，商业版避免使用不稳定或不合规数据。</span></div>
-        <div><b>消息服务</b><span>把提醒队列、限频、失败重试和用户通知记录做成后台服务。</span></div>
-        <div><b>策略风控</b><span>限制极端参数，提供一键恢复默认和历史版本回滚。</span></div>
-        <div><b>运营素材</b><span>准备演示视频、案例截图、试用话术、风险提示和客服入口。</span></div>
-      </div>
     </div>
   </section>
 </main>
@@ -2659,7 +2694,7 @@ const modules={
 strategy:{title:'自定义策略',html:`<div class="form"><div class="field"><label>策略来源</label><select id="strategySource" onchange="setVal('strategySource',this.value)"><option>使用官方默认策略</option><option>复制默认后自定义</option><option>导入个人策略</option></select></div><div class="field"><label>策略风格</label><select id="risk" onchange="setVal('risk',this.value)"><option>稳健</option><option>平衡</option><option>激进</option></select></div><div class="field"><label>每日最多交易</label><input id="maxDaily" type="number" min="0" max="5" value="1" oninput="setVal('maxDaily',this.value)"></div><div class="field"><label>正T低吸阈值</label><input id="buyDev" type="number" step="0.05" value="-1.30" oninput="setVal('buyDev',this.value)"></div><div class="field"><label>反T高抛阈值</label><input id="sellDev" type="number" step="0.05" value="1.50" oninput="setVal('sellDev',this.value)"></div><div class="field"><label>止盈目标%</label><input id="takeProfit" type="number" step="0.05" value="0.75" oninput="setVal('takeProfit',this.value)"></div><div class="field"><label>二次确认</label><div class="toggle"><input id="secondConfirm" type="checkbox" checked onchange="setBool('secondConfirm',this.checked)">低点回踩不破/高点反抽不过</div></div><div class="field"><label>路径预判</label><div class="toggle"><input id="pathGate" type="checkbox" checked onchange="setBool('pathGate',this.checked)">先判断低开修复/冲高回落/单边弱</div></div></div><p class="warn">默认使用官方策略。用户自定义只改变提醒和模拟参数，不承诺收益，保存前必须通过模拟测试。</p>`},
 ai:{title:'AI集中复核',html:`<div class="form"><div class="field"><label>AI复核</label><div class="toggle"><input id="aiReview" type="checkbox" checked onchange="setBool('aiReview',this.checked)">买卖点出现后先让AI讨论是否最优</div></div><div class="field"><label>复核重点</label><select><option>是否追高/接刀</option><option>大方向是否一致</option><option>价格带是否合理</option></select></div><div class="field"><label>输出格式</label><select><option>一句话结论 + 价格</option><option>五角色短评</option><option>详细复盘</option></select></div><div class="field"><label>模型策略</label><select><option>Gemini优先，本地兜底</option><option>本地规则优先</option><option>人工确认</option></select></div></div>`},
 alert:{title:'提醒规则',html:`<div class="form"><div class="field"><label>提醒强度</label><select id="alert" onchange="setVal('alert',this.value)"><option>强提醒</option><option>普通提醒</option><option>只记录不提醒</option></select></div><div class="field"><label>单股每日提醒</label><select><option>买卖各1次</option><option>最多2次</option><option>不限但限频</option></select></div><div class="field"><label>推送渠道</label><select><option>微信ClawBot</option><option>浏览器声音</option><option>短信/邮件预留</option></select></div><div class="field"><label>提醒内容</label><select><option>股票名 + 价格带 + 原因</option><option>简约一句话</option><option>详细角色分析</option></select></div></div>`},
-member:{title:'会员能力',html:`<div class="cards"><div class="card"><h3>体验版</h3><p>¥19.9/7天，单股监控、盘前风向、基础模拟。</p></div><div class="card"><h3>专业版</h3><p>¥59/月，多股监控、强提醒、AI买卖点复核。</p></div><div class="card"><h3>包年版</h3><p>¥399/年，专业版全部功能，优先更新和支持。</p></div></div><p class="warn">正式收费前需要接入账号系统、支付回调、权限校验和免责声明确认。</p>`}
+member:{title:'会员能力',html:`<div class="cards"><div class="card"><h3>体验版</h3><p>免费试用，基础单股监控、盘前风向、模拟体验。</p></div><div class="card"><h3>月卡</h3><p>¥9.9/月，多股监控、强提醒、AI买卖点复核。</p></div><div class="card"><h3>永久版</h3><p>¥99，核心功能长期使用，策略模板持续更新。</p></div></div><p class="warn">所有页面只做研究辅助，不承诺收益。</p>`}
 };
 function showModule(name,btn){state.module=name;document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');render()}
 function setVal(k,v){state[k]=v;renderSummary()}
@@ -2715,9 +2750,9 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
     <div class="settings-group">
       <div class="settings-title">AI模型配置</div>
       <div class="ai-config-grid">
-        <label>服务商<select id="aiProvider"><option>Gemini</option><option>OpenAI</option></select></label>
-        <label>模型<input id="aiModel" placeholder="gemini-2.5-flash" /></label>
-        <label class="wide">API地址<input id="aiBase" placeholder="默认官方地址，可留空" /></label>
+        <label>服务商<select id="aiProvider"><option value="Gemini">Gemini</option><option value="OpenAICompatible">OpenAI兼容</option></select></label>
+        <label>模型<input id="aiModel" placeholder="Gemini填 gemini-2.5-flash；中转填模型名" /></label>
+        <label class="wide">第三方AI中转地址<input id="aiBase" placeholder="Gemini可留空；中转填 https://域名/v1" /></label>
         <label class="wide">代理地址<input id="aiProxy" placeholder="如 http://127.0.0.1:10808，可留空" /></label>
         <label class="wide">API Key<input id="aiKey" type="password" placeholder="未配置" autocomplete="off" /></label>
       </div>
@@ -2727,7 +2762,7 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
         <button onclick="clearAiKey()">清除Key</button>
         <button onclick="location.href='/research'">去AI选股</button>
       </div>
-      <div id="aiConfigStatus" class="settings-note">AI Key 只保存在本机配置，界面不会明文回显。</div>
+      <div id="aiConfigStatus" class="settings-note">AI Key 和第三方中转地址只保存在本机配置，界面不会明文回显 Key。</div>
     </div>
     <div class="settings-group">
       <div class="settings-title">第三方API接口</div>
@@ -2795,7 +2830,7 @@ function syncInputCards(){const o=simOptions();if($('cash'))$('cash').textConten
 async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){mainOptions={cash:Number(s.cash||100000),trade:Number(s.trade||20000),sample:Number(s.sample||10)};fillAiSettings(s)}}catch(e){}syncInputCards()}
 function saveSettingsDebounced(){clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(simOptions())}).catch(()=>{})}
-function fillAiSettings(s){if($('aiProvider'))$('aiProvider').value=s.aiProvider||'Gemini';if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
+function fillAiSettings(s){if($('aiProvider'))$('aiProvider').value=({OpenAI:'OpenAICompatible','OpenAI兼容':'OpenAICompatible',OpenAICompatible:'OpenAICompatible'}[s.aiProvider]||(s.aiProvider||'Gemini'));if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
 function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'Gemini',aiModel:$('aiModel')?.value||'gemini-2.5-flash',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',marketDataApi:$('marketDataApi')?.value||'',newsApi:$('newsApi')?.value||'',quoteApi:$('quoteApi')?.value||'',customStrategy:$('customStrategy')?.value||'',strategyMode:$('strategyMode')?.value||'官方默认策略',maxSignalsPerDay:$('maxSignalsPerDay')?.value||'2',lowBuyDev:$('lowBuyDev')?.value||'-1.20',highSellDev:$('highSellDev')?.value||'1.40',signalCooldown:$('signalCooldown')?.value||'10',...extra}}
 async function saveAiSettings(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在保存AI配置...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions())})).json();if(data.ok){if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI配置已保存。')}else throw new Error('保存失败')}catch(e){if(msg)msg.textContent='保存失败：'+(e.message||e)}}
 async function clearAiKey(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在清除Key...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions({aiClearKey:true,aiKey:''}))})).json();if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI Key 已清除。')}catch(e){if(msg)msg.textContent='清除失败：'+(e.message||e)}}
