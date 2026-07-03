@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.request
 from pathlib import Path
 
 from stock_t_signal import StockConfig
@@ -99,6 +100,13 @@ def infer_prefix(code: str) -> str:
 def stock_name_by_code(code: str) -> str:
     if code in COMMON_NAMES:
         return COMMON_NAMES[code]
+    name = stock_name_from_pool(code)
+    if name:
+        return name
+    return fetch_stock_name_from_tencent(code)
+
+
+def stock_name_from_pool(code: str) -> str:
     try:
         data = json.loads(A_SHARE_POOL_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -108,6 +116,21 @@ def stock_name_by_code(code: str) -> str:
             return str(item.get("name") or "").strip()
     return ""
 
+
+def fetch_stock_name_from_tencent(code: str) -> str:
+    symbol = f"{infer_prefix(code)}{code}"
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        raw = opener.open(f"http://qt.gtimg.cn/q={symbol}", timeout=1.2).read()
+        text = raw.decode("gb18030", "replace")
+        parts = text.split("~")
+        if len(parts) > 2:
+            name = parts[1].strip()
+            if name and name != code:
+                return name
+    except Exception:
+        pass
+    return ""
 
 def _items_to_stocks(items: object) -> list[StockConfig]:
     stocks: list[StockConfig] = []

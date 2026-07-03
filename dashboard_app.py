@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import html as html_lib
 import os
 import random
@@ -14,6 +15,8 @@ import secrets
 import subprocess
 import sys
 import concurrent.futures
+import contextvars
+import time as time_mod
 import urllib.parse
 import urllib.request
 from datetime import datetime, time, timezone, timedelta
@@ -26,6 +29,7 @@ HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
 SIM_HISTORY_PATH = BASE_DIR / "simulation_history.jsonl"
 SETTINGS_PATH = BASE_DIR / "dashboard_settings.json"
+USER_DATA_DIR = BASE_DIR / "user_data"
 ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
 USERS_PATH = BASE_DIR / "commercial_users.json"
 LAST_GEMINI_ERROR = ""
@@ -33,6 +37,11 @@ MARKET_CONTEXT_CACHE: dict = {"ts": 0.0, "data": {}}
 GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
 URGENT_NEWS_CACHE: dict[str, dict] = {}
 SESSIONS: dict[str, str] = {}
+REQUEST_EMAIL: contextvars.ContextVar[str] = contextvars.ContextVar("request_email", default="")
+LOGIN_FAILURES: dict[str, dict] = {}
+MAX_LOGIN_FAILURES = 6
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_LOCK_SECONDS = 15 * 60
 
 TASKS = {
     "start_all": [
@@ -52,7 +61,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
-        if self._requires_login(path) and not current_email(self):
+        email = current_email(self)
+        REQUEST_EMAIL.set(email)
+        if self._requires_login(path) and not email:
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "loggedIn": False, "message": "请先登录后使用。"}, status=401)
             else:
@@ -86,15 +97,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "message": "就绪"})
             return
         if path == "/api/realtime":
-            self._send_json(realtime_payload())
+            self._send_json(realtime_payload(email))
             return
         if path == "/api/premarket":
             query = parse_qs(parsed_url.query)
             code = (query.get("code") or [""])[0]
-            self._send_json(premarket_payload(code))
+            self._send_json(premarket_payload(code, email))
             return
         if path == "/api/watchlist":
-            self._send_json(watchlist_payload())
+            self._send_json(watchlist_payload(email))
             return
         if path == "/api/wechat_messages":
             self._send_json(wechat_messages_payload())
@@ -119,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(gemini_intraday_payload(code))
             return
         if path == "/api/settings":
-            self._send_json(load_dashboard_settings())
+            self._send_json(load_dashboard_settings(email))
             return
         if path == "/api/account":
             self._send_json(account_payload(self))
@@ -131,7 +142,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if self._requires_login(path) and not current_email(self):
+        email = current_email(self)
+        REQUEST_EMAIL.set(email)
+        if self._requires_login(path) and not email:
             self._send_json({"ok": False, "loggedIn": False, "message": "请先登录后使用。"}, status=401)
             return
         if path.startswith("/api/run/"):
@@ -139,10 +152,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(run_task(name, self._read_json()))
             return
         if path == "/api/settings":
-            self._send_json(save_dashboard_settings(self._read_json()))
+            self._send_json(save_dashboard_settings(self._read_json(), email))
             return
         if path == "/api/watchlist":
-            self._send_json(save_watchlist_payload(self._read_json()))
+            self._send_json(save_watchlist_payload(self._read_json(), email))
             return
         if path == "/api/register":
             payload = register_payload(self, self._read_json())
@@ -241,9 +254,18 @@ def run_task(name: str, options: dict | None = None) -> dict:
     return {"ok": ok, "summary": summary, "detail": raw, "stats": stats, "stocks": stocks}
 
 
-def load_dashboard_settings() -> dict:
+def user_data_path(email: str | None, filename: str) -> Path:
+    email = str(email or REQUEST_EMAIL.get("") or "").strip().lower()
+    if not email:
+        return BASE_DIR / filename
+    digest = hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]
+    USER_DATA_DIR.mkdir(exist_ok=True)
+    return USER_DATA_DIR / f"{digest}_{filename}"
+
+
+def load_dashboard_settings(email: str | None = None) -> dict:
     defaults = {"cash": 100000, "trade": 20000, "sample": 10}
-    data = read_dashboard_settings_file()
+    data = read_dashboard_settings_file(email)
     settings = {
         "cash": clamp_int(data.get("cash"), defaults["cash"], 1000, 100000000),
         "trade": clamp_int(data.get("trade"), defaults["trade"], 1000, 100000000),
@@ -255,8 +277,8 @@ def load_dashboard_settings() -> dict:
     return {"ok": True, **settings}
 
 
-def save_dashboard_settings(data: dict) -> dict:
-    current = read_dashboard_settings_file()
+def save_dashboard_settings(data: dict, email: str | None = None) -> dict:
+    current = read_dashboard_settings_file(email)
     settings = dict(current)
     settings.update({
         "cash": clamp_int(data.get("cash"), 100000, 1000, 100000000),
@@ -266,7 +288,7 @@ def save_dashboard_settings(data: dict) -> dict:
     settings.update(sanitize_extra_settings(data, current))
     settings.update(sanitize_ai_settings(data, current))
     try:
-        SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        user_data_path(email, "dashboard_settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
         out.update(public_ai_settings(settings))
@@ -314,9 +336,10 @@ def public_extra_settings(data: dict) -> dict:
     }
 
 
-def read_dashboard_settings_file() -> dict:
+def read_dashboard_settings_file(email: str | None = None) -> dict:
+    path = user_data_path(email, "dashboard_settings.json")
     try:
-        data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
@@ -407,8 +430,67 @@ def save_users(data: dict) -> None:
     USERS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def hash_password(password: str, salt: str) -> str:
+def legacy_hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+def hash_password(password: str, salt: str, iterations: int = 210000) -> str:
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${digest.hex()}"
+
+
+def verify_password(password: str, user: dict) -> bool:
+    stored = str(user.get("password") or "")
+    salt = str(user.get("salt") or "")
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _scheme, iter_text, digest = stored.split("$", 2)
+            expected = hash_password(password, salt, int(iter_text))
+            return hmac.compare_digest(stored, expected)
+        except Exception:
+            return False
+    return hmac.compare_digest(stored, legacy_hash_password(password, salt))
+
+
+def maybe_upgrade_password(password: str, user: dict, store: dict) -> None:
+    stored = str(user.get("password") or "")
+    if stored.startswith("pbkdf2_sha256$"):
+        return
+    user["password"] = hash_password(password, str(user.get("salt") or ""))
+    save_users(store)
+
+
+def login_throttle_key(handler: Handler, email: str) -> str:
+    forwarded = str(handler.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
+    ip = forwarded or (handler.client_address[0] if handler.client_address else "unknown")
+    return f"{ip}|{email}"
+
+
+def login_block_seconds(key: str) -> int:
+    item = LOGIN_FAILURES.get(key)
+    if not item:
+        return 0
+    now = time_mod.time()
+    if item.get("lockUntil", 0) > now:
+        return int(item["lockUntil"] - now)
+    if now - item.get("firstAt", now) > LOGIN_WINDOW_SECONDS:
+        LOGIN_FAILURES.pop(key, None)
+    return 0
+
+
+def record_login_failure(key: str) -> None:
+    now = time_mod.time()
+    item = LOGIN_FAILURES.get(key)
+    if not item or now - item.get("firstAt", now) > LOGIN_WINDOW_SECONDS:
+        item = {"firstAt": now, "count": 0, "lockUntil": 0}
+    item["count"] = int(item.get("count", 0)) + 1
+    if item["count"] >= MAX_LOGIN_FAILURES:
+        item["lockUntil"] = now + LOGIN_LOCK_SECONDS
+    LOGIN_FAILURES[key] = item
+
+
+def clear_login_failures(key: str) -> None:
+    LOGIN_FAILURES.pop(key, None)
 
 
 def current_email(handler: Handler) -> str:
@@ -460,10 +542,18 @@ def register_payload(handler: Handler, data: dict) -> dict | None:
 def login_payload(handler: Handler, data: dict) -> dict | None:
     email = str(data.get("email") or "").strip().lower()
     password = str(data.get("password") or "")
-    users = load_users().get("users", {})
+    throttle_key = login_throttle_key(handler, email)
+    blocked = login_block_seconds(throttle_key)
+    if blocked > 0:
+        return {"ok": False, "message": f"登录尝试过多，请 {max(1, blocked // 60)} 分钟后再试。"}
+    store = load_users()
+    users = store.get("users", {})
     user = users.get(email)
-    if not user or hash_password(password, user.get("salt", "")) != user.get("password"):
+    if not user or not verify_password(password, user):
+        record_login_failure(throttle_key)
         return {"ok": False, "message": "邮箱或密码不正确。"}
+    clear_login_failures(throttle_key)
+    maybe_upgrade_password(password, user, store)
     token = secrets.token_hex(24)
     SESSIONS[token] = email
     handler.send_response(200)
@@ -512,16 +602,34 @@ def public_user(user: dict) -> dict:
     }
 
 
-def realtime_payload() -> dict:
+def dashboard_watchlist(email: str | None = None):
     try:
-        from monitor_config import load_watchlist
+        from monitor_config import DEFAULT_WATCHLIST, parse_watchlist_text
+    except Exception:
+        return []
+    data = read_dashboard_settings_file(email)
+    text = str(data.get("watchlistText") or "").strip()
+    stocks = parse_watchlist_text(text) if text else []
+    return stocks or list(DEFAULT_WATCHLIST)
+
+
+def dashboard_watchlist_text(stocks=None, email: str | None = None) -> str:
+    try:
+        from monitor_config import watchlist_text
+        return watchlist_text(stocks or dashboard_watchlist(email))
+    except Exception:
+        return ""
+
+
+def realtime_payload(email: str | None = None) -> dict:
+    try:
         from stock_t_signal import analyze_observation, fetch_minutes, fetch_quote, _format_time, _vwap
     except Exception as exc:
         return {"ok": False, "stocks": [], "error": str(exc)}
 
     rows = []
     market_context = cached_market_context()
-    for stock in load_watchlist():
+    for stock in dashboard_watchlist(email):
         try:
             quote = fetch_quote(stock.symbol)
             minutes = fetch_minutes(stock.symbol)
@@ -574,7 +682,7 @@ PREMARKET_FUTURES = [
 ]
 
 
-def premarket_payload(code: str = "") -> dict:
+def premarket_payload(code: str = "", email: str | None = None) -> dict:
     rows = []
     market_context = cached_market_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
@@ -585,7 +693,7 @@ def premarket_payload(code: str = "") -> dict:
                 rows.append(item)
     order = {name: i for i, (name, *_rest) in enumerate(PREMARKET_FUTURES)}
     rows.sort(key=lambda row: order.get(row["name"], 99))
-    target = premarket_target_stock(code)
+    target = premarket_target_stock(code, email)
     bias = premarket_stock_bias(rows, target)
     data = {"ok": True, "updatedAt": datetime.now().strftime("%m-%d %H:%M"), "rows": rows, "target": bias, "zijin": bias}
     MARKET_CONTEXT_CACHE["ts"] = datetime.now().timestamp()
@@ -593,7 +701,7 @@ def premarket_payload(code: str = "") -> dict:
     return data
 
 
-def premarket_target_stock(code: str = "") -> dict:
+def premarket_target_stock(code: str = "", email: str | None = None) -> dict:
     if code:
         try:
             from monitor_config import parse_stock_token
@@ -603,8 +711,7 @@ def premarket_target_stock(code: str = "") -> dict:
         except Exception:
             pass
     try:
-        from monitor_config import load_watchlist
-        stock = (load_watchlist() or [None])[0]
+        stock = (dashboard_watchlist(email) or [None])[0]
         if stock:
             return {"name": stock.name, "code": stock.code, "symbol": stock.symbol}
     except Exception:
@@ -1090,21 +1197,28 @@ def _bar_volume_deltas(minutes: list) -> list[float]:
     return out
 
 
-def watchlist_payload() -> dict:
+def watchlist_payload(email: str | None = None) -> dict:
     try:
-        from monitor_config import load_watchlist, stock_to_dict, watchlist_text
+        from monitor_config import stock_to_dict
 
-        stocks = load_watchlist()
-        return {"ok": True, "stocks": [stock_to_dict(s) for s in stocks], "text": watchlist_text(stocks)}
+        stocks = dashboard_watchlist(email)
+        return {"ok": True, "stocks": [stock_to_dict(s) for s in stocks], "text": dashboard_watchlist_text(stocks, email)}
     except Exception as exc:
         return {"ok": False, "stocks": [], "text": "", "error": str(exc)}
 
 
-def save_watchlist_payload(data: dict) -> dict:
+def save_watchlist_payload(data: dict, email: str | None = None) -> dict:
     try:
-        from monitor_config import save_watchlist_text
+        from monitor_config import parse_watchlist_text, stock_to_dict
 
-        return save_watchlist_text(str(data.get("text") or ""))
+        stocks = parse_watchlist_text(str(data.get("text") or ""))
+        if not stocks:
+            stocks = dashboard_watchlist(email)
+        text = dashboard_watchlist_text(stocks, email)
+        current = read_dashboard_settings_file(email)
+        current["watchlistText"] = text
+        user_data_path(email, "dashboard_settings.json").write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True, "stocks": [stock_to_dict(s) for s in stocks], "text": text}
     except Exception as exc:
         return {"ok": False, "stocks": [], "text": "", "error": str(exc)}
 
