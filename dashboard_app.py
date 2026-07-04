@@ -4126,6 +4126,19 @@ button.primary,.workbench-card.primary-card{background:linear-gradient(135deg,#c
 .settings-panel{top:82px;width:min(560px,calc(100vw - 36px));max-height:calc(100vh - 108px);overflow:auto;padding:0;border-radius:14px;background:rgba(255,255,255,.98)}
 .settings-head{position:sticky;top:0;z-index:2;margin:0;padding:12px 16px;background:rgba(255,255,255,.96);border-bottom:1px solid #f0dfc7;backdrop-filter:blur(8px)}
 .settings-head button{height:34px;border-radius:10px}.settings-group{padding:10px 16px 12px;margin-top:0}.settings-title{margin-bottom:7px}.settings-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.settings-actions button{height:34px}.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.ai-config-grid input,.ai-config-grid select{height:34px;border-radius:10px}.settings-note{padding:0 16px 14px;font-size:11px}.settings-panel::-webkit-scrollbar{width:8px}.settings-panel::-webkit-scrollbar-thumb{background:#d8b98a;border:2px solid #fff6e8;border-radius:999px}
+
+/* Final layout tuning: quiet workbench entries and a tighter settings drawer. */
+.workbench-links{max-width:620px;gap:10px}
+.workbench-card,.workbench-card.primary-card{position:relative;height:38px;background:linear-gradient(180deg,#fff,#fff9f0);color:#2b170f;border:1px solid #ead9bf;box-shadow:none}
+.workbench-card.primary-card{border-color:#e6c9a3}
+.workbench-card.primary-card:before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:999px;background:#c72a1f}
+.workbench-card.primary-card span{color:#2b170f}.workbench-card b{font-size:14px}.workbench-card span span{display:none}
+.top{min-height:62px}.app-logo{width:48px;height:48px;border-radius:12px}.title{font-size:18px}.top-actions button{height:32px;padding:0 12px}
+.stock-manager{min-height:44px;padding:7px 10px}.premarket{grid-template-columns:220px minmax(0,1fr) 320px}.pm-card{min-height:122px}.live{border-radius:12px}
+.settings-panel{top:76px;right:14px;width:min(500px,calc(100vw - 32px));max-height:calc(100vh - 104px)}
+.settings-actions button{height:32px}.ai-config-grid input,.ai-config-grid select{height:32px}.settings-group{padding:9px 14px 11px}.settings-head{padding:10px 14px}
+.hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
+@media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
 </style>
 </head>
 <body>
