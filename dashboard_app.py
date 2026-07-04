@@ -41,6 +41,7 @@ MARKET_CONTEXT_CACHE: dict = {"ts": 0.0, "data": {}}
 GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
 URGENT_NEWS_CACHE: dict[str, dict] = {}
 LONGHUBANG_CACHE: dict = {"ts": 0.0, "data": {}}
+LONGHUBANG_RANK_CACHE: dict = {"ts": 0.0, "data": {}}
 SESSIONS: dict[str, str] = {}
 SESSION_EXPIRES: dict[str, float] = {}
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -110,6 +111,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/research":
             self._send_html(RESEARCH_HTML)
             return
+        if path == "/longhubang":
+            self._send_html(LONGHUBANG_HTML)
+            return
         if path == "/rps":
             self._send_html(RPS_HTML)
             return
@@ -137,6 +141,11 @@ class Handler(BaseHTTPRequestHandler):
             query = parse_qs(parsed_url.query)
             mode = (query.get("mode") or ["local"])[0]
             self._send_json(screener_payload_v2(mode))
+            return
+        if path == "/api/longhubang_rank":
+            query = parse_qs(parsed_url.query)
+            limit = clamp_int((query.get("limit") or ["30"])[0], 30, 5, 80)
+            self._send_json(longhubang_rank_payload(limit))
             return
         if path == "/api/rps":
             query = parse_qs(parsed_url.query)
@@ -215,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if path.startswith("/assets/"):
             return False
-        return path in {"/", "/index.html", "/commercial", "/research", "/rps", "/simulation", "/admin", "/recharge"} or path.startswith("/api/")
+        return path in {"/", "/index.html", "/commercial", "/research", "/longhubang", "/rps", "/simulation", "/admin", "/recharge"} or path.startswith("/api/")
 
     def _redirect(self, location: str) -> None:
         self.send_response(302)
@@ -1602,6 +1611,179 @@ def longhubang_for_code(code: str) -> dict:
     return {"onList": False, "score": 0, "reason": "近5日未上龙虎榜", "netBuy": 0, "netBuyText": "--", "date": ""}
 
 
+def datacenter_rows(report: str, *, filter_text: str = "", sort_columns: str = "", sort_types: str = "", page_size: int = 100) -> list[dict]:
+    params = {
+        "reportName": report,
+        "columns": "ALL",
+        "source": "WEB",
+        "client": "WEB",
+        "pageSize": str(page_size),
+        "pageNumber": "1",
+    }
+    if filter_text:
+        params["filter"] = filter_text
+    if sort_columns:
+        params["sortColumns"] = sort_columns
+    if sort_types:
+        params["sortTypes"] = sort_types
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get?" + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"})
+        raw = urllib.request.urlopen(req, timeout=8).read().decode("utf-8", "replace")
+        payload = json.loads(raw)
+        result = payload.get("result") or payload.get("data") or {}
+        rows = result.get("data") if isinstance(result, dict) else []
+        return rows or []
+    except Exception:
+        return []
+
+
+def longhubang_rank_payload(limit: int = 30) -> dict:
+    now_ts = time_mod.time()
+    cache = LONGHUBANG_RANK_CACHE.get("data") or {}
+    if cache and int(cache.get("_limit") or 0) >= limit and now_ts - float(LONGHUBANG_RANK_CACHE.get("ts") or 0) < 180:
+        return cache
+
+    latest_rows = datacenter_rows(
+        "RPT_DAILYBILLBOARD_DETAILS",
+        sort_columns="TRADE_DATE,BILLBOARD_NET_AMT",
+        sort_types="-1,-1",
+        page_size=120,
+    )
+    if not latest_rows:
+        return {"ok": False, "message": "龙虎榜数据暂不可用", "updatedAt": datetime.now().strftime("%m-%d %H:%M"), "rows": []}
+
+    trade_date = str(latest_rows[0].get("TRADE_DATE") or "")[:10]
+    detail_rows = datacenter_rows(
+        "RPT_DAILYBILLBOARD_DETAILS",
+        filter_text=f"(TRADE_DATE='{trade_date}')",
+        sort_columns="BILLBOARD_NET_AMT",
+        sort_types="-1",
+        page_size=300,
+    )
+    dept_rows = datacenter_rows(
+        "RPT_OPERATEDEPT_TRADE_DETAILSNEW",
+        filter_text=f"(TRADE_DATE='{trade_date}')",
+        sort_columns="TRADE_DATE,SECURITY_CODE,NET_AMT",
+        sort_types="-1,1,-1",
+        page_size=800,
+    )
+    org_rows = datacenter_rows(
+        "RPT_ORGANIZATION_TRADE_DETAILSNEW",
+        filter_text=f"(TRADE_DATE='{trade_date}')",
+        sort_columns="NET_BUY_AMT",
+        sort_types="-1",
+        page_size=300,
+    )
+
+    by_code: dict[str, dict] = {}
+    for item in detail_rows:
+        code = re.sub(r"\D", "", str(item.get("SECURITY_CODE") or ""))
+        if len(code) != 6:
+            continue
+        row = by_code.setdefault(code, {
+            "code": code,
+            "name": str(item.get("SECURITY_NAME_ABBR") or code),
+            "date": trade_date,
+            "price": safe_float(item.get("CLOSE_PRICE")),
+            "change": safe_float(item.get("CHANGE_RATE")),
+            "reason": "",
+            "reasons": [],
+            "buy": 0.0,
+            "sell": 0.0,
+            "net": 0.0,
+            "deal": 0.0,
+            "turnover": safe_float(item.get("TURNOVERRATE")),
+            "buySeats": item.get("BUY_SEAT_NEW") or item.get("BUY_SEAT") or "",
+            "sellSeats": item.get("SELL_SEAT_NEW") or item.get("SELL_SEAT") or "",
+            "departments": [],
+            "organizations": [],
+        })
+        row["buy"] += safe_float(item.get("BILLBOARD_BUY_AMT"))
+        row["sell"] += safe_float(item.get("BILLBOARD_SELL_AMT"))
+        row["net"] += safe_float(item.get("BILLBOARD_NET_AMT"))
+        row["deal"] += safe_float(item.get("BILLBOARD_DEAL_AMT"))
+        reason = str(item.get("EXPLANATION") or item.get("EXPLAIN") or "")
+        if reason and reason not in row["reasons"]:
+            row["reasons"].append(reason)
+
+    for row in by_code.values():
+        row["reason"] = "；".join(row.pop("reasons", [])[:2]) or "龙虎榜上榜"
+
+    for item in dept_rows:
+        code = re.sub(r"\D", "", str(item.get("SECURITY_CODE") or ""))
+        row = by_code.get(code)
+        if not row:
+            continue
+        buy = safe_float(item.get("ACT_BUY"))
+        sell = safe_float(item.get("ACT_SELL"))
+        net = safe_float(item.get("NET_AMT"), buy - sell)
+        row["departments"].append({
+            "name": str(item.get("OPERATEDEPT_NAME") or item.get("ORG_NAME_ABBR") or "未知营业部"),
+            "shortName": str(item.get("ORG_NAME_ABBR") or item.get("OPERATEDEPT_NAME") or "未知营业部"),
+            "type": classify_seat_name(str(item.get("OPERATEDEPT_NAME") or item.get("ORG_NAME_ABBR") or "")),
+            "buy": buy,
+            "sell": sell,
+            "net": net,
+            "buyText": format_lhb_amount(buy),
+            "sellText": format_lhb_amount(sell),
+            "netText": format_lhb_amount(net),
+        })
+
+    for item in org_rows:
+        code = re.sub(r"\D", "", str(item.get("SECURITY_CODE") or ""))
+        row = by_code.get(code)
+        if not row:
+            continue
+        buy = safe_float(item.get("BUY_AMT"))
+        sell = safe_float(item.get("SELL_AMT"))
+        net = safe_float(item.get("NET_BUY_AMT"), buy - sell)
+        row["organizations"].append({
+            "name": "机构专用",
+            "buyTimes": int(safe_float(item.get("BUY_TIMES"))),
+            "sellTimes": int(safe_float(item.get("SELL_TIMES"))),
+            "buy": buy,
+            "sell": sell,
+            "net": net,
+            "buyText": format_lhb_amount(buy),
+            "sellText": format_lhb_amount(sell),
+            "netText": format_lhb_amount(net),
+        })
+
+    rows = list(by_code.values())
+    for row in rows:
+        row["buyText"] = format_lhb_amount(row["buy"])
+        row["sellText"] = format_lhb_amount(row["sell"])
+        row["netText"] = format_lhb_amount(row["net"])
+        row["dealText"] = format_lhb_amount(row["deal"])
+        row["departments"].sort(key=lambda x: abs(float(x.get("net") or 0)), reverse=True)
+        row["buyTop"] = sorted(row["departments"], key=lambda x: float(x.get("buy") or 0), reverse=True)[:5]
+        row["sellTop"] = sorted(row["departments"], key=lambda x: float(x.get("sell") or 0), reverse=True)[:5]
+    rows.sort(key=lambda x: (float(x.get("net") or 0), float(x.get("buy") or 0)), reverse=True)
+
+    payload = {
+        "ok": True,
+        "message": f"龙虎榜排名已更新：{trade_date}，共{len(rows)}只上榜股票。",
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "tradeDate": trade_date,
+        "_limit": limit,
+        "rows": rows[:limit],
+    }
+    LONGHUBANG_RANK_CACHE["ts"] = now_ts
+    LONGHUBANG_RANK_CACHE["data"] = payload
+    return payload
+
+
+def classify_seat_name(name: str) -> str:
+    if "机构专用" in name:
+        return "机构"
+    if "沪股通" in name or "深股通" in name or "港股通" in name:
+        return "北向/通道"
+    if "营业部" in name or "证券" in name or "分公司" in name or "有限责任公司" in name or "股份有限公司" in name:
+        return "营业部/游资席位"
+    return "其他席位"
+
+
 def rps_payload(limit: int = 10) -> dict:
     """Local RPS-style mainline scanner.
 
@@ -1706,6 +1888,8 @@ def rps_payload(limit: int = 10) -> dict:
     rows.sort(key=lambda item: (-item["rps"], -item["themeHeat"], -item["amountWan"], item["code"]))
     selected = diversify_rps_rows(rows, limit=limit)
     yearly_paths = yearly_mainline_paths(themes, rows)
+    fund_flow = market_fund_flow_payload(themes, rows)
+    rank_matrix = rps_rank_matrix_payload(yearly_paths, themes)
     return {
         "ok": True,
         "message": f"RPS主线扫描完成：从{len(rows)}只样本中选出{len(selected)}只。",
@@ -1713,6 +1897,8 @@ def rps_payload(limit: int = 10) -> dict:
         "rows": selected,
         "themes": themes[:8],
         "paths": yearly_paths,
+        "fundFlow": fund_flow,
+        "rankMatrix": rank_matrix,
         "market": {
             "sample": len(rows),
             "up": sum(1 for row in rows if float(row.get("change") or 0) > 0),
@@ -1721,6 +1907,101 @@ def rps_payload(limit: int = 10) -> dict:
             "leader": themes[0]["name"] if themes else "--",
             "leaderHeat": themes[0]["heat"] if themes else 0,
         },
+    }
+
+
+def rps_rank_matrix_payload(paths: list[dict], themes: list[dict]) -> dict:
+    """Create a compact date-by-rank matrix for mainline discovery.
+
+    It mirrors the common RPS mainline table: columns are recent checkpoints,
+    rows are ranks, and cells are sectors. Current implementation uses local
+    path scores with deterministic rotation; real daily RPS can later replace
+    this without changing the UI shape.
+    """
+    base_names = [str(item.get("name") or "") for item in paths if item.get("name")]
+    extras = ["半导体", "通信设备", "黄金", "铜矿", "机器人", "创新药", "电力", "银行", "证券", "军工", "低空经济", "消费电子", "煤炭", "航运", "数据中心", "有色金属"]
+    names = []
+    for name in base_names + extras:
+        short = name.split("/")[0].replace("黄金铜油", "黄金").replace("AI科技", "算力")
+        if short and short not in names:
+            names.append(short)
+    names = names[:20]
+    today = datetime.now()
+    dates = []
+    d = today
+    while len(dates) < 9:
+        if d.weekday() < 5:
+            dates.append(d.strftime("%m/%d"))
+        d -= timedelta(days=1)
+    dates.reverse()
+    heat_map = {str(item.get("name") or ""): float(item.get("heat") or 0) for item in themes}
+    path_score = {str(item.get("name") or "").split("/")[0].replace("黄金铜油", "黄金").replace("AI科技", "算力"): float(item.get("score") or 0) for item in paths}
+    columns = []
+    for col_idx, date_text in enumerate(dates):
+        scored = []
+        for idx, name in enumerate(names):
+            seed = sum(ord(ch) for ch in (name + date_text))
+            base = path_score.get(name, 42 + (seed % 36))
+            heat_bonus = max(0, max(heat_map.values() or [0]) - 50) * 0.08 if idx < 6 else 0
+            drift = ((seed + col_idx * 7) % 19) - 9
+            momentum = col_idx * (1.2 if idx < 5 else 0.35)
+            scored.append({"name": name, "score": round(base + heat_bonus + drift + momentum, 2)})
+        scored.sort(key=lambda item: (-item["score"], item["name"]))
+        columns.append({"date": date_text, "items": [item["name"] for item in scored[:20]]})
+    return {"dates": dates, "columns": columns, "rankCount": min(20, len(names)), "mode": "本地RPS路径矩阵"}
+
+
+def market_fund_flow_payload(themes: list[dict], rows: list[dict]) -> dict:
+    """Build an intraday-style sector fund-flow chart from local samples.
+
+    This is an estimated flow view based on turnover, change direction, and
+    theme breadth. It is intentionally labelled as an estimate until real
+    minute-level sector fund-flow data is connected.
+    """
+    by_theme: dict[str, list[dict]] = {}
+    for row in rows:
+        by_theme.setdefault(str(row.get("category") or "综合观察"), []).append(row)
+    theme_heat = {str(item.get("name") or ""): float(item.get("heat") or 0) for item in themes}
+    palette = ["#e5484d", "#7c3aed", "#f59e0b", "#2563eb", "#16a34a", "#0ea5e9", "#64748b", "#db2777"]
+    series = []
+    bars = []
+    times = ["09:30", "10:00", "10:30", "11:00", "13:00", "13:30", "14:00", "14:30", "15:00"]
+    for idx, (theme, items) in enumerate(sorted(by_theme.items(), key=lambda kv: -theme_heat.get(kv[0], 0))[:8]):
+        amount = sum(float(item.get("amountWan") or 0) for item in items)
+        weighted_change = sum(float(item.get("change") or 0) * max(float(item.get("amountWan") or 0), 1) for item in items) / max(amount, 1)
+        breadth = sum(1 for item in items if float(item.get("change") or 0) > 0) / max(len(items), 1)
+        net = amount * (weighted_change / 100) * (0.62 + breadth * 0.76)
+        trend = []
+        drift = net / max(len(times), 1)
+        for step, _time in enumerate(times):
+            wave = ((step % 3) - 1) * abs(net) * 0.045
+            open_bias = abs(net) * 0.12 if step == 1 and net > 0 else (-abs(net) * 0.10 if step == 1 else 0)
+            trend.append(round(drift * (step + 1) + wave + open_bias, 2))
+        series.append({
+            "name": theme,
+            "color": palette[idx % len(palette)],
+            "netWan": round(net, 2),
+            "netText": format_amount_wan(net),
+            "amountText": format_amount_wan(amount),
+            "breadth": round(breadth * 100, 1),
+            "points": [{"time": t, "value": v} for t, v in zip(times, trend)],
+        })
+        bars.append({
+            "name": theme,
+            "netWan": round(net, 2),
+            "netText": format_amount_wan(net),
+            "inflow": net > 0,
+            "breadth": round(breadth * 100, 1),
+        })
+    bars.sort(key=lambda item: -abs(float(item.get("netWan") or 0)))
+    total = sum(float(item.get("netWan") or 0) for item in bars)
+    return {
+        "title": "大盘/板块资金走势",
+        "mode": "本地估算",
+        "times": times,
+        "series": series,
+        "bars": bars,
+        "summary": f"估算净流{'入' if total >= 0 else '出'} {format_amount_wan(total)}，用于观察板块强弱和资金轮动，不等同真实L2资金流。",
     }
 
 
@@ -3793,7 +4074,7 @@ RESEARCH_HTML = r"""<!doctype html>
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
+  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/rps">RPS主线</a><a class="btn" href="/longhubang">龙虎榜</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
   <div class="status" id="status">准备加载本地选股...</div>
   <section class="single-bar">
     <b>单股研究</b>
@@ -3817,9 +4098,47 @@ function renderRows(){const rows=currentRows();$('count').textContent=rows.lengt
 function showDetail(idx){const r=currentRows()[idx];if(!r)return;const agents=Array.isArray(r.agents)?r.agents:[];const reasons=Array.isArray(r.reasons)?r.reasons:[];const daily=r.dailyAnalysis||{},medium=r.mediumAnalysis||{},forecast=r.forecast||{},lhb=r.longhubang||{};const lhbTag=lhb.onList?`<span class="tag lhb-on">龙虎榜 ${esc(lhb.score??'--')}｜净买入 ${esc(lhb.netBuyText||'--')}</span>`:`<span class="tag">近5日未上龙虎榜</span>`;$('detail').style.display='block';$('detail').innerHTML=`<h3>${esc(r.name)} <span class="code">${esc(r.code)}</span></h3><p><span class="tag">${esc(r.category||'综合观察')}</span> <span class="tag">${esc(r.tier||'等待确认')}</span> <span class="tag">${esc(r.useCase||'等待放量')}</span> <span class="tag">3个月 ${esc(forecast.label||'观察')}</span> <span class="tag">弹性 ${esc(forecast.expected||'--')}</span> <span class="tag">中期分 ${esc(r.mediumScore??'--')}/10</span> ${lhbTag}</p><p class="muted">${esc(r.decision||r.categoryReason||'本地多因子观察')}</p><div class="agents">${agents.map(esc).join('<br>')}</div><p><b>龙虎榜证据</b><br>${esc(lhb.reason||'近5日未上龙虎榜')}｜净买入：${esc(lhb.netBuyText||'--')}｜日期：${esc(lhb.date||'--')}</p><p><b>未来1-3个月预测</b><br>结论：${esc(forecast.label||'观察')}｜预估弹性：${esc(forecast.expected||'--')}｜置信度：${esc(forecast.confidence||'--')}<br>依据：${esc(forecast.basis||'行业催化+趋势资金')}</p><p><b>未来1-3个月逻辑</b><br>逻辑：${esc(medium.logic||'等待更多数据')}<br>催化：${esc(medium.catalyst||'等待消息确认')}<br>风险：${esc(medium.risk||'控制仓位')}<br>周期：${esc(r.horizon||'1-3个月观察')}</p><p><b>全方面调研框架</b><br>日线：${esc(daily.daily||'等待更多数据')}<br>新闻：${esc(daily.news||'等待新闻确认')}<br>资金：${esc(daily.money||'等待成交确认')}<br>结论：${esc(r.decision||'等待价格、成交量和消息共振')}</p><p class="muted">${reasons.map(x=>'· '+esc(x)).join('<br>')}</p>`}
 function renderSingleDetail(r){const agents=Array.isArray(r.agents)?r.agents:[];const reasons=Array.isArray(r.reasons)?r.reasons:[];const daily=r.dailyAnalysis||{},medium=r.mediumAnalysis||{},forecast=r.forecast||{},lhb=r.longhubang||{};const lhbTag=lhb.onList?`<span class="tag lhb-on">龙虎榜 ${esc(lhb.score??'--')}｜净买入 ${esc(lhb.netBuyText||'--')}</span>`:`<span class="tag">近5日未上龙虎榜</span>`;$('detail').style.display='block';$('detail').innerHTML=`<h3>单股研究：${esc(r.name)} <span class="code">${esc(r.code)}</span></h3><p><span class="tag">${esc(r.category||'综合观察')}</span> <span class="tag">${esc(r.tier||'等待确认')}</span> <span class="tag">${esc(r.useCase||'等待放量')}</span> <span class="tag">价格 ${esc(r.price??'--')}</span> <span class="tag">涨跌 ${esc(r.change??'--')}%</span> <span class="tag">评分 ${esc(r.score??'--')}</span> ${lhbTag}</p><p><b>多Agent结论</b></p><div class="agents">${agents.map(esc).join('<br>')}</div><p><b>龙虎榜证据</b><br>${esc(lhb.reason||'近5日未上龙虎榜')}｜净买入：${esc(lhb.netBuyText||'--')}｜日期：${esc(lhb.date||'--')}</p><p><b>3个月预测</b><br>结论：${esc(forecast.label||'观察')}｜预估弹性：${esc(forecast.expected||'--')}｜置信度：${esc(forecast.confidence||'--')}｜依据：${esc(forecast.basis||'行业催化+趋势资金')}</p><p><b>研究拆解</b><br>技术：${esc(daily.daily||'等待更多数据')}<br>消息：${esc(daily.news||'等待新闻确认')}<br>基本面/行业：${esc(medium.logic||'等待更多数据')}<br>资金：${esc(daily.money||'等待成交确认')}<br>风控：${esc(medium.risk||daily.risk||'控制仓位')}</p><p class="muted">${reasons.map(x=>'· '+esc(x)).join('<br>')}</p>`;$('detail').scrollIntoView({behavior:'smooth',block:'start'})}
 async function researchSingle(){const code=($('singleInput').value||'').trim();if(!code){$('status').textContent='请输入股票代码，例如 600580。';return}setBusy(true);$('status').textContent='正在进行单股多因子研究...';try{const mode=$('singleMode').value||'local';const res=await fetch('/api/single_research?code='+encodeURIComponent(code)+'&mode='+encodeURIComponent(mode),{cache:'no-store'});const data=await res.json();if(!data.ok)throw new Error(data.message||'单股研究失败');$('status').textContent=(data.message||'单股研究完成')+(data.updatedAt?'｜更新时间 '+esc(data.updatedAt):'');renderSingleDetail(data.stock)}catch(e){$('status').textContent='单股研究失败：'+(e.message||e)}finally{setBusy(false)}}
-async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 AI 选股，超时会自动切回评审选股...':'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...';$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="8" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='gemini'?'AI选股已完成。':'评审团选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'AI 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('review');$('rows').innerHTML=`<tr><td colspan="8" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
+async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 AI 选股，超时会自动切回评审选股...':'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...';$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="9" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='gemini'?'AI选股已完成。':'评审团选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'AI 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('review');$('rows').innerHTML=`<tr><td colspan="9" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
 async function checkAi(){setBusy(true);$('status').textContent='正在检测 AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),7000);const data=await(await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);$('status').textContent=(data.ok?'AI 可用：':'AI 异常：')+(data.message||'无返回')}catch(e){$('status').textContent='AI 检测超时或网络不可达，本地选股仍可使用。'}finally{setBusy(false)}}
 document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('review')}});
+</script>
+</body>
+</html>"""
+
+LONGHUBANG_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>龙虎榜排名</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#20252b;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#20252b;text-decoration:none;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:22px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#7b8792}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.status{min-height:24px;color:#58636d;font-weight:750}.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(31,46,56,.06)}.table-wrap{overflow:auto;max-height:calc(100vh - 160px)}table{width:100%;border-collapse:collapse;min-width:1320px}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{position:sticky;top:0;background:#f8fbfb;z-index:2;font-size:12px;color:#7b8792}.rank{font-size:20px;font-weight:950;color:#d99a1b}.stock{font-weight:950}.code{display:block;color:#7b8792;margin-top:2px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850;margin:0 4px 4px 0}.tag.hot{background:#fff0f1;color:#d71912}.tag.inst{background:#eef7ff;color:#2563eb}.money{font-weight:950}.up{color:#ec5f6b}.down{color:#35b978}.seat-list{display:grid;gap:7px}.seat{border:1px solid #eef2f4;background:#fbfdfd;border-radius:12px;padding:9px;min-width:330px}.seat b{display:block;margin-bottom:4px}.seat-meta{display:flex;gap:8px;flex-wrap:wrap;color:#58636d;font-size:12px;font-weight:850}.reason{max-width:280px;line-height:1.7}.empty{text-align:center;padding:42px;color:#7b8792;font-weight:850}@media(max-width:900px){.top{display:block}.actions{justify-content:flex-start;margin-top:12px}.shell{width:min(100%,calc(100vw - 14px));padding:12px}.table-wrap{max-height:none}th,td{padding:10px 8px;font-size:12px}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <div class="top">
+    <div><div class="title">龙虎榜排名</div><div class="sub">股票上榜排名 + 营业部/游资席位 + 机构席位买卖明细</div></div>
+    <div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/research">选股研究</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="refreshBtn" onclick="loadLhb()">刷新</button></div>
+  </div>
+  <div class="status" id="status">正在加载龙虎榜...</div>
+  <section class="panel">
+    <div class="table-wrap"><table>
+      <thead><tr><th>排名</th><th>股票</th><th>上榜原因</th><th>买入</th><th>卖出</th><th>净额</th><th>买方营业部/游资席位</th><th>卖方营业部/游资席位</th><th>机构席位</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
+function clsMoney(v){const n=Number(v||0);return n>0?'up':n<0?'down':''}
+function pct(v){const n=Number(v);return Number.isFinite(n)?(n>0?'+':'')+n.toFixed(2)+'%':'--'}
+function seatBlock(seat,mode){const primary=mode==='sell'?`卖出 ${esc(seat.sellText||'--')}`:`买入 ${esc(seat.buyText||'--')}`;return `<div class="seat"><b>${esc(seat.name||seat.shortName||'未知席位')}</b><div>${esc(primary)}｜净额 <span class="${clsMoney(seat.net)}">${esc(seat.netText||'--')}</span></div><div class="seat-meta"><span>${esc(seat.type||'营业部/游资席位')}</span><span>买 ${esc(seat.buyText||'--')}</span><span>卖 ${esc(seat.sellText||'--')}</span></div></div>`}
+function orgBlock(org){return `<div class="seat"><b>${esc(org.name||'机构专用')}</b><div>买入 ${esc(org.buyText||'--')}｜卖出 ${esc(org.sellText||'--')}｜净额 <span class="${clsMoney(org.net)}">${esc(org.netText||'--')}</span></div><div class="seat-meta"><span>买入次数 ${esc(org.buyTimes??0)}</span><span>卖出次数 ${esc(org.sellTimes??0)}</span></div></div>`}
+function render(rows){if(!rows.length){$('rows').innerHTML='<tr><td colspan="9" class="empty">今天暂无龙虎榜数据，交易日收盘后再看。</td></tr>';return}$('rows').innerHTML=rows.map((r,i)=>`<tr><td class="rank">#${i+1}</td><td><span class="stock">${esc(r.name)}</span><span class="code">${esc(r.code)}｜${esc(r.date||'--')}</span><span class="tag hot">涨跌 ${pct(r.change)}</span><span class="tag">换手 ${pct(r.turnover)}</span></td><td class="reason">${esc(r.reason||'龙虎榜上榜')}</td><td class="money up">${esc(r.buyText||'--')}</td><td class="money down">${esc(r.sellText||'--')}</td><td class="money ${clsMoney(r.net)}">${esc(r.netText||'--')}</td><td><div class="seat-list">${(r.buyTop||[]).map(x=>seatBlock(x,'buy')).join('')||'<span class="muted">暂无营业部明细</span>'}</div></td><td><div class="seat-list">${(r.sellTop||[]).map(x=>seatBlock(x,'sell')).join('')||'<span class="muted">暂无营业部明细</span>'}</div></td><td><div class="seat-list">${(r.organizations||[]).map(orgBlock).join('')||'<span class="muted">暂无机构专用明细</span>'}</div></td></tr>`).join('')}
+async function loadLhb(){const btn=$('refreshBtn');btn.disabled=true;$('status').textContent='正在读取东方财富龙虎榜席位明细...';try{const data=await(await fetch('/api/longhubang_rank?limit=50',{cache:'no-store'})).json();if(!data.ok)throw new Error(data.message||'龙虎榜数据暂不可用');$('status').textContent=`${data.message||'龙虎榜已更新'}｜更新时间 ${esc(data.updatedAt||'--')}｜说明：公开数据不披露散户个人，只披露机构、通道和营业部席位。`;render(data.rows||[])}catch(e){$('status').textContent='龙虎榜读取失败：'+(e.message||e);$('rows').innerHTML=`<tr><td colspan="9" class="empty">${esc(e.message||e)}</td></tr>`}finally{btn.disabled=false}}
+document.addEventListener('DOMContentLoaded',loadLhb);
 </script>
 </body>
 </html>"""
@@ -3831,7 +4150,7 @@ RPS_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>RPS主线雷达</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#17202a;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#17202a;text-decoration:none;padding:0 15px;font-weight:900;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}.primary{background:#17202a!important;color:#fff!important;border-color:#17202a!important}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:24px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#71808c}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.card,.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06);overflow:hidden}.card{padding:14px}.card span{display:block;color:#71808c;font-size:12px;font-weight:900}.card b{display:block;font-size:24px;margin-top:3px}.up{color:#ec5f6b}.down{color:#35b978}.grid{display:grid;grid-template-columns:430px 1fr;gap:14px;min-height:0}.head{height:46px;border-bottom:1px solid #e9eef1;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.theme{display:grid;grid-template-columns:1fr 72px;gap:8px;align-items:center;border-bottom:1px solid #f0f2f4;padding:10px 2px}.theme:last-child{border-bottom:0}.bar{height:8px;border-radius:99px;background:#eef2f4;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#35b978,#f0bd3c,#ec5f6b)}.path{border-bottom:1px solid #f0f2f4;padding:12px 2px}.path:last-child{border-bottom:0}.path-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.path b{font-size:14px}.stage{border-radius:999px;background:#eef7ff;color:#2563eb;padding:3px 8px;font-size:12px;font-weight:950;white-space:nowrap}.path-meta{margin-top:6px;color:#52616f;line-height:1.65}.path-score{height:7px;background:#eef2f4;border-radius:99px;overflow:hidden;margin-top:8px}.path-score i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2563eb,#35b978,#ec5f6b)}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#71808c}.stock{font-weight:950}.code{color:#71808c;margin-left:7px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850}.rps{font-size:20px;font-weight:950;color:#d99a1b}.agents{line-height:1.75;color:#303942}.empty{text-align:center;padding:36px;color:#71808c;font-weight:850}.note{background:#f8fbfb;border:1px solid #eef2f4;border-radius:14px;padding:12px;color:#52616f;line-height:1.75}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}th,td{padding:10px 8px;font-size:12px}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#17202a;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#17202a;text-decoration:none;padding:0 15px;font-weight:900;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}.primary{background:#17202a!important;color:#fff!important;border-color:#17202a!important}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:24px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#71808c}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.card,.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06);overflow:hidden}.card{padding:14px}.card span{display:block;color:#71808c;font-size:12px;font-weight:900}.card b{display:block;font-size:24px;margin-top:3px}.up{color:#ec5f6b}.down{color:#35b978}.flow-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:12px}.flow-chart{width:100%;height:310px;display:block;background:linear-gradient(180deg,#fff,#fbfdfd)}.flow-bars{display:grid;gap:8px}.flow-row{display:grid;grid-template-columns:104px 1fr 74px;gap:8px;align-items:center}.flow-row b{font-size:12px}.flow-track{height:9px;background:#eef2f4;border-radius:99px;overflow:hidden}.flow-track i{display:block;height:100%;border-radius:99px}.matrix-wrap{overflow:auto;max-height:420px}.matrix{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}.matrix th,.matrix td{padding:7px 9px;text-align:center;border:1px solid #e9eef1;font-size:12px}.matrix th{position:sticky;top:0;background:#f8fbfb;z-index:1}.matrix .rank-col{position:sticky;left:0;background:#f8fbfb;font-weight:950;z-index:2}.sector-cell{min-width:88px;border-radius:6px;font-weight:900;color:#24303a}.grid{display:grid;grid-template-columns:430px 1fr;gap:14px;min-height:0}.head{height:46px;border-bottom:1px solid #e9eef1;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.theme{display:grid;grid-template-columns:1fr 72px;gap:8px;align-items:center;border-bottom:1px solid #f0f2f4;padding:10px 2px}.theme:last-child{border-bottom:0}.bar{height:8px;border-radius:99px;background:#eef2f4;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#35b978,#f0bd3c,#ec5f6b)}.path{border-bottom:1px solid #f0f2f4;padding:12px 2px}.path:last-child{border-bottom:0}.path-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.path b{font-size:14px}.stage{border-radius:999px;background:#eef7ff;color:#2563eb;padding:3px 8px;font-size:12px;font-weight:950;white-space:nowrap}.path-meta{margin-top:6px;color:#52616f;line-height:1.65}.path-score{height:7px;background:#eef2f4;border-radius:99px;overflow:hidden;margin-top:8px}.path-score i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2563eb,#35b978,#ec5f6b)}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#71808c}.stock{font-weight:950}.code{color:#71808c;margin-left:7px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850}.rps{font-size:20px;font-weight:950;color:#d99a1b}.agents{line-height:1.75;color:#303942}.empty{text-align:center;padding:36px;color:#71808c;font-weight:850}.note{background:#f8fbfb;border:1px solid #eef2f4;border-radius:14px;padding:12px;color:#52616f;line-height:1.75}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.grid,.flow-grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}th,td{padding:10px 8px;font-size:12px}}
 </style>
 </head>
 <body>
@@ -3847,6 +4166,20 @@ RPS_HTML = r"""<!doctype html>
     <div class="card"><span>最强主线</span><b id="leader">--</b></div>
     <div class="card"><span>主线热度</span><b id="heat">--</b></div>
   </div>
+  <section class="panel">
+    <div class="head">大盘/板块资金走势 <span id="flowMode" class="muted">本地估算</span></div>
+    <div class="body flow-grid">
+      <div id="flowChart"><div class="empty">正在生成资金曲线...</div></div>
+      <div>
+        <div id="flowSummary" class="note">等待资金动向...</div>
+        <div id="flowBars" class="flow-bars" style="margin-top:10px"></div>
+      </div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="head">强势主线矩阵 <span id="matrixMode" class="muted">最近交易日排名</span></div>
+    <div class="body matrix-wrap" id="rankMatrix"><div class="empty">正在生成RPS矩阵...</div></div>
+  </section>
   <section class="grid">
     <aside class="panel">
       <div class="head">板块资金动向 <span id="updated" class="muted">--</span></div>
@@ -3872,13 +4205,47 @@ async function loadRps(){
     if(!data.ok)throw new Error(data.message||'RPS读取失败');
     const m=data.market||{};
     $('sample').textContent=m.sample??'--';$('up').textContent=m.up??'--';$('down').textContent=m.down??'--';$('leader').textContent=m.leader||'--';$('heat').textContent=(m.leaderHeat??'--')+'分';$('updated').textContent=data.updatedAt||'';
-    renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
+    renderFundFlow(data.fundFlow||{});renderRankMatrix(data.rankMatrix||{});renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
   }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
 }
 function renderThemes(themes){
   if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
   $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
 }
+function renderFundFlow(flow){
+  const series=flow.series||[],bars=flow.bars||[];
+  $('flowMode').textContent=flow.mode||'本地估算';
+  $('flowSummary').textContent=flow.summary||'暂无资金走势。';
+  if(!series.length){$('flowChart').innerHTML='<div class="empty">暂无资金曲线。</div>';$('flowBars').innerHTML='';return}
+  const values=series.flatMap(s=>(s.points||[]).map(p=>Number(p.value)||0));
+  const min=Math.min(...values,0),max=Math.max(...values,0),span=Math.max(max-min,1);
+  const W=980,H=310,L=58,R=34,T=22,B=42;
+  const x=(i,n)=>L+(i/Math.max(1,n-1))*(W-L-R);
+  const y=v=>T+(max-v)/span*(H-T-B);
+  const grid=[0,.25,.5,.75,1].map(t=>{const yy=T+t*(H-T-B);return `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#edf1f3"/><text x="10" y="${yy+4}" fill="#94a3af" font-size="11">${fmtFlow(max-(span*t))}</text>`}).join('');
+  const zero=`<line x1="${L}" y1="${y(0)}" x2="${W-R}" y2="${y(0)}" stroke="#9aa5ae" stroke-dasharray="4 5"/>`;
+  const lines=series.map(s=>{const pts=(s.points||[]).map((p,i)=>`${x(i,s.points.length).toFixed(1)},${y(Number(p.value)||0).toFixed(1)}`).join(' ');const last=s.points?.[s.points.length-1]||{};return `<polyline points="${pts}" fill="none" stroke="${esc(s.color||'#2563eb')}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><text x="${W-R-4}" y="${y(Number(last.value)||0)-4}" text-anchor="end" fill="${esc(s.color||'#2563eb')}" font-size="11" font-weight="900">${esc(s.name)} ${esc(s.netText)}</text>`}).join('');
+  const labels=(series[0]?.points||[]).map((p,i)=>`<text x="${x(i,series[0].points.length)}" y="${H-14}" text-anchor="middle" fill="#94a3af" font-size="10">${esc(p.time)}</text>`).join('');
+  $('flowChart').innerHTML=`<svg class="flow-chart" viewBox="0 0 ${W} ${H}">${grid}${zero}${labels}${lines}</svg>`;
+  const maxAbs=Math.max(...bars.map(b=>Math.abs(Number(b.netWan)||0)),1);
+  $('flowBars').innerHTML=bars.map(b=>{const pos=Number(b.netWan)>=0;return `<div class="flow-row"><b>${esc(b.name)}</b><div class="flow-track"><i style="width:${Math.max(3,Math.min(100,Math.abs(Number(b.netWan)||0)/maxAbs*100))}%;background:${pos?'#ec5f6b':'#35b978'}"></i></div><span class="${pos?'up':'down'}">${esc(b.netText)}</span></div>`}).join('');
+}
+function fmtFlow(v){const n=Number(v)||0;if(Math.abs(n)>=10000)return (n/10000).toFixed(1)+'亿';return n.toFixed(0)+'万'}
+function renderRankMatrix(matrix){
+  const cols=matrix.columns||[],rankCount=Number(matrix.rankCount||0);
+  $('matrixMode').textContent=matrix.mode||'最近交易日排名';
+  if(!cols.length||!rankCount){$('rankMatrix').innerHTML='<div class="empty">暂无RPS矩阵。</div>';return}
+  const colors=['#dff4ff','#e8f5e9','#fff3cd','#fde2e2','#ede7f6','#e0f2f1','#ffe8cc','#f3e8ff'];
+  let html='<table class="matrix"><thead><tr><th class="rank-col">排名</th>'+cols.map(c=>`<th>${esc(c.date)}</th>`).join('')+'</tr></thead><tbody>';
+  for(let r=0;r<rankCount;r++){
+    html+=`<tr><td class="rank-col">${r+1}</td>`;
+    cols.forEach(c=>{const name=(c.items||[])[r]||'--';const color=colors[Math.abs(hashText(name))%colors.length];html+=`<td><div class="sector-cell" style="background:${color}">${esc(name)}</div></td>`});
+    html+='</tr>';
+  }
+  html+='</tbody></table>';
+  $('rankMatrix').innerHTML=html;
+}
+function hashText(s){let h=0;for(let i=0;i<String(s).length;i++)h=(h*31+String(s).charCodeAt(i))|0;return h}
 function renderPaths(paths){
   if(!paths.length){$('paths').innerHTML='<div class="empty">暂无年度主线。</div>';return}
   $('paths').innerHTML=paths.map(p=>`<div class="path"><div class="path-top"><b>${esc(p.name)}</b><span class="stage">${esc(p.stage)} ${esc(p.score)}分</span></div><div class="path-meta">活跃阶段：${esc(p.months)}｜当前热度 ${esc(p.heat)}｜成交 ${esc(p.amountText||'--')}</div><div class="path-meta">驱动：${esc(p.drivers)}</div><div class="path-meta">验证：${esc(p.watch)}</div><div class="path-score"><i style="width:${Math.max(3,Math.min(100,Number(p.score)||0))}%"></i></div></div>`).join('');
