@@ -19,6 +19,7 @@ import contextvars
 import time as time_mod
 import urllib.parse
 import urllib.request
+import mimetypes
 from datetime import datetime, time, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,7 @@ PORT = int(os.environ.get("DASHBOARD_PORT", "8765"))
 SIM_HISTORY_PATH = BASE_DIR / "simulation_history.jsonl"
 SETTINGS_PATH = BASE_DIR / "dashboard_settings.json"
 USER_DATA_DIR = BASE_DIR / "user_data"
+ASSETS_DIR = BASE_DIR / "assets"
 ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
 USERS_PATH = BASE_DIR / "commercial_users.json"
 SESSIONS_PATH = BASE_DIR / "commercial_sessions.json"
@@ -72,6 +74,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._redirect(f"/login?next={urllib.parse.quote(self.path or '/', safe='')}")
             return
+        if path.startswith("/assets/"):
+            self._send_asset(path)
+            return
         if path in {"/", "/index.html"}:
             self._send_html(HTML)
             return
@@ -90,8 +95,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/account":
             self._send_html(ACCOUNT_HTML)
             return
+        if path == "/admin":
+            self._send_html(ADMIN_HTML)
+            return
         if path == "/research":
             self._send_html(RESEARCH_HTML)
+            return
+        if path == "/rps":
+            self._send_html(RPS_HTML)
             return
         if path == "/simulation":
             self._send_html(SIMULATION_HTML)
@@ -118,6 +129,11 @@ class Handler(BaseHTTPRequestHandler):
             mode = (query.get("mode") or ["local"])[0]
             self._send_json(screener_payload_v2(mode))
             return
+        if path == "/api/rps":
+            query = parse_qs(parsed_url.query)
+            limit = clamp_int((query.get("limit") or ["10"])[0], 10, 5, 30)
+            self._send_json(rps_payload(limit))
+            return
         if path == "/api/single_research":
             query = parse_qs(parsed_url.query)
             code = (query.get("code") or [""])[0]
@@ -137,6 +153,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/account":
             self._send_json(account_payload(self))
+            return
+        if path == "/api/admin/users":
+            self._send_json(admin_users_payload())
             return
         if path == "/api/simulation_history":
             self._send_json({"ok": True, "history": aggregate_sim_history(), "runs": recent_sim_history(), "latest": latest_sim_result()})
@@ -182,12 +201,31 @@ class Handler(BaseHTTPRequestHandler):
         public_paths = {"/landing", "/login", "/register", "/account", "/api/account", "/api/login", "/api/register", "/api/logout", "/api/status"}
         if path in public_paths:
             return False
-        return path in {"/", "/index.html", "/commercial", "/research", "/simulation"} or path.startswith("/api/")
+        if path.startswith("/assets/"):
+            return False
+        return path in {"/", "/index.html", "/commercial", "/research", "/rps", "/simulation", "/admin"} or path.startswith("/api/")
 
     def _redirect(self, location: str) -> None:
         self.send_response(302)
         self.send_header("Location", location)
         self.end_headers()
+
+    def _send_asset(self, path: str) -> None:
+        rel = urllib.parse.unquote(path.removeprefix("/assets/")).replace("\\", "/")
+        if "/" in rel or rel.startswith("."):
+            self.send_error(404)
+            return
+        file_path = ASSETS_DIR / rel
+        if not file_path.is_file():
+            self.send_error(404)
+            return
+        data = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(str(file_path))[0] or "application/octet-stream")
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _send_html(self, html: str) -> None:
         data = html.encode("utf-8")
@@ -355,17 +393,18 @@ def read_dashboard_settings_file(email: str | None = None) -> dict:
 
 
 def sanitize_ai_settings(data: dict, current: dict) -> dict:
-    provider = str(data.get("aiProvider") or current.get("aiProvider") or "Gemini").strip()
+    provider = str(data.get("aiProvider") or current.get("aiProvider") or "ChatGPT").strip()
     provider_alias = {
-        "OpenAI兼容": "OpenAICompatible",
-        "OpenAI Compatible": "OpenAICompatible",
-        "OpenAI": "OpenAICompatible",
-        "OpenAICompatible": "OpenAICompatible",
+        "OpenAI": "ChatGPT",
+        "OpenAI兼容": "ThirdParty",
+        "OpenAI Compatible": "ThirdParty",
+        "OpenAICompatible": "ThirdParty",
+        "第三方API": "ThirdParty",
     }
     provider = provider_alias.get(provider, provider)
-    if provider not in {"Gemini", "OpenAICompatible"}:
-        provider = "Gemini"
-    model_default = "gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini"
+    if provider not in {"ChatGPT", "Gemini", "Claude", "ThirdParty"}:
+        provider = "ChatGPT"
+    model_default = {"ChatGPT": "gpt-4o-mini", "Gemini": "gemini-2.5-flash", "Claude": "claude-sonnet-4", "ThirdParty": "gpt-4o-mini"}[provider]
     ai = {
         "aiProvider": provider,
         "aiModel": str(data.get("aiModel") or current.get("aiModel") or model_default).strip()[:80],
@@ -391,13 +430,16 @@ def public_ai_settings(data: dict) -> dict:
         if not fallback_key:
             env = load_desktop_env()
             fallback_key = env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or env.get("API_KEY") or ""
-    provider = str(data.get("aiProvider") or "Gemini")
-    if provider in {"OpenAI", "OpenAI Compatible", "OpenAI兼容"}:
-        provider = "OpenAICompatible"
+    provider = str(data.get("aiProvider") or "ChatGPT")
+    provider = {"OpenAI": "ChatGPT", "OpenAI Compatible": "ThirdParty", "OpenAI兼容": "ThirdParty", "OpenAICompatible": "ThirdParty", "第三方API": "ThirdParty"}.get(provider, provider)
+    if provider not in {"ChatGPT", "Gemini", "Claude", "ThirdParty"}:
+        provider = "ChatGPT"
+    provider_labels = {"ChatGPT": "ChatGPT", "Gemini": "Gemini", "Claude": "Claude", "ThirdParty": "第三方API"}
+    model_defaults = {"ChatGPT": "gpt-4o-mini", "Gemini": "gemini-2.5-flash", "Claude": "claude-sonnet-4", "ThirdParty": "gpt-4o-mini"}
     return {
         "aiProvider": provider,
-        "aiProviderLabel": "OpenAI兼容" if provider == "OpenAICompatible" else "Gemini",
-        "aiModel": str(data.get("aiModel") or ("gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini")),
+        "aiProviderLabel": provider_labels[provider],
+        "aiModel": str(data.get("aiModel") or model_defaults[provider]),
         "aiBase": str(data.get("aiBase") or ""),
         "aiProxy": str(data.get("aiProxy") or ""),
         "aiKeyConfigured": bool(key or fallback_key),
@@ -658,6 +700,17 @@ def account_payload(handler: Handler) -> dict:
         return {"ok": False, "loggedIn": False, "message": "账号不存在。"}
     return {"ok": True, "loggedIn": True, "account": public_user(user)}
 
+
+def admin_users_payload() -> dict:
+    store = load_users()
+    sessions = load_sessions()
+    active = {email for token, email in sessions.items() if SESSION_EXPIRES.get(token, 0) > time_mod.time()}
+    rows = []
+    for email, user in sorted(store.get("users", {}).items()):
+        row = public_user(user)
+        row["loggedIn"] = email in active
+        rows.append(row)
+    return {"ok": True, "users": rows, "count": len(rows)}
 
 def public_user(user: dict) -> dict:
     return {
@@ -1365,6 +1418,151 @@ def fast_quote(symbol: str) -> dict:
         return {}
 
 
+def rps_payload(limit: int = 10) -> dict:
+    """Local RPS-style mainline scanner.
+
+    This is a fast intraday relative-strength radar. It ranks the current
+    sample by live change and liquidity first; true 20/60/120-day RPS can be
+    added once a stable daily-history vendor is connected.
+    """
+    try:
+        from simulate_t_random import build_random_pool, fallback_stock_pool
+    except Exception as exc:
+        return {"ok": False, "message": f"RPS初始化失败：{exc}", "rows": [], "themes": []}
+    try:
+        pool = build_random_pool()
+    except Exception:
+        pool = fallback_stock_pool()
+    if not pool:
+        return {"ok": False, "message": "股票池为空，暂时无法计算RPS。", "rows": [], "themes": []}
+
+    priority_codes = {"601899", "601012", "300502", "002050", "000063", "600580", "603993", "601088"}
+    priority = [stock for stock in pool if stock.code in priority_codes]
+    rest = [stock for stock in pool if stock.code not in priority_codes]
+    random.shuffle(rest)
+    scan_pool = (priority + rest)[:360]
+
+    def quote_row(stock):
+        quote = fast_quote(stock.symbol)
+        price = float(quote.get("price") or 0.0)
+        change = float(quote.get("change") or 0.0)
+        amount = float(quote.get("amount") or 0.0)
+        name = str(quote.get("name") or stock.name)
+        if price <= 0:
+            return None
+        cat = stock_category(f"{name}{stock.code}")
+        return {
+            "name": name,
+            "code": stock.code,
+            "symbol": stock.symbol,
+            "price": price,
+            "change": change,
+            "amountWan": amount,
+            "amountText": format_amount_wan(amount),
+            "category": cat["name"],
+            "categoryReason": cat["reason"],
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool_exec:
+        rows = [row for row in pool_exec.map(quote_row, scan_pool) if row]
+    if len(rows) < 8:
+        return {"ok": False, "message": "行情样本不足，稍后刷新。", "rows": [], "themes": []}
+
+    changes = sorted(float(row["change"]) for row in rows)
+    amounts = sorted(float(row["amountWan"]) for row in rows)
+
+    def rank_pct(values: list[float], value: float) -> float:
+        if len(values) <= 1:
+            return 50.0
+        below = sum(1 for item in values if item <= value)
+        return below / len(values) * 100
+
+    category_stats: dict[str, dict] = {}
+    for row in rows:
+        cat = row["category"]
+        stat = category_stats.setdefault(cat, {"count": 0, "positive": 0, "change": 0.0, "amount": 0.0})
+        stat["count"] += 1
+        stat["positive"] += 1 if float(row["change"]) > 0 else 0
+        stat["change"] += float(row["change"])
+        stat["amount"] += float(row["amountWan"])
+    themes = []
+    for cat, stat in category_stats.items():
+        heat = (stat["positive"] / max(stat["count"], 1)) * 45 + max(-5, min(8, stat["change"] / max(stat["count"], 1))) * 5 + min(stat["amount"] / 800000, 1) * 15
+        themes.append({
+            "name": cat,
+            "count": stat["count"],
+            "positive": stat["positive"],
+            "avgChange": round(stat["change"] / max(stat["count"], 1), 2),
+            "amountWan": round(stat["amount"], 2),
+            "amountText": format_amount_wan(stat["amount"]),
+            "heat": round(max(0, min(100, heat)), 1),
+        })
+    themes.sort(key=lambda item: (-item["heat"], -item["positive"], item["name"]))
+    theme_heat = {item["name"]: item["heat"] for item in themes}
+
+    for row in rows:
+        change_rank = rank_pct(changes, float(row["change"]))
+        amount_rank = rank_pct(amounts, float(row["amountWan"]))
+        heat = float(theme_heat.get(row["category"], 50.0))
+        rps = change_rank * 0.58 + amount_rank * 0.24 + heat * 0.18
+        row["rps"] = round(max(0, min(100, rps)), 1)
+        row["changeRank"] = round(change_rank, 1)
+        row["amountRank"] = round(amount_rank, 1)
+        row["themeHeat"] = round(heat, 1)
+        row["signal"] = "主线强势" if row["rps"] >= 82 and row["change"] > 0 else "主线观察" if row["rps"] >= 68 else "等待确认"
+        row["agents"] = [
+            f"技术员：RPS {row['rps']}，相对强度分位{row['changeRank']}，先看是否沿均线保持强势",
+            f"资金员：成交额{row['amountText']}，活跃度分位{row['amountRank']}，放量持续才算主线",
+            f"主线员：{row['category']}主题热度{row['themeHeat']}，关注板块内是否多股共振",
+            f"风控员：RPS只负责找强，不等于买点；买入仍需盘中黄线/VWAP确认",
+            f"决策员：{row['signal']}｜适合加入主线观察池，等回踩承接或放量突破",
+        ]
+        row["reason"] = f"{row['category']}热度{row['themeHeat']}，涨幅分位{row['changeRank']}，成交活跃分位{row['amountRank']}"
+
+    rows.sort(key=lambda item: (-item["rps"], -item["themeHeat"], -item["amountWan"], item["code"]))
+    selected = diversify_rps_rows(rows, limit=limit)
+    return {
+        "ok": True,
+        "message": f"RPS主线扫描完成：从{len(rows)}只样本中选出{len(selected)}只。",
+        "updatedAt": datetime.now().strftime("%m-%d %H:%M"),
+        "rows": selected,
+        "themes": themes[:8],
+        "market": {
+            "sample": len(rows),
+            "up": sum(1 for row in rows if float(row.get("change") or 0) > 0),
+            "down": sum(1 for row in rows if float(row.get("change") or 0) < 0),
+            "flat": sum(1 for row in rows if float(row.get("change") or 0) == 0),
+            "leader": themes[0]["name"] if themes else "--",
+            "leaderHeat": themes[0]["heat"] if themes else 0,
+        },
+    }
+
+
+def diversify_rps_rows(rows: list[dict], limit: int = 10) -> list[dict]:
+    selected: list[dict] = []
+    used_codes: set[str] = set()
+    category_counts: dict[str, int] = {}
+    for row in rows:
+        code = str(row.get("code"))
+        cat = str(row.get("category") or "综合观察")
+        if code in used_codes or category_counts.get(cat, 0) >= 3:
+            continue
+        selected.append(row)
+        used_codes.add(code)
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+        if len(selected) >= limit:
+            return selected
+    for row in rows:
+        code = str(row.get("code"))
+        if code in used_codes:
+            continue
+        selected.append(row)
+        used_codes.add(code)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def screener_payload_v2(mode: str = "review") -> dict:
     review_mode = mode in {"review", "uzi", "agents", "local"}
     use_ai = mode in {"gemini", "ai"}
@@ -1903,7 +2101,7 @@ def normalize_local_agents(agents: list) -> list[str]:
 
 def gemini_status_payload() -> dict:
     ai_config = load_ai_config()
-    if ai_config.get("provider") == "OpenAICompatible":
+    if ai_config.get("provider") in {"ChatGPT", "Claude", "ThirdParty"}:
         return openai_compatible_status_payload(ai_config)
     key = load_gemini_key()
     if not key:
@@ -1930,13 +2128,21 @@ def gemini_status_payload() -> dict:
 
 
 def openai_compatible_status_payload(ai_config: dict) -> dict:
+    provider = str(ai_config.get("provider") or "ThirdParty")
     key = str(ai_config.get("key") or "").strip()
-    base = normalize_openai_base(str(ai_config.get("base") or "").strip())
-    model = str(ai_config.get("model") or "gpt-4o-mini").strip()
+    if not key and provider == "ChatGPT":
+        key = os.environ.get("OPENAI_API_KEY", "").strip() or load_desktop_env().get("OPENAI_API_KEY", "")
+    base_raw = str(ai_config.get("base") or "").strip()
+    if not base_raw and provider == "ChatGPT":
+        base_raw = "https://api.openai.com/v1"
+    base = normalize_openai_base(base_raw)
+    model = str(ai_config.get("model") or ("gpt-4o-mini" if provider == "ChatGPT" else "claude-sonnet-4" if provider == "Claude" else "gpt-4o-mini")).strip()
+    if provider == "Claude" and not base_raw:
+        return {"ok": False, "configured": bool(key), "message": "Claude 请填写兼容 OpenAI 的 Claude API 地址，或使用第三方API中转。"}
     if not base:
-        return {"ok": False, "configured": bool(key), "message": "请填写第三方中转 API 地址，例如 https://你的域名/v1。"}
+        return {"ok": False, "configured": bool(key), "message": "请填写第三方 API 地址，例如 https://你的域名/v1。"}
     if not key:
-        return {"ok": False, "configured": False, "message": "请填写第三方中转 API Key。"}
+        return {"ok": False, "configured": False, "message": "请填写 API Key。"}
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": "只回复：正常"}],
@@ -1992,14 +2198,14 @@ def apply_gemini_agents(rows: list[dict]) -> bool:
 
 def ai_research_configured() -> bool:
     ai = load_ai_config()
-    if ai.get("provider") == "OpenAICompatible":
+    if ai.get("provider") in {"ChatGPT", "Claude", "ThirdParty"}:
         return bool(ai.get("key") and ai.get("base"))
     return bool(load_gemini_key())
 
 
 def apply_ai_agents_fast(rows: list[dict]) -> bool:
     ai = load_ai_config()
-    if ai.get("provider") == "OpenAICompatible":
+    if ai.get("provider") in {"ChatGPT", "Claude", "ThirdParty"}:
         return apply_openai_compatible_agents_fast(rows)
     return apply_gemini_agents_fast(rows)
 
@@ -2009,7 +2215,12 @@ def apply_openai_compatible_agents_fast(rows: list[dict]) -> bool:
     LAST_GEMINI_ERROR = ""
     ai = load_ai_config()
     key = str(ai.get("key") or "").strip()
-    base = normalize_openai_base(str(ai.get("base") or "").strip())
+    base_raw = str(ai.get("base") or "").strip()
+    if not base_raw and ai.get("provider") == "ChatGPT":
+        base_raw = "https://api.openai.com/v1"
+    base = normalize_openai_base(base_raw)
+    if not key and ai.get("provider") == "ChatGPT":
+        key = os.environ.get("OPENAI_API_KEY", "").strip() or load_desktop_env().get("OPENAI_API_KEY", "")
     if not key or not base or not rows:
         LAST_GEMINI_ERROR = "未配置第三方AI中转地址或Key"
         return False
@@ -2176,11 +2387,13 @@ def load_gemini_key() -> str:
 
 def load_ai_config() -> dict:
     settings = read_dashboard_settings_file()
-    provider = str(settings.get("aiProvider") or "Gemini").strip()
-    if provider in {"OpenAI", "OpenAI Compatible", "OpenAI兼容"}:
-        provider = "OpenAICompatible"
+    provider = str(settings.get("aiProvider") or "ChatGPT").strip()
+    provider = {"OpenAI": "ChatGPT", "OpenAI Compatible": "ThirdParty", "OpenAI兼容": "ThirdParty", "OpenAICompatible": "ThirdParty", "第三方API": "ThirdParty"}.get(provider, provider)
+    if provider not in {"ChatGPT", "Gemini", "Claude", "ThirdParty"}:
+        provider = "ChatGPT"
     key = str(settings.get("aiKey") or "").strip()
-    model = str(settings.get("aiModel") or ("gemini-2.5-flash" if provider == "Gemini" else "gpt-4o-mini")).strip()
+    model_defaults = {"ChatGPT": "gpt-4o-mini", "Gemini": "gemini-2.5-flash", "Claude": "claude-sonnet-4", "ThirdParty": "gpt-4o-mini"}
+    model = str(settings.get("aiModel") or model_defaults[provider]).strip()
     base = str(settings.get("aiBase") or "").strip()
     proxy = str(settings.get("aiProxy") or "").strip()
     return {"provider": provider, "key": key, "model": model, "base": base, "proxy": proxy}
@@ -2723,14 +2936,14 @@ LANDING_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>T神器 - A股做T盘中信号系统</title>
 <style>
-:root{--ink:#17202a;--muted:#667481;--line:#e8eef2;--red:#eb5b68;--green:#2fb878;--gold:#d7a032;--blue:#2563eb}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#f7fbfb}
-a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100vh;background:radial-gradient(circle at 82% 0,#83f1ee 0,transparent 34%),linear-gradient(135deg,#7e969c,#f7fbfb 42%,#fff)}.nav{position:sticky;top:0;z-index:10;height:64px;display:flex;align-items:center;justify-content:space-between;width:min(1180px,calc(100vw - 32px));margin:auto}.brand{display:flex;align-items:center;gap:10px;font-weight:950;font-size:18px}.mark{width:34px;height:34px;border-radius:11px;background:#17202a;color:#fff;display:grid;place-items:center}.nav-actions{display:flex;gap:10px}.btn{height:38px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 16px;display:inline-flex;align-items:center;font-weight:850;box-shadow:0 10px 24px rgba(20,38,48,.08)}.btn.primary{background:#17202a;color:#fff;border-color:#17202a}.hero{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:72px 0 44px;display:grid;grid-template-columns:1.02fr .98fr;gap:34px;align-items:center}.eyebrow{display:inline-flex;border:1px solid rgba(23,32,42,.12);background:rgba(255,255,255,.74);border-radius:999px;padding:6px 11px;font-weight:850;color:#40505e}.hero h1{font-size:56px;line-height:1.04;margin:18px 0 16px;letter-spacing:0}.lead{font-size:18px;color:#52616f;margin:0 0 26px;max-width:560px}.hero-actions{display:flex;gap:12px;flex-wrap:wrap}.proof{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:28px;max-width:560px}.proof div{background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.78);border-radius:14px;padding:12px}.proof b{display:block;font-size:20px}.product{background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.86);border-radius:28px;padding:18px;box-shadow:0 32px 90px rgba(24,48,56,.18)}.screen{border:1px solid var(--line);border-radius:20px;background:#fff;overflow:hidden}.screen-top{height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;font-weight:950}.dot{width:9px;height:9px;border-radius:50%;background:#d4dce2}.dash{padding:16px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fbfdfd}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{font-size:20px}.row{display:grid;grid-template-columns:126px 92px 1fr 92px;gap:12px;align-items:center;border-bottom:1px solid #eef2f4;padding:15px 2px}.row:last-child{border-bottom:0}.name{font-weight:950}.code{color:var(--muted);margin-left:4px}.pill{border-radius:999px;padding:5px 9px;font-weight:900;background:#f1f5f7;color:#52616f;display:inline-flex}.pill.buy{background:#fff0f1;color:var(--red)}.pill.hold{background:#eef7ff;color:var(--blue)}.chart{height:42px}.pos{color:var(--red)}.neg{color:var(--green)}.band{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:34px 0}.section-title{font-size:28px;margin:0 0 8px}.section-sub{color:var(--muted);margin:0 0 20px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 16px 42px rgba(31,46,56,.07)}.card h3{margin:0 0 8px}.card p{color:#52616f;margin:0}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.step{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px}.step b{display:block;font-size:22px;margin-bottom:8px}.table{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden}.table-row{display:grid;grid-template-columns:160px 1fr 1fr;gap:14px;padding:14px 18px;border-bottom:1px solid #eef2f4}.table-row:last-child{border-bottom:0}.table-row strong{font-weight:950}.pricing{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.price{background:#fff;border:1px solid var(--line);border-radius:20px;padding:20px}.price.featured{border-color:#17202a;box-shadow:0 20px 55px rgba(23,32,42,.13)}.money{font-size:32px;font-weight:950;margin:8px 0}.list{padding:0;margin:12px 0 0;list-style:none}.list li{padding:6px 0;color:#52616f}.cta{margin:28px auto 0;width:min(1180px,calc(100vw - 32px));background:#17202a;color:#fff;border-radius:26px;padding:30px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:30px}.cta p{margin:4px 0 0;color:#d7dee3}.footer{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:28px 0 40px;color:#6d7883}.warn{font-size:12px;color:#7b8792;margin-top:12px}@media(max-width:900px){.hero{grid-template-columns:1fr;padding-top:36px}.hero h1{font-size:40px}.proof,.cards,.pricing,.metrics,.steps{grid-template-columns:1fr}.row,.table-row{grid-template-columns:1fr}.cta{display:block}.nav{position:static}.nav-actions{display:none}}
+:root{--ink:#2b170f;--muted:#7a6658;--line:#f0dfc7;--red:#e83324;--green:#2fb878;--gold:#d69a38;--blue:#b86b18}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#fff8ed}
+a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100vh;background:linear-gradient(180deg,#fff7eb 0,#fffaf3 46%,#fff 100%)}.nav{position:sticky;top:0;z-index:10;height:64px;display:flex;align-items:center;justify-content:space-between;width:min(1180px,calc(100vw - 32px));margin:auto}.brand{display:flex;align-items:center;gap:10px;font-weight:950;font-size:18px}.brand-logo{width:112px;height:auto;display:block}.mark{width:34px;height:34px;border-radius:11px;background:#e83324;color:#fff;display:grid;place-items:center}.nav-actions{display:flex;gap:10px}.btn{height:38px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 16px;display:inline-flex;align-items:center;font-weight:850;box-shadow:0 10px 24px rgba(20,38,48,.08)}.btn.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.hero{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:72px 0 44px;display:grid;grid-template-columns:1.02fr .98fr;gap:34px;align-items:center}.eyebrow{display:inline-flex;border:1px solid rgba(23,32,42,.12);background:rgba(255,255,255,.74);border-radius:999px;padding:6px 11px;font-weight:850;color:#40505e}.hero h1{font-size:56px;line-height:1.04;margin:18px 0 16px;letter-spacing:0}.lead{font-size:18px;color:#52616f;margin:0 0 26px;max-width:560px}.hero-actions{display:flex;gap:12px;flex-wrap:wrap}.proof{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:28px;max-width:560px}.proof div{background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.78);border-radius:14px;padding:12px}.proof b{display:block;font-size:20px}.product{background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.86);border-radius:28px;padding:18px;box-shadow:0 32px 90px rgba(151,79,18,.18)}.hero-visual{padding:0;overflow:hidden;background:#fff4e5}.hero-visual img{width:100%;height:100%;min-height:420px;object-fit:cover;display:block}.brand-showcase{width:min(1180px,calc(100vw - 32px));margin:18px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:16px}.brand-showcase img{width:100%;border-radius:18px;border:1px solid #f0dfc7;box-shadow:0 20px 55px rgba(151,79,18,.12);display:block}.screen{border:1px solid var(--line);border-radius:20px;background:#fff;overflow:hidden}.screen-top{height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;font-weight:950}.dot{width:9px;height:9px;border-radius:50%;background:#d4dce2}.dash{padding:16px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fbfdfd}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{font-size:20px}.row{display:grid;grid-template-columns:126px 92px 1fr 92px;gap:12px;align-items:center;border-bottom:1px solid #eef2f4;padding:15px 2px}.row:last-child{border-bottom:0}.name{font-weight:950}.code{color:var(--muted);margin-left:4px}.pill{border-radius:999px;padding:5px 9px;font-weight:900;background:#f1f5f7;color:#52616f;display:inline-flex}.pill.buy{background:#fff0f1;color:var(--red)}.pill.hold{background:#eef7ff;color:var(--blue)}.chart{height:42px}.pos{color:var(--red)}.neg{color:var(--green)}.band{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:34px 0}.section-title{font-size:28px;margin:0 0 8px}.section-sub{color:var(--muted);margin:0 0 20px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 16px 42px rgba(31,46,56,.07)}.card h3{margin:0 0 8px}.card p{color:#52616f;margin:0}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.step{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px}.step b{display:block;font-size:22px;margin-bottom:8px}.table{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden}.table-row{display:grid;grid-template-columns:160px 1fr 1fr;gap:14px;padding:14px 18px;border-bottom:1px solid #eef2f4}.table-row:last-child{border-bottom:0}.table-row strong{font-weight:950}.pricing{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.price{background:#fff;border:1px solid var(--line);border-radius:20px;padding:20px}.price.featured{border-color:#17202a;box-shadow:0 20px 55px rgba(23,32,42,.13)}.money{font-size:32px;font-weight:950;margin:8px 0}.list{padding:0;margin:12px 0 0;list-style:none}.list li{padding:6px 0;color:#52616f}.cta{margin:28px auto 0;width:min(1180px,calc(100vw - 32px));background:#17202a;color:#fff;border-radius:26px;padding:30px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:30px}.cta p{margin:4px 0 0;color:#d7dee3}.footer{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:28px 0 40px;color:#6d7883}.warn{font-size:12px;color:#7b8792;margin-top:12px}@media(max-width:900px){.hero{grid-template-columns:1fr;padding-top:36px}.hero h1{font-size:40px}.proof,.cards,.pricing,.metrics,.steps,.brand-showcase{grid-template-columns:1fr}.row,.table-row{grid-template-columns:1fr}.cta{display:block}.nav{position:static}.nav-actions{display:none}.hero-visual img{min-height:260px}.brand-logo{width:92px}}
 </style>
 </head>
 <body>
 <div class="page">
-  <nav class="nav"><a class="brand" href="/landing"><span class="mark">T</span><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
+  <nav class="nav"><a class="brand" href="/landing"><img class="brand-logo" src="/assets/logo.png" alt="做T神器"><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
   <section class="hero">
     <div>
       <span class="eyebrow">面向A股日内做T的实时信号雷达</span>
@@ -2740,7 +2953,8 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
       <div class="proof"><div><b>秒级监控</b><span>盘中刷新</span></div><div><b>黄线战法</b><span>VWAP核心</span></div><div><b>微信提醒</b><span>强信号推送</span></div></div>
       <p class="warn">提示：本系统用于策略研究和风险提醒，不构成投资建议。</p>
     </div>
-    <div class="product">
+    <div class="product hero-visual"><img src="/assets/home-hero.png" alt="做T神器首页展示"></div>
+      <div class="product" style="display:none">
       <div class="screen">
         <div class="screen-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>T神器控制台</span></div>
         <div class="dash">
@@ -2888,12 +3102,51 @@ async function loadAccount(){
     <div class="card"><h2>${a.nickname||'用户'}，欢迎回来</h2><div class="sub">当前套餐：${a.plan||'体验版'}。这是本地商业化原型，正式上线后会接支付、数据库和云端权限。</div></div>
     <div class="grid">
       <div class="card"><h3>账号信息</h3><div class="kv"><div>邮箱</div><div>${a.email||'--'}</div><div>昵称</div><div>${a.nickname||'--'}</div><div>套餐</div><div>${a.plan||'体验版'}</div><div>注册时间</div><div>${a.createdAt||'--'}</div><div>监控额度</div><div>${a.watchLimit||1} 只股票</div><div>AI复核额度</div><div>${a.aiReviewLimit||5} 次/日</div></div></div>
-      <div class="card"><h3>快捷入口</h3><p><a href="/"><button class="primary">进入控制台</button></a></p><p><a href="/commercial"><button>配置商业功能</button></a></p><p><a href="/simulation"><button>打开模拟测试</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
+      <div class="card"><h3>快捷入口</h3><p><a href="/"><button class="primary">进入控制台</button></a></p><p><a href="/admin"><button>用户管理</button></a><a href="/commercial"><button>配置商业功能</button></a></p><p><a href="/simulation"><button>打开模拟测试</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
     </div>
     <div class="card" style="margin-top:14px"><h3>套餐规划</h3><div class="plan"><div class="price active"><b>体验版</b><p>免费试用</p><ul><li>基础单股监控</li><li>盘前方向预览</li><li>模拟测试体验</li></ul></div><div class="price"><b>月卡</b><p>¥9.9 / 月</p><ul><li>多股实时监控</li><li>模拟测试与复盘</li><li>AI买卖点复核</li></ul></div><div class="price"><b>永久版</b><p>¥99</p><ul><li>核心功能长期使用</li><li>策略模板更新</li><li>优先体验新增功能</li></ul></div></div></div>`;
 }
 async function logout(){await fetch('/api/logout',{method:'POST'});location.href='/login'}
 loadAccount();
+</script>
+</body>
+</html>"""
+
+
+ADMIN_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>用户管理 - 做T神器</title>
+<style>
+:root{--ink:#2b170f;--muted:#8a6b52;--line:#f0dfc7;--red:#e83324;--gold:#d69a38}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#ffe2aa,transparent 34%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4)}
+a,button{font:inherit;text-decoration:none;color:inherit}button{height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 14px;font-weight:950;cursor:pointer;box-shadow:0 8px 20px rgba(151,79,18,.08)}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.shell{width:min(1180px,calc(100vw - 28px));margin:18px auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px;font-size:24px;font-weight:950}.brand img{width:118px}.sub{color:var(--muted)}.actions{display:flex;gap:9px;flex-wrap:wrap}.panel{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.9);border-radius:24px;box-shadow:0 28px 80px rgba(151,79,18,.18);padding:18px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.card span{display:block;color:var(--muted);font-size:12px;font-weight:900}.card b{display:block;font-size:26px;margin-top:4px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{padding:12px 14px;border-bottom:1px solid #f3e7d8;text-align:left}th{font-size:12px;color:var(--muted)}.tag{display:inline-flex;border-radius:999px;background:#fff1dc;color:#a65b18;padding:4px 9px;font-weight:900}.on{background:#eafff1;color:#24935d}.empty{text-align:center;padding:44px;color:var(--muted)}@media(max-width:850px){.top{display:block}.actions{margin-top:10px}.cards{grid-template-columns:1fr}th,td{font-size:12px;padding:10px 8px}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">本机内测后台：查看注册用户、套餐和当前登录状态。</div></div><div class="actions"><a href="/"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
+  <section class="panel">
+    <div class="cards"><div class="card"><span>注册用户</span><b id="userCount">--</b></div><div class="card"><span>在线会话</span><b id="onlineCount">--</b></div><div class="card"><span>数据文件</span><b>本机JSON</b></div></div>
+    <div style="overflow:auto"><table><thead><tr><th>邮箱</th><th>昵称</th><th>套餐</th><th>注册时间</th><th>监控额度</th><th>AI额度</th><th>状态</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody></table></div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
+async function loadUsers(){
+  try{
+    const data=await (await fetch('/api/admin/users',{cache:'no-store'})).json();
+    if(!data.ok)throw new Error(data.message||'读取失败');
+    const rows=data.users||[];
+    $('userCount').textContent=rows.length;
+    $('onlineCount').textContent=rows.filter(x=>x.loggedIn).length;
+    $('rows').innerHTML=rows.length?rows.map(u=>`<tr><td>${esc(u.email)}</td><td>${esc(u.nickname)}</td><td><span class="tag">${esc(u.plan||'体验版')}</span></td><td>${esc(u.createdAt||'--')}</td><td>${esc(u.watchLimit||1)}只</td><td>${esc(u.aiReviewLimit||5)}次/日</td><td><span class="tag ${u.loggedIn?'on':''}">${u.loggedIn?'已登录':'离线'}</span></td></tr>`).join(''):'<tr><td colspan="7" class="empty">暂无注册用户。</td></tr>';
+  }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
+}
+loadUsers();
 </script>
 </body>
 </html>"""
@@ -3001,15 +3254,15 @@ HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>T神器</title>
 <style>
-:root{--bg:#eef6f6;--panel:#ffffff;--ink:#20252b;--muted:#7b8792;--line:#e9eef1;--green:#35b978;--red:#ec5f6b;--blue:#2563eb;--yellow:#d99a1b}
-*{box-sizing:border-box}html,body{margin:0;min-height:100%;font:13px/1.5 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 90% 0,#79eee9 0,transparent 36%),linear-gradient(135deg,#79939b,#eaf5f5 42%,#f7fbfb);overflow:hidden}
-button,input{font:inherit}button{height:34px;border:1px solid var(--line);border-radius:11px;background:linear-gradient(180deg,#fff,#f9fbfb);padding:0 13px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);transition:transform .12s ease,box-shadow .12s ease,border-color .12s ease}button:hover{transform:translateY(-1px);box-shadow:0 12px 24px rgba(31,46,56,.10);border-color:#dbe5ea}button.primary{background:#20252b;color:#fff;border-color:#20252b}button:disabled{opacity:.6;cursor:wait}
-.shell{min-height:100vh;padding:18px;display:flex;align-items:center;justify-content:center}.panel{position:relative;width:min(1560px,calc(100vw - 28px));height:min(920px,calc(100vh - 28px));background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:22px;box-shadow:0 28px 80px rgba(25,45,50,.20);padding:18px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr);gap:12px;overflow:hidden}.top{display:flex;align-items:center;justify-content:space-between}.title{font-size:22px;font-weight:950}.sub{color:var(--muted);font-size:12px}.top-actions{display:flex;gap:8px;align-items:center}.settings-panel,.ai-panel{position:absolute;right:18px;top:62px;z-index:10;width:min(430px,calc(100vw - 44px));background:rgba(255,255,255,.98);border:1px solid var(--line);border-radius:16px;box-shadow:0 22px 60px rgba(31,46,56,.18);padding:12px}.settings-panel[hidden],.ai-panel[hidden]{display:none}.settings-head,.ai-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:950}.settings-group{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.settings-title{font-size:11px;color:var(--muted);font-weight:950;margin:0 0 8px}.settings-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.settings-actions button{box-shadow:none}.settings-note{font-size:11px;color:#64727f;line-height:1.6}.ai-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.ai-config-grid label{font-size:11px;color:#64727f;font-weight:900}.ai-config-grid label.wide{grid-column:1/-1}.ai-config-grid input,.ai-config-grid select{width:100%;height:34px;margin-top:4px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;color:#20252b;font-weight:800}.settings-messages{max-height:170px;overflow:auto;border-top:1px solid var(--line);padding-top:10px;color:#4f5b66;line-height:1.65}.ai-panel{top:112px;width:min(520px,calc(100vw - 44px));max-height:68vh;overflow:auto}.ai-body{font-size:12px;line-height:1.75;color:#39444d}.ai-body b{display:block;margin:8px 0 3px}.ai-chip{display:inline-flex;margin:0 5px 5px 0;border-radius:999px;background:#eef7ff;color:#2563eb;padding:4px 8px;font-weight:900}
-.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.field{position:relative}.field span{position:absolute;top:1px;left:10px;font-size:9px;color:var(--muted);font-weight:800}.field input{height:34px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 10px 0;width:116px}.stock-manager{display:flex;align-items:center;gap:8px;flex:1 1 520px;min-width:420px;padding:7px 9px;border:1px solid #dfe7eb;border-radius:17px;background:linear-gradient(180deg,#fff,#f8fbfb);box-shadow:0 12px 28px rgba(31,46,56,.07)}.stock-manager-title{font-size:11px;color:#64727f;font-weight:950;white-space:nowrap}.stock-manager input{height:30px;border:1px solid #e3e9ed;border-radius:10px;background:#fff;padding:0 10px;font-weight:800;color:#20252b;width:190px}.watch-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:180px;flex:1}.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:linear-gradient(180deg,#edf6ff,#e8f2ff);color:#2563eb;padding:5px 9px;font-weight:850;box-shadow:inset 0 0 0 1px rgba(37,99,235,.05);cursor:pointer}.tag.active{background:#20252b;color:#fff}.tag button{height:18px;width:18px;border:0;border-radius:50%;padding:0;background:#dcecff;color:#2563eb;box-shadow:none;line-height:18px}.tag.active button{background:rgba(255,255,255,.18);color:#fff}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
+:root{--bg:#eef6f6;--panel:#ffffff;--ink:#2b170f;--muted:#8a6b52;--line:#f0dfc7;--green:#2fb878;--red:#e83324;--blue:#b86b18;--yellow:#d99a1b}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font:13px/1.5 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#ffe2aa 0,transparent 36%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4);overflow:hidden}
+button,input{font:inherit}button{height:34px;border:1px solid var(--line);border-radius:11px;background:linear-gradient(180deg,#fff,#f9fbfb);padding:0 13px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);transition:transform .12s ease,box-shadow .12s ease,border-color .12s ease}button:hover{transform:translateY(-1px);box-shadow:0 12px 24px rgba(31,46,56,.10);border-color:#dbe5ea}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}button:disabled{opacity:.6;cursor:wait}
+.shell{min-height:100vh;padding:18px;display:flex;align-items:center;justify-content:center}.panel{position:relative;width:min(1560px,calc(100vw - 28px));height:min(920px,calc(100vh - 28px));background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:22px;box-shadow:0 28px 80px rgba(25,45,50,.20);padding:18px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:12px;overflow:hidden}.top{display:flex;align-items:center;justify-content:space-between}.title{font-size:22px;font-weight:950}.sub{color:var(--muted);font-size:12px}.top-actions{display:flex;gap:8px;align-items:center}.workbench-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.workbench-card{height:auto;min-height:76px;border-radius:17px;padding:12px 14px;text-align:left;display:flex;align-items:center;justify-content:space-between;background:#fff;border-color:#dfe7eb;box-shadow:0 12px 28px rgba(31,46,56,.07)}.workbench-card.primary-card{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.workbench-card b{display:block;font-size:16px;line-height:1.2}.workbench-card span{display:block;margin-top:5px;font-size:12px;color:#64727f;font-weight:750}.workbench-card.primary-card span{color:rgba(255,255,255,.72)}.workbench-card i{display:grid;place-items:center;width:34px;height:34px;border-radius:12px;background:#eef7ff;color:#2563eb;font-style:normal;font-weight:950;flex:0 0 auto}.workbench-card.primary-card i{background:rgba(255,255,255,.14);color:#fff}.settings-panel,.ai-panel{position:absolute;right:18px;top:62px;z-index:10;width:min(430px,calc(100vw - 44px));background:rgba(255,255,255,.98);border:1px solid var(--line);border-radius:16px;box-shadow:0 22px 60px rgba(31,46,56,.18);padding:12px}.settings-panel[hidden],.ai-panel[hidden]{display:none}.settings-head,.ai-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-weight:950}.settings-group{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.settings-title{font-size:11px;color:var(--muted);font-weight:950;margin:0 0 8px}.settings-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.settings-actions button{box-shadow:none}.settings-note{font-size:11px;color:#64727f;line-height:1.6}.ai-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}.ai-config-grid label{font-size:11px;color:#64727f;font-weight:900}.ai-config-grid label.wide{grid-column:1/-1}.ai-config-grid input,.ai-config-grid select{width:100%;height:34px;margin-top:4px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;color:#20252b;font-weight:800}.settings-messages{max-height:170px;overflow:auto;border-top:1px solid var(--line);padding-top:10px;color:#4f5b66;line-height:1.65}.ai-panel{top:112px;width:min(520px,calc(100vw - 44px));max-height:68vh;overflow:auto}.ai-body{font-size:12px;line-height:1.75;color:#39444d}.ai-body b{display:block;margin:8px 0 3px}.ai-chip{display:inline-flex;margin:0 5px 5px 0;border-radius:999px;background:#eef7ff;color:#2563eb;padding:4px 8px;font-weight:900}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.field{position:relative}.field span{position:absolute;top:1px;left:10px;font-size:9px;color:var(--muted);font-weight:800}.field input{height:34px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:12px 10px 0;width:116px}.stock-manager{display:flex;align-items:center;gap:8px;flex:1 1 520px;min-width:420px;padding:7px 9px;border:1px solid #dfe7eb;border-radius:17px;background:linear-gradient(180deg,#fff,#f8fbfb);box-shadow:0 12px 28px rgba(31,46,56,.07)}.stock-manager-title{font-size:11px;color:#64727f;font-weight:950;white-space:nowrap}.stock-manager input{height:30px;border:1px solid #e3e9ed;border-radius:10px;background:#fff;padding:0 10px;font-weight:800;color:#20252b;width:190px}.watch-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:180px;flex:1}.tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:linear-gradient(180deg,#edf6ff,#e8f2ff);color:#2563eb;padding:5px 9px;font-weight:850;box-shadow:inset 0 0 0 1px rgba(37,99,235,.05);cursor:pointer}.tag.active{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff}.tag button{height:18px;width:18px;border:0;border-radius:50%;padding:0;background:#dcecff;color:#2563eb;box-shadow:none;line-height:18px}.tag.active button{background:rgba(255,255,255,.18);color:#fff}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
 .premarket{display:grid;grid-template-columns:230px minmax(0,1fr) 330px;gap:10px;align-items:stretch}.pm-card{background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:17px;padding:10px 12px;box-shadow:0 12px 28px rgba(31,46,56,.06)}.pm-title{font-size:12px;color:var(--muted);font-weight:900}.pm-score{font-size:26px;font-weight:950;letter-spacing:.2px}.pm-signal{display:inline-flex;border-radius:999px;padding:4px 9px;font-weight:950;background:#eef7ff;color:#2563eb}.pm-signal.bull{background:#fff0f1;color:var(--red)}.pm-signal.bear{background:#ebfff2;color:var(--green)}.pm-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:8px}.pm-item{background:linear-gradient(180deg,#fbfdfd,#f6faf9);border:1px solid #eef2f4;border-radius:13px;padding:8px 9px}.pm-item b{display:block;font-size:12px}.pm-item span{font-size:12px;font-weight:950}.pm-reasons{font-size:12px;color:#52606c;line-height:1.7}
-.live{min-height:0;overflow:auto;overflow-x:hidden;background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 34px rgba(31,46,56,.08)}.monitor-table{min-width:0;width:100%}.monitor-head,.monitor-row{display:grid;grid-template-columns:178px 92px minmax(210px,.9fr) 78px 106px 146px minmax(210px,1fr) 74px;gap:10px;align-items:center}.monitor-head{position:sticky;top:0;z-index:2;height:40px;padding:0 14px;background:linear-gradient(180deg,#fbfdfd,#f6faf9);border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.monitor-row{min-height:92px;padding:8px 14px;border-bottom:1px solid #edf1f3}.monitor-row:hover{background:#fbfdfd}.monitor-row:last-child{border-bottom:0}.monitor-row.strong-signal{background:linear-gradient(90deg,rgba(236,95,107,.08),rgba(255,255,255,0));box-shadow:inset 4px 0 0 rgba(236,95,107,.75)}.rank-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:9px;background:#aab4bd}.rank-dot.up{background:var(--red)}.rank-dot.down{background:var(--green)}.live-name{font-size:15px;font-weight:950}.live-code,.live-time{color:var(--muted);margin-left:5px}.live-price{font-size:23px;font-weight:950}.live-pos{color:var(--red)}.live-neg{color:var(--green)}.live-chart{width:100%;height:72px;display:block}.kv{font-size:12px;color:var(--muted);line-height:1.6}.kv b{display:block;color:var(--ink);font-size:15px}.signal-pill{display:inline-flex;border-radius:999px;padding:5px 9px;background:#eef3f6;color:#52606c;font-weight:900}.signal-pill.hot{background:#fff0f1;color:#ec5f6b}.live-signal{font-size:12px;color:#4f5b66;line-height:1.55;margin-top:4px}.money-line{border-radius:13px;background:linear-gradient(180deg,#f8fbfb,#f3f7f8);padding:8px 10px;color:#52606c;font-size:12px;line-height:1.48;max-height:72px;overflow:hidden}.signal-toasts{position:absolute;right:18px;top:116px;z-index:30;display:flex;flex-direction:column;gap:10px;width:min(390px,calc(100vw - 44px));pointer-events:none}.signal-toast{pointer-events:auto;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:16px;box-shadow:0 20px 55px rgba(15,25,35,.26);padding:12px 14px;animation:toastIn .18s ease-out}.signal-toast.buy{background:linear-gradient(135deg,#e5484d,#7f1d1d)}.signal-toast.sell{background:linear-gradient(135deg,#16a34a,#14532d)}.signal-toast .toast-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}.signal-toast .toast-name{font-weight:950;font-size:15px}.signal-toast .toast-signal{border-radius:999px;background:rgba(255,255,255,.18);padding:3px 8px;font-size:12px;font-weight:900;white-space:nowrap}.signal-toast .toast-price{color:rgba(255,255,255,.82);font-size:12px}.signal-toast .toast-reason{color:#fff;font-size:12px;line-height:1.55;margin-bottom:7px}.signal-toast .toast-agents{color:rgba(255,255,255,.86);font-size:12px;line-height:1.6}.signal-toast button{height:24px;padding:0 7px;border:0;border-radius:8px;background:rgba(255,255,255,.16);color:#fff;box-shadow:none}.signal-toast.fade{opacity:0;transform:translateY(-6px);transition:.25s}.op{display:flex;gap:6px;flex-wrap:wrap}.op button{height:28px;padding:0 9px;border-radius:8px;color:#2563eb;background:#eef7ff;border-color:#dbeafe;box-shadow:none}.op button.ai{color:#fff;background:#20252b;border-color:#20252b}.empty-live{padding:42px;text-align:center;color:var(--muted);font-weight:850}@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.live{min-height:0;overflow:auto;overflow-x:hidden;background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 34px rgba(31,46,56,.08)}.monitor-table{min-width:0;width:100%}.monitor-head,.monitor-row{display:grid;grid-template-columns:178px 92px minmax(210px,.9fr) 78px 106px 146px minmax(210px,1fr) 74px;gap:10px;align-items:center}.monitor-head{position:sticky;top:0;z-index:2;height:40px;padding:0 14px;background:linear-gradient(180deg,#fbfdfd,#f6faf9);border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.monitor-row{min-height:92px;padding:8px 14px;border-bottom:1px solid #edf1f3}.monitor-row:hover{background:#fbfdfd}.monitor-row:last-child{border-bottom:0}.monitor-row.strong-signal{background:linear-gradient(90deg,rgba(236,95,107,.08),rgba(255,255,255,0));box-shadow:inset 4px 0 0 rgba(236,95,107,.75)}.rank-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:9px;background:#aab4bd}.rank-dot.up{background:var(--red)}.rank-dot.down{background:var(--green)}.live-name{font-size:15px;font-weight:950}.live-code,.live-time{color:var(--muted);margin-left:5px}.live-price{font-size:23px;font-weight:950}.live-pos{color:var(--red)}.live-neg{color:var(--green)}.live-chart{width:100%;height:72px;display:block}.kv{font-size:12px;color:var(--muted);line-height:1.6}.kv b{display:block;color:var(--ink);font-size:15px}.signal-pill{display:inline-flex;border-radius:999px;padding:5px 9px;background:#eef3f6;color:#52606c;font-weight:900}.signal-pill.hot{background:#fff0f1;color:#ec5f6b}.live-signal{font-size:12px;color:#4f5b66;line-height:1.55;margin-top:4px}.money-line{border-radius:13px;background:linear-gradient(180deg,#f8fbfb,#f3f7f8);padding:8px 10px;color:#52606c;font-size:12px;line-height:1.48;max-height:72px;overflow:hidden}.signal-toasts{position:absolute;right:18px;top:116px;z-index:30;display:flex;flex-direction:column;gap:10px;width:min(390px,calc(100vw - 44px));pointer-events:none}.signal-toast{pointer-events:auto;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:16px;box-shadow:0 20px 55px rgba(15,25,35,.26);padding:12px 14px;animation:toastIn .18s ease-out}.signal-toast.buy{background:linear-gradient(135deg,#e5484d,#7f1d1d)}.signal-toast.sell{background:linear-gradient(135deg,#16a34a,#14532d)}.signal-toast .toast-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:7px}.signal-toast .toast-name{font-weight:950;font-size:15px}.signal-toast .toast-signal{border-radius:999px;background:rgba(255,255,255,.18);padding:3px 8px;font-size:12px;font-weight:900;white-space:nowrap}.signal-toast .toast-price{color:rgba(255,255,255,.82);font-size:12px}.signal-toast .toast-reason{color:#fff;font-size:12px;line-height:1.55;margin-bottom:7px}.signal-toast .toast-agents{color:rgba(255,255,255,.86);font-size:12px;line-height:1.6}.signal-toast button{height:24px;padding:0 7px;border:0;border-radius:8px;background:rgba(255,255,255,.16);color:#fff;box-shadow:none}.signal-toast.fade{opacity:0;transform:translateY(-6px);transition:.25s}.op{display:flex;gap:6px;flex-wrap:wrap}.op button{height:28px;padding:0 9px;border-radius:8px;color:#2563eb;background:#eef7ff;border-color:#dbeafe;box-shadow:none}.op button.ai{color:#fff;background:#e83324;border-color:#e83324}.empty-live{padding:42px;text-align:center;color:var(--muted);font-weight:850}@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
 .bottom{display:none}.box{background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;min-width:0;min-height:0}.head{height:42px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);font-weight:900}.badge{font-size:11px;color:#35a66d;background:#eafff1;border-radius:999px;padding:4px 9px}.content{padding:12px 14px;overflow:auto;line-height:1.75}.empty{color:var(--muted)}pre{margin:0;padding:12px 14px;flex:1;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.65 "Microsoft YaHei UI",Consolas,monospace}.msg{margin:0 0 8px}.msg time{color:var(--muted);margin-right:8px}.wechat-focus{outline:2px solid #8fe8b1;box-shadow:0 0 0 5px rgba(69,201,129,.14)}
-@media(max-width:1050px){html,body{overflow:auto}.shell{padding:10px}.panel{width:calc(100vw - 20px);height:auto;min-height:calc(100vh - 20px)}.metrics{grid-template-columns:repeat(2,1fr)}.bottom{grid-template-columns:1fr}.premarket{grid-template-columns:1fr}.live{overflow:auto}.monitor-table{min-width:980px}.monitor-head,.monitor-row{grid-template-columns:160px 86px 210px 72px 96px 132px 190px 64px}}
+@media(max-width:1050px){html,body{overflow:auto}.shell{padding:10px}.panel{width:calc(100vw - 20px);height:auto;min-height:calc(100vh - 20px)}.metrics{grid-template-columns:repeat(2,1fr)}.bottom{grid-template-columns:1fr}.workbench-links{grid-template-columns:1fr}.premarket{grid-template-columns:1fr}.live{overflow:auto}.monitor-table{min-width:980px}.monitor-head,.monitor-row{grid-template-columns:160px 86px 210px 72px 96px 132px 190px 64px}}
 </style>
 </head>
 <body>
@@ -3019,6 +3272,10 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
     <div><div class="title">T神器控制台</div><div class="sub">多股票实时监控</div></div>
     <div class="top-actions"><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
   </div>
+  <section class="workbench-links" aria-label="工作台入口">
+    <button class="workbench-card primary-card" onclick="location.href='/simulation'"><span><b>模拟测试</b><span>验证策略胜率、买卖点和复盘</span></span><i>测</i></button>
+    <button class="workbench-card" onclick="location.href='/research'"><span><b>选股研究</b><span>多Agent评审、AI选股和单股研究</span></span><i>研</i></button>
+  </section>
   <div id="settingsPanel" class="settings-panel" hidden>
     <div class="settings-head"><span>系统设置</span><button onclick="toggleSettings(false)">关闭</button></div>
     <div class="settings-group" style="border-top:0;margin-top:0;padding-top:0">
@@ -3027,17 +3284,15 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
         <button onclick="location.href='/simulation'">模拟测试</button>
         <button onclick="location.href='/research'">选股研究</button>
         <button onclick="location.href='/account'">账号中心</button>
-        <button onclick="location.href='/landing'">商业页面</button>
         <button onclick="location.href='/commercial'">功能中心</button>
-        <button onclick="clearAll()">清空提示</button>
       </div>
     </div>
     <div class="settings-group">
       <div class="settings-title">AI模型配置</div>
       <div class="ai-config-grid">
-        <label>服务商<select id="aiProvider"><option value="Gemini">Gemini</option><option value="OpenAICompatible">OpenAI兼容</option></select></label>
-        <label>模型<input id="aiModel" placeholder="Gemini填 gemini-2.5-flash；中转填模型名" /></label>
-        <label class="wide">第三方AI中转地址<input id="aiBase" placeholder="Gemini可留空；中转填 https://域名/v1" /></label>
+        <label>服务商<select id="aiProvider"><option value="ChatGPT">ChatGPT</option><option value="Gemini">Gemini</option><option value="Claude">Claude</option><option value="ThirdParty">第三方API</option></select></label>
+        <label>模型<input id="aiModel" placeholder="如 gpt-4o-mini / gemini-2.5-flash / claude-sonnet-4" /></label>
+        <label class="wide">API地址<input id="aiBase" placeholder="ChatGPT/Gemini/Claude可留空；第三方API填 https://域名/v1" /></label>
         <label class="wide">代理地址<input id="aiProxy" placeholder="如 http://127.0.0.1:10808，可留空" /></label>
         <label class="wide">API Key<input id="aiKey" type="password" placeholder="未配置" autocomplete="off" /></label>
       </div>
@@ -3048,15 +3303,6 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
         <button onclick="location.href='/research'">去AI选股</button>
       </div>
       <div id="aiConfigStatus" class="settings-note">AI Key 和第三方中转地址只保存在本机配置，界面不会明文回显 Key。</div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-title">第三方API接口</div>
-      <div class="ai-config-grid">
-        <label class="wide">行情接口<input id="marketDataApi" placeholder="可填 MiniQMT / Level2 / 自建行情API地址" /></label>
-        <label class="wide">新闻接口<input id="newsApi" placeholder="可填新闻API、RSS聚合或热点接口地址" /></label>
-        <label class="wide">备用报价接口<input id="quoteApi" placeholder="可留空，当前默认使用本地腾讯/东方财富数据" /></label>
-      </div>
-      <div class="settings-note">未配置时继续使用本地默认数据源；配置后后续可接入更稳定的商业行情。</div>
     </div>
     <div class="settings-group">
       <div class="settings-title">自定义做T策略</div>
@@ -3101,7 +3347,7 @@ button,input{font:inherit}button{height:34px;border:1px solid var(--line);border
 </main></div>
 <script>
 const $=id=>document.getElementById(id);
-const labels={signal:'多股信号',simulate:'随机股票当日做T模拟',simulate5:'随机股票近5天测试'};
+const labels={signal:'多股信号',simulate:'随机股票当日做T模拟',simulate5:'随机股票近5轮缓存测试'};
 let tradeManual=false,audioCtx=null,lastAlertKeys=new Map(),toastKeys=new Map(),settingsTimer=null;
 window.addEventListener('DOMContentLoaded',async()=>{document.addEventListener('click',initAudio,{once:true});loadSettings();await loadWatchlist();loadPremarket();loadRealtime();setInterval(loadRealtime,10000);setInterval(loadPremarket,60000);});
 function toggleSettings(force){const el=$('settingsPanel');if(!el)return;const show=typeof force==='boolean'?force:el.hasAttribute('hidden');if(show)el.removeAttribute('hidden');else el.setAttribute('hidden','')}
@@ -3116,8 +3362,8 @@ function syncInputCards(){const o=simOptions();if($('cash'))$('cash').textConten
 async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){mainOptions={cash:Number(s.cash||100000),trade:Number(s.trade||20000),sample:Number(s.sample||10)};fillAiSettings(s)}}catch(e){}syncInputCards()}
 function saveSettingsDebounced(){clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(simOptions())}).catch(()=>{})}
-function fillAiSettings(s){signalPrefs.maxSignalsPerDay=Number(s.maxSignalsPerDay||2);signalPrefs.signalCooldown=Number(s.signalCooldown||10);if($('aiProvider'))$('aiProvider').value=({OpenAI:'OpenAICompatible','OpenAI兼容':'OpenAICompatible',OpenAICompatible:'OpenAICompatible'}[s.aiProvider]||(s.aiProvider||'Gemini'));if($('aiModel'))$('aiModel').value=s.aiModel||'gemini-2.5-flash';if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
-function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'Gemini',aiModel:$('aiModel')?.value||'gemini-2.5-flash',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',marketDataApi:$('marketDataApi')?.value||'',newsApi:$('newsApi')?.value||'',quoteApi:$('quoteApi')?.value||'',customStrategy:$('customStrategy')?.value||'',strategyMode:$('strategyMode')?.value||'官方默认策略',maxSignalsPerDay:$('maxSignalsPerDay')?.value||'2',lowBuyDev:$('lowBuyDev')?.value||'-1.20',highSellDev:$('highSellDev')?.value||'1.40',signalCooldown:$('signalCooldown')?.value||'10',...extra}}
+function fillAiSettings(s){signalPrefs.maxSignalsPerDay=Number(s.maxSignalsPerDay||2);signalPrefs.signalCooldown=Number(s.signalCooldown||10);if($('aiProvider'))$('aiProvider').value=({OpenAI:'ChatGPT','OpenAI兼容':'ThirdParty',OpenAICompatible:'ThirdParty','第三方API':'ThirdParty'}[s.aiProvider]||(s.aiProvider||'ChatGPT'));if($('aiModel'))$('aiModel').value=s.aiModel||(({ChatGPT:'gpt-4o-mini',Gemini:'gemini-2.5-flash',Claude:'claude-sonnet-4',ThirdParty:'gpt-4o-mini'}[$('aiProvider')?.value])||'gpt-4o-mini');if($('aiBase'))$('aiBase').value=s.aiBase||'';if($('aiProxy'))$('aiProxy').value=s.aiProxy||'';if($('aiKey'))$('aiKey').placeholder=s.aiKeyConfigured?(s.aiKeyMasked||'已配置'):'未配置';['marketDataApi','newsApi','quoteApi','customStrategy','strategyMode','maxSignalsPerDay','lowBuyDev','highSellDev','signalCooldown'].forEach(k=>{if($(k))$(k).value=s[k]||''});if($('aiConfigStatus'))$('aiConfigStatus').textContent=s.aiKeyConfigured?'AI Key 已配置。需要更换时直接输入新 Key 并保存。':'未配置 AI Key，本地规则仍可使用。'}
+function aiOptions(extra={}){return {...simOptions(),aiProvider:$('aiProvider')?.value||'ChatGPT',aiModel:$('aiModel')?.value||'gpt-4o-mini',aiBase:$('aiBase')?.value||'',aiProxy:$('aiProxy')?.value||'',aiKey:$('aiKey')?.value||'',customStrategy:$('customStrategy')?.value||'',strategyMode:$('strategyMode')?.value||'官方默认策略',maxSignalsPerDay:$('maxSignalsPerDay')?.value||'2',lowBuyDev:$('lowBuyDev')?.value||'-1.20',highSellDev:$('highSellDev')?.value||'1.40',signalCooldown:$('signalCooldown')?.value||'10',...extra}}
 async function saveAiSettings(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在保存AI配置...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions())})).json();if(data.ok){if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI配置已保存。')}else throw new Error('保存失败')}catch(e){if(msg)msg.textContent='保存失败：'+(e.message||e)}}
 async function clearAiKey(){const msg=$('aiConfigStatus');if(msg)msg.textContent='正在清除Key...';try{const data=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(aiOptions({aiClearKey:true,aiKey:''}))})).json();if($('aiKey'))$('aiKey').value='';fillAiSettings(data);append('AI Key 已清除。')}catch(e){if(msg)msg.textContent='清除失败：'+(e.message||e)}}
 async function checkAiFromSettings(){await saveAiSettings();const msg=$('aiConfigStatus');if(msg)msg.textContent='正在检测AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),10000);const data=await (await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(msg)msg.textContent=(data.ok?'检测通过：':'检测失败：')+(data.message||'无返回');append((data.ok?'AI检测通过：':'AI检测失败：')+(data.message||''))}catch(e){if(msg)msg.textContent='检测超时或网络不可达。'}}
@@ -3165,14 +3411,14 @@ SIMULATION_HTML = r"""<!doctype html>
 <style>
 :root{--ink:#20252b;--muted:#7b8792;--line:#e9eef1;--green:#35b978;--red:#ec5f6b;--yellow:#d99a1b}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:13px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}
-button,input{font:inherit}button{height:36px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06)}button.primary{background:#20252b;color:#fff;border-color:#20252b}button:disabled{opacity:.6;cursor:wait}
+button,input{font:inherit}button{height:36px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06)}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}button:disabled{opacity:.6;cursor:wait}
 .page{min-height:100vh;padding:14px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:9px}.top,.controls,.panel,.metric,.progress{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.85);border-radius:16px;box-shadow:0 14px 38px rgba(25,45,50,.12)}.top{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 16px}.title{font-size:20px;font-weight:950}.sub,.muted{color:var(--muted)}.controls{padding:9px 11px;display:flex;flex-wrap:wrap;gap:8px;align-items:end}.field span{display:block;font-size:10px;color:var(--muted);font-weight:850}.field input{width:132px;height:32px;border:1px solid var(--line);border-radius:10px;padding:0 10px}.field.wide input{width:220px}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.metric{padding:10px 13px}.metric .k{font-size:10px;color:var(--muted);font-weight:850}.metric .v{font-size:19px;font-weight:950}.win{color:var(--yellow)}.pos{color:var(--green)!important}.neg{color:var(--red)!important}.layout{display:grid;grid-template-rows:minmax(0,1fr) auto;gap:9px;min-height:0}.panel{overflow:hidden;display:flex;flex-direction:column;min-height:0}.head{height:38px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 14px;font-weight:950}.badge{font-size:11px;color:#35a66d;background:#eafff1;border-radius:999px;padding:4px 9px}.rows{flex:1;overflow:auto;padding:0}.sim-table{min-width:1120px}.sim-head,.sim-row{display:grid;grid-template-columns:190px 110px minmax(320px,1fr) 90px 130px minmax(240px,.75fr);gap:12px;align-items:center}.sim-head{position:sticky;top:0;z-index:2;height:34px;padding:0 14px;background:#f8fbfb;border-bottom:1px solid var(--line);color:#7b8792;font-size:11px;font-weight:950}.sim-row{min-height:68px;border-bottom:1px solid #f1f3f4;padding:7px 14px}.sim-row:last-child{border-bottom:0}.stock{font-weight:950;font-size:14px}.code{color:var(--muted);margin-left:6px}.reason{color:#56616b;font-size:12px;line-height:1.45}.status{font-weight:900}.chart{width:100%;height:52px;display:block}.empty{padding:40px 12px;text-align:center;color:var(--muted)}.side{display:grid;grid-template-columns:1fr 1fr;gap:9px;min-height:138px;max-height:178px}.content{padding:10px 14px;overflow:auto;line-height:1.58;font-size:12px}.content b{display:block;margin:4px 0}.content ul{margin:4px 0 0;padding-left:18px}.run-item{border-bottom:1px solid #f2f4f5;padding:6px 0}.bar{height:3px;background:linear-gradient(90deg,#4cc9f0,#35b978);border-radius:99px;opacity:0}.bar.on{opacity:1;animation:pulse .9s infinite alternate}.progress{display:none;padding:8px 10px}.progress.on{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{border:1px solid #eef2f4;border-radius:11px;padding:7px 8px;background:#f9fbfb}.step b{display:block;font-size:12px}.step span{font-size:11px;color:var(--muted)}.step.active{border-color:#bdebd2;background:#effff5}.step.done b{color:var(--green)}@keyframes pulse{from{filter:brightness(.8)}to{filter:brightness(1.2)}}
 @media(max-width:1050px){.metrics{grid-template-columns:repeat(2,1fr)}.sim-table{min-width:980px}.side{grid-template-columns:1fr;max-height:none}}
 </style>
 </head>
 <body>
 <div class="page">
-  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、日内曲线、买卖点、失败复盘、历史缓存</div></div><div><button onclick="location.href='/'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
+  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控同步、日内曲线、买卖点、历史缓存压力测试</div></div><div><button onclick="location.href='/'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
   <div class="controls">
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
@@ -3183,7 +3429,7 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
     <button class="primary" onclick="runSim('simulate')">当日模拟</button>
-    <button onclick="runSim('simulate5')">近5天测试</button>
+    <button onclick="runSim('simulate5')">近5轮缓存测试</button>
     <button onclick="loadHistory()">刷新历史</button>
     <button onclick="clearView()">清空</button>
     <div id="status" class="sub">就绪</div>
@@ -3211,11 +3457,11 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
 </div>
 <script>
 const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false,settingsTimer=null;
-window.addEventListener('DOMContentLoaded',()=>{loadSettings();syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
+window.addEventListener('DOMContentLoaded',async()=>{await loadSettings();await syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
 function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
-async function runSim(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();saveSettings();try{const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
+async function runSim(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();try{if(!$('stocksInput').value.trim())await syncWatchlistStocks(false);const payload=options();saveSettings();const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
 async function syncWatchlistStocks(force){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();const stocks=(data.stocks||[]).map(s=>s.code||String(s.symbol||'').slice(2)).filter(Boolean);if(!stocks.length)return;if(force||(!$('stocksInput').value.trim()&&!stocksManual)){$('stocksInput').value=stocks.join(',');$('sampleInput').value=Math.min(Math.max(stocks.length,1),30);stocksManual=false;syncCards();$('status').textContent='已同步监控股票：'+stocks.join('、')}}catch(e){if(force)$('status').textContent='同步监控股票失败：'+(e.message||e)}}
 let progressTimer=null,progressStep=0;
 function startProgress(){progressStep=0;$('progress').classList.add('on');markProgress(0);clearInterval(progressTimer);progressTimer=setInterval(()=>{progressStep=Math.min(progressStep+1,3);markProgress(progressStep)},1800)}
@@ -3245,12 +3491,12 @@ RESEARCH_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>A股选股研究</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#20252b;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#20252b;text-decoration:none;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}button.primary{background:#20252b;color:#fff;border-color:#20252b}button:disabled{opacity:.6;cursor:wait}input,select{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;padding:0 12px;font:inherit;font-weight:800}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:22px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr auto;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:23px;font-weight:950}.sub,.muted{color:#7b8792}.actions,.single-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions{justify-content:flex-end}.single-bar{padding:10px 12px;background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06)}.single-bar input{width:170px}.status{min-height:24px;color:#58636d;font-weight:750}.grid{display:grid;grid-template-columns:300px 1fr;gap:14px;min-height:0}.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(31,46,56,.06)}.head{height:46px;padding:0 16px;border-bottom:1px solid #e9eef1;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.cat{width:100%;justify-content:space-between;margin:5px 0;box-shadow:none;background:#f6f8f9}.cat.active{background:#20252b;color:#fff}.badge{border-radius:999px;background:#eafff1;color:#35a66d;padding:4px 9px;font-size:12px;font-weight:850}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#7b8792}.stock{font-weight:950}.code{color:#7b8792;margin-left:7px}.score{font-weight:950;color:#d99a1b}.up{color:#ec5f6b}.down{color:#35b978}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:750}.agents{line-height:1.75;color:#303942}.detail{padding:16px}.detail h3{margin:0 0 8px}.empty{text-align:center;padding:35px;color:#7b8792;font-weight:800}@media(max-width:900px){.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:12px}th,td{padding:10px 8px;font-size:12px}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#20252b;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#20252b;text-decoration:none;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}button:disabled{opacity:.6;cursor:wait}input,select{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;padding:0 12px;font:inherit;font-weight:800}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:22px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr auto;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:23px;font-weight:950}.sub,.muted{color:#7b8792}.actions,.single-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions{justify-content:flex-end}.single-bar{padding:10px 12px;background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06)}.single-bar input{width:170px}.status{min-height:24px;color:#58636d;font-weight:750}.grid{display:grid;grid-template-columns:300px 1fr;gap:14px;min-height:0}.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(31,46,56,.06)}.head{height:46px;padding:0 16px;border-bottom:1px solid #e9eef1;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.cat{width:100%;justify-content:space-between;margin:5px 0;box-shadow:none;background:#f6f8f9}.cat.active{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff}.badge{border-radius:999px;background:#eafff1;color:#35a66d;padding:4px 9px;font-size:12px;font-weight:850}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#7b8792}.stock{font-weight:950}.code{color:#7b8792;margin-left:7px}.score{font-weight:950;color:#d99a1b}.up{color:#ec5f6b}.down{color:#35b978}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:750}.agents{line-height:1.75;color:#303942}.detail{padding:16px}.detail h3{margin:0 0 8px}.empty{text-align:center;padding:35px;color:#7b8792;font-weight:800}@media(max-width:900px){.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:12px}th,td{padding:10px 8px;font-size:12px}}
 </style>
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
+  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
   <div class="status" id="status">准备加载本地选股...</div>
   <section class="single-bar">
     <b>单股研究</b>
@@ -3280,6 +3526,68 @@ document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams
 </script>
 </body>
 </html>"""
+
+RPS_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RPS主线雷达</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#17202a;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#17202a;text-decoration:none;padding:0 15px;font-weight:900;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}.primary{background:#17202a!important;color:#fff!important;border-color:#17202a!important}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:24px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#71808c}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.card,.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06);overflow:hidden}.card{padding:14px}.card span{display:block;color:#71808c;font-size:12px;font-weight:900}.card b{display:block;font-size:24px;margin-top:3px}.up{color:#ec5f6b}.down{color:#35b978}.grid{display:grid;grid-template-columns:380px 1fr;gap:14px;min-height:0}.head{height:46px;border-bottom:1px solid #e9eef1;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.theme{display:grid;grid-template-columns:1fr 72px;gap:8px;align-items:center;border-bottom:1px solid #f0f2f4;padding:10px 2px}.theme:last-child{border-bottom:0}.bar{height:8px;border-radius:99px;background:#eef2f4;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#35b978,#f0bd3c,#ec5f6b)}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#71808c}.stock{font-weight:950}.code{color:#71808c;margin-left:7px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850}.rps{font-size:20px;font-weight:950;color:#d99a1b}.agents{line-height:1.75;color:#303942}.empty{text-align:center;padding:36px;color:#71808c;font-weight:850}.note{background:#f8fbfb;border:1px solid #eef2f4;border-radius:14px;padding:12px;color:#52616f;line-height:1.75}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}th,td{padding:10px 8px;font-size:12px}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <div class="top">
+    <div><div class="title">RPS主线雷达</div><div class="sub">大盘资金动向、板块热度、相对强度排名、龙虎榜观察位</div></div>
+    <div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" onclick="loadRps()">刷新主线</button></div>
+  </div>
+  <div class="cards">
+    <div class="card"><span>扫描样本</span><b id="sample">--</b></div>
+    <div class="card"><span>上涨家数</span><b id="up" class="up">--</b></div>
+    <div class="card"><span>下跌家数</span><b id="down" class="down">--</b></div>
+    <div class="card"><span>最强主线</span><b id="leader">--</b></div>
+    <div class="card"><span>主线热度</span><b id="heat">--</b></div>
+  </div>
+  <section class="grid">
+    <aside class="panel">
+      <div class="head">板块资金动向 <span id="updated" class="muted">--</span></div>
+      <div class="body" id="themes"><div class="empty">正在读取板块热度...</div></div>
+      <div class="body"><div class="note"><b>龙虎榜观察</b><br>当前为席位观察位：优先标记RPS高、成交活跃、主线热度高的股票。接入东方财富/同花顺/L2后，可升级为真实龙虎榜净买入、机构席位、游资席位跟踪。</div></div>
+    </aside>
+    <section class="panel">
+      <div class="head">RPS强势候选 <span class="muted">只负责找主线，不直接等于买点</span></div>
+      <div style="overflow:auto;max-height:68vh"><table><thead><tr><th>股票</th><th>主线</th><th>RPS</th><th>价格</th><th>涨跌</th><th>成交</th><th>资金/多Agent结论</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody></table></div>
+    </section>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
+function cls(v){const n=Number(v);return n>0?'up':n<0?'down':''}
+async function loadRps(){
+  $('rows').innerHTML='<tr><td colspan="7" class="empty">正在扫描主线...</td></tr>';
+  try{
+    const data=await (await fetch('/api/rps?limit=10',{cache:'no-store'})).json();
+    if(!data.ok)throw new Error(data.message||'RPS读取失败');
+    const m=data.market||{};
+    $('sample').textContent=m.sample??'--';$('up').textContent=m.up??'--';$('down').textContent=m.down??'--';$('leader').textContent=m.leader||'--';$('heat').textContent=(m.leaderHeat??'--')+'分';$('updated').textContent=data.updatedAt||'';
+    renderThemes(data.themes||[]);renderRows(data.rows||[]);
+  }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
+}
+function renderThemes(themes){
+  if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
+  $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
+}
+function renderRows(rows){
+  if(!rows.length){$('rows').innerHTML='<tr><td colspan="7" class="empty">暂无强势候选。</td></tr>';return}
+  $('rows').innerHTML=rows.map(r=>`<tr><td><span class="stock">${esc(r.name)}</span><span class="code">${esc(r.code)}</span></td><td><span class="tag">${esc(r.category)}</span><div class="muted">${esc(r.signal)}</div></td><td><span class="rps">${esc(r.rps)}</span><div class="muted">热度${esc(r.themeHeat)}</div></td><td>${esc(r.price)}</td><td class="${cls(r.change)}">${esc(r.change)}%</td><td>${esc(r.amountText)}</td><td><div class="agents">${(r.agents||[]).map(esc).join('<br>')}</div><div class="muted">${esc(r.reason||'')}</div></td></tr>`).join('');
+}
+document.addEventListener('DOMContentLoaded',loadRps);
+</script>
+</body>
+</html>"""
 def main() -> int:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"http://{HOST}:{PORT}")
@@ -3289,4 +3597,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
