@@ -1553,6 +1553,7 @@ def fetch_longhubang_map(days: int = 5) -> dict[str, dict]:
         trade_date = str(item.get("TRADE_DATE") or item.get("TDATE") or "")[:10]
         current = mapped.setdefault(code, {
             "onList": True,
+            "name": str(item.get("SECURITY_NAME_ABBR") or item.get("SECURITY_NAME") or item.get("SNAME") or code),
             "score": 0,
             "reason": "",
             "netBuy": 0.0,
@@ -1885,15 +1886,31 @@ def research_row_for_stock(stock, aggressive: bool = False, single: bool = False
 
 def local_screener_rows(aggressive: bool = False, review: bool = False) -> list[dict]:
     try:
-        from simulate_t_random import build_random_pool, fallback_stock_pool
+        from simulate_t_random import Stock, build_random_pool, fallback_stock_pool
     except Exception:
         return []
     try:
         pool = build_random_pool()
     except Exception:
         pool = fallback_stock_pool()
+    lhb_map = fetch_longhubang_map()
+    if lhb_map:
+        by_code = {stock.code: stock for stock in pool}
+        lhb_ranked = sorted(
+            lhb_map.items(),
+            key=lambda item: (float(item[1].get("score") or 0), float(item[1].get("netBuy") or 0)),
+            reverse=True,
+        )
+        lhb_stocks = []
+        for code, info in lhb_ranked[:12]:
+            if code in by_code:
+                continue
+            prefix = "sh" if code.startswith(("6", "9")) else "sz"
+            lhb_stocks.append(Stock(str(info.get("name") or code), code, prefix + code))
+        pool = lhb_stocks + pool
     if len(pool) > 180:
         priority_codes = {"601899", "601012", "000063", "300502", "002050", "600519", "601088", "600030", "601318"}
+        priority_codes.update(list(lhb_map.keys())[:20])
         priority = [] if aggressive else [stock for stock in pool if stock.code in priority_codes]
         rest = [stock for stock in pool if stock.code not in priority_codes]
         sample_size = 220 if aggressive else 130
@@ -3124,64 +3141,35 @@ LANDING_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>T神器 - A股做T盘中信号系统</title>
+<title>做T神器 - A股智能交易助手</title>
 <style>
-:root{--ink:#2b170f;--muted:#7a6658;--line:#f0dfc7;--red:#e83324;--green:#2fb878;--gold:#d69a38;--blue:#b86b18}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#fff8ed}
-a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100vh;background:linear-gradient(180deg,#fff7eb 0,#fffaf3 46%,#fff 100%)}.nav{position:sticky;top:0;z-index:10;height:64px;display:flex;align-items:center;justify-content:space-between;width:min(1180px,calc(100vw - 32px));margin:auto}.brand{display:flex;align-items:center;gap:10px;font-weight:950;font-size:18px}.brand-logo{width:112px;height:auto;display:block}.mark{width:34px;height:34px;border-radius:11px;background:#e83324;color:#fff;display:grid;place-items:center}.nav-actions{display:flex;gap:10px}.btn{height:38px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 16px;display:inline-flex;align-items:center;font-weight:850;box-shadow:0 10px 24px rgba(20,38,48,.08)}.btn.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.hero{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:72px 0 44px;display:grid;grid-template-columns:1.02fr .98fr;gap:34px;align-items:center}.eyebrow{display:inline-flex;border:1px solid rgba(23,32,42,.12);background:rgba(255,255,255,.74);border-radius:999px;padding:6px 11px;font-weight:850;color:#40505e}.hero h1{font-size:56px;line-height:1.04;margin:18px 0 16px;letter-spacing:0}.lead{font-size:18px;color:#52616f;margin:0 0 26px;max-width:560px}.hero-actions{display:flex;gap:12px;flex-wrap:wrap}.proof{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:28px;max-width:560px}.proof div{background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.78);border-radius:14px;padding:12px}.proof b{display:block;font-size:20px}.product{background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.86);border-radius:28px;padding:18px;box-shadow:0 32px 90px rgba(151,79,18,.18)}.hero-visual{padding:0;overflow:hidden;background:#fff4e5}.hero-visual img{width:100%;height:100%;min-height:420px;object-fit:cover;display:block}.brand-showcase{width:min(1180px,calc(100vw - 32px));margin:18px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:16px}.brand-showcase img{width:100%;border-radius:18px;border:1px solid #f0dfc7;box-shadow:0 20px 55px rgba(151,79,18,.12);display:block}.screen{border:1px solid var(--line);border-radius:20px;background:#fff;overflow:hidden}.screen-top{height:44px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;font-weight:950}.dot{width:9px;height:9px;border-radius:50%;background:#d4dce2}.dash{padding:16px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.metric{border:1px solid var(--line);border-radius:14px;padding:12px;background:#fbfdfd}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{font-size:20px}.row{display:grid;grid-template-columns:126px 92px 1fr 92px;gap:12px;align-items:center;border-bottom:1px solid #eef2f4;padding:15px 2px}.row:last-child{border-bottom:0}.name{font-weight:950}.code{color:var(--muted);margin-left:4px}.pill{border-radius:999px;padding:5px 9px;font-weight:900;background:#f1f5f7;color:#52616f;display:inline-flex}.pill.buy{background:#fff0f1;color:var(--red)}.pill.hold{background:#eef7ff;color:var(--blue)}.chart{height:42px}.pos{color:var(--red)}.neg{color:var(--green)}.band{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:34px 0}.section-title{font-size:28px;margin:0 0 8px}.section-sub{color:var(--muted);margin:0 0 20px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 16px 42px rgba(31,46,56,.07)}.card h3{margin:0 0 8px}.card p{color:#52616f;margin:0}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.step{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px}.step b{display:block;font-size:22px;margin-bottom:8px}.table{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden}.table-row{display:grid;grid-template-columns:160px 1fr 1fr;gap:14px;padding:14px 18px;border-bottom:1px solid #eef2f4}.table-row:last-child{border-bottom:0}.table-row strong{font-weight:950}.pricing{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.price{background:#fff;border:1px solid var(--line);border-radius:20px;padding:20px}.price.featured{border-color:#17202a;box-shadow:0 20px 55px rgba(23,32,42,.13)}.money{font-size:32px;font-weight:950;margin:8px 0}.list{padding:0;margin:12px 0 0;list-style:none}.list li{padding:6px 0;color:#52616f}.cta{margin:28px auto 0;width:min(1180px,calc(100vw - 32px));background:#17202a;color:#fff;border-radius:26px;padding:30px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:30px}.cta p{margin:4px 0 0;color:#d7dee3}.footer{width:min(1180px,calc(100vw - 32px));margin:0 auto;padding:28px 0 40px;color:#6d7883}.warn{font-size:12px;color:#7b8792;margin-top:12px}@media(max-width:900px){.hero{grid-template-columns:1fr;padding-top:36px}.hero h1{font-size:40px}.proof,.cards,.pricing,.metrics,.steps,.brand-showcase{grid-template-columns:1fr}.row,.table-row{grid-template-columns:1fr}.cta{display:block}.nav{position:static}.nav-actions{display:none}.hero-visual img{min-height:260px}.brand-logo{width:92px}}
+:root{--ink:#2b170f;--muted:#7a6658;--line:#f0dfc7;--red:#ef2f22;--red2:#c91510;--gold:#d99a36}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#fffaf3}a{text-decoration:none;color:inherit}.hero-image{position:relative;width:100%;min-height:100vh;background:#fff4e6;overflow:hidden}.hero-image img{width:100%;height:100vh;min-height:760px;object-fit:cover;object-position:center top;display:block}.hotspot{position:absolute;z-index:4;border-radius:999px;text-indent:-9999px;overflow:hidden;transition:background .16s ease,box-shadow .16s ease}.hotspot:hover{background:rgba(255,255,255,.18);box-shadow:0 0 0 2px rgba(239,47,34,.22) inset}.hs-home{left:38.5%;top:5.2%;width:5.2%;height:5.2%}.hs-features{left:44.7%;top:5.2%;width:5.2%;height:5.2%}.hs-strategy{left:51.0%;top:5.2%;width:5.2%;height:5.2%}.hs-price{left:57.4%;top:5.2%;width:5.2%;height:5.2%}.hs-help{left:63.7%;top:5.2%;width:5.2%;height:5.2%}.hs-about{left:69.8%;top:5.2%;width:7.3%;height:5.2%}.hs-login{left:85.9%;top:4.1%;width:9.8%;height:6.4%}.hs-cta{left:18.5%;top:73.2%;width:18.2%;height:8.6%;border-radius:34px}.mobile-actions{display:none}.btn{height:46px;border:1px solid rgba(217,154,54,.32);border-radius:14px;background:rgba(255,255,255,.92);padding:0 20px;display:inline-flex;align-items:center;font-weight:950;box-shadow:0 16px 36px rgba(151,79,18,.10)}.btn.primary{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;border-color:var(--red);box-shadow:0 18px 42px rgba(239,47,34,.24)}.band{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:48px 0}.section-title{font-size:32px;line-height:1.15;margin:0 0 8px}.section-sub{color:var(--muted);margin:0 0 20px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 16px 42px rgba(151,79,18,.07)}.card h3{margin:0 0 8px}.card p{color:#5f4c3b;margin:0}.showcase{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:6px 0 42px;display:grid;grid-template-columns:1fr 1fr;gap:16px}.showcase img{width:100%;height:100%;max-height:560px;object-fit:cover;border-radius:20px;border:1px solid rgba(217,154,54,.24);box-shadow:0 24px 70px rgba(151,79,18,.13);display:block}.pricing{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.price{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px}.price.featured{border-color:var(--red);box-shadow:0 20px 55px rgba(239,47,34,.13)}.money{font-size:34px;font-weight:950;margin:8px 0}.list{padding:0;margin:12px 0 0;list-style:none}.list li{padding:6px 0;color:#5f4c3b}.cta{margin:20px auto 0;width:min(1180px,calc(100vw - 44px));background:linear-gradient(135deg,#2b170f,#6b2b13);color:#fff;border-radius:24px;padding:30px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:30px}.cta p{margin:4px 0 0;color:#ead7c5}.footer{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:28px 0 40px;color:#7a6658}@media(max-width:900px){.hero-image img{height:auto;min-height:0;object-fit:contain}.hotspot{display:none}.mobile-actions{display:flex;gap:10px;flex-wrap:wrap;padding:14px 16px 24px;background:#fff4e6}.cards,.pricing,.showcase{grid-template-columns:1fr}.cta{display:block}.section-title{font-size:26px}}
 </style>
 </head>
 <body>
-<div class="page">
-  <nav class="nav"><a class="brand" href="/landing"><img class="brand-logo" src="/assets/logo.png" alt="做T神器"><span>T神器</span></a><div class="nav-actions"><a class="btn" href="#features">功能</a><a class="btn" href="/commercial">功能中心</a><a class="btn" href="/account">账号</a><a class="btn" href="#pricing">价格</a><a class="btn primary" href="/">进入控制台</a></div></nav>
-  <section class="hero">
-    <div>
-      <span class="eyebrow">面向A股日内做T的实时信号雷达</span>
-      <h1>做T神器：盘中买卖点与策略控制台</h1>
-      <p class="lead">把分时黄线、VWAP偏离、量能结构、板块联动和AI复核合成一个清晰的盘中判断：低吸、高抛、接回、止损，以及可执行的价格带。</p>
-      <div class="hero-actions"><a class="btn primary" href="/">打开本地控制台</a><a class="btn" href="/commercial">打开功能中心</a><a class="btn" href="#pricing">查看商业化方案</a></div>
-      <div class="proof"><div><b>秒级监控</b><span>盘中刷新</span></div><div><b>黄线战法</b><span>VWAP核心</span></div><div><b>微信提醒</b><span>强信号推送</span></div></div>
-      <p class="warn">提示：本系统用于策略研究和风险提醒，不构成投资建议。</p>
-    </div>
-    <div class="product hero-visual"><img src="/assets/home-hero.png" alt="做T神器首页展示"></div>
-      <div class="product" style="display:none">
-      <div class="screen">
-        <div class="screen-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>T神器控制台</span></div>
-        <div class="dash">
-          <div class="metrics"><div class="metric"><span>盘前分</span><b>82</b></div><div class="metric"><span>黄金</span><b class="pos">+0.55%</b></div><div class="metric"><span>铜</span><b class="pos">+2.63%</b></div><div class="metric"><span>美元</span><b>+0.09%</b></div></div>
-          <div class="row"><div><span class="name">紫金矿业</span><span class="code">601899</span></div><span class="pill buy">低吸观察</span><svg class="chart" viewBox="0 0 220 42"><polyline points="0,28 22,30 44,26 66,31 88,21 110,18 132,20 154,14 176,17 198,12 220,13" fill="none" stroke="#eb5b68" stroke-width="3" stroke-linecap="round"/></svg><b class="pos">偏多</b></div>
-          <div class="row"><div><span class="name">隆基绿能</span><span class="code">601012</span></div><span class="pill hold">观察</span><svg class="chart" viewBox="0 0 220 42"><polyline points="0,18 22,16 44,22 66,20 88,25 110,24 132,28 154,27 176,30 198,29 220,32" fill="none" stroke="#2fb878" stroke-width="3" stroke-linecap="round"/></svg><b class="neg">偏弱</b></div>
-        </div>
-      </div>
-    </div>
-  </section>
-</div>
+<section class="hero-image" aria-label="做T神器首页首屏">
+  <img src="/assets/home-hero.png" alt="做T神器 A股智能交易助手">
+  <a class="hotspot hs-home" href="/landing">首页</a>
+  <a class="hotspot hs-features" href="#features">功能</a>
+  <a class="hotspot hs-strategy" href="/commercial">策略</a>
+  <a class="hotspot hs-price" href="#pricing">价格</a>
+  <a class="hotspot hs-help" href="/account">帮助</a>
+  <a class="hotspot hs-about" href="/admin">关于我们</a>
+  <a class="hotspot hs-login" href="/login">登录 / 注册</a>
+  <a class="hotspot hs-cta" href="/">立即体验</a>
+  <div class="mobile-actions"><a class="btn primary" href="/">立即体验</a><a class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
+</section>
 <section id="features" class="band">
-  <h2 class="section-title">从工具到产品</h2>
-  <p class="section-sub">商业化版本重点不是花哨页面，而是让用户每天开盘前和盘中知道该看什么。</p>
+  <h2 class="section-title">一图看懂做T神器</h2>
+  <p class="section-sub">顶部首屏保持你的品牌图，下面只补充必要的功能说明和转化入口。</p>
   <div class="cards">
-    <div class="card"><h3>盘前市场风向</h3><p>跟踪黄金、白银、铜、原油、美元、离岸人民币和板块消息，形成重点股票盘前偏多/偏空评分。</p></div>
-    <div class="card"><h3>盘中主力雷达</h3><p>围绕黄线均线、VWAP偏离、量能结构和趋势动量，识别吸筹、拉升、派发与假突破。</p></div>
-    <div class="card"><h3>强信号提醒</h3><p>只在高质量买卖点出现时提醒，输出价格带、止损位和接回位，避免无意义刷屏。</p></div>
+    <div class="card"><h3>市场扫描</h3><p>全市场实时监控，把盘中波动、板块联动和重点股票状态聚合到一个工作台。</p></div>
+    <div class="card"><h3>精准信号</h3><p>围绕黄线、VWAP偏离、量能结构和趋势节奏，提醒高抛、低吸、接回和止损价格带。</p></div>
+    <div class="card"><h3>风险控制</h3><p>用AI复核和模拟测试过滤追高接刀，留下可复盘、可优化的交易动作。</p></div>
   </div>
 </section>
-<section class="band">
-  <h2 class="section-title">适合的用户</h2>
-  <div class="cards">
-    <div class="card"><h3>持仓做T用户</h3><p>重点关注自选股票、行业板块和外盘方向，开盘前先判断高开低走或低开修复概率。</p></div>
-    <div class="card"><h3>日内做T用户</h3><p>需要黄线附近的低吸、高抛、接回信号，而不是简单涨跌提醒。</p></div>
-    <div class="card"><h3>策略研究用户</h3><p>通过模拟测试和失败复盘，持续优化触发条件和股票池。</p></div>
-  </div>
-</section>
-<section class="band">
-  <h2 class="section-title">商业版功能规划</h2>
-  <p class="section-sub">核心卖点不是“预测涨跌”，而是把盘前路径、盘中买卖点和风控纪律产品化。</p>
-  <div class="cards">
-    <div class="card"><h3>自定义做T逻辑</h3><p>用户可选择黄线战法、开盘急跌急拉、二次确认、反T回补等模块，保存成个人策略。</p></div>
-    <div class="card"><h3>AI集中复核</h3><p>出现候选买卖点后，AI讨论是否最优、是否追高接刀、价格带是否合理，再决定是否强提醒。</p></div>
-    <div class="card"><h3>复盘训练库</h3><p>记录每次模拟和实盘提醒结果，统计低吸过早、反T过早、尾盘失效等问题，持续修正规则。</p></div>
-  </div>
-</section>
+<section class="showcase"><img src="/assets/home-capability.png" alt="做T神器核心能力"><img src="/assets/home-detail.png" alt="做T神器盘中辅助详情"></section>
 <section id="pricing" class="band">
   <h2 class="section-title">商业化定价</h2>
   <p class="section-sub">价格简单，功能直接：先用起来，再决定是否长期使用。</p>
@@ -3191,11 +3179,10 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}.page{min-height:100v
     <div class="price"><h3>永久版</h3><div class="money">¥99</div><ul class="list"><li>包含月卡核心功能</li><li>永久使用当前版本</li><li>策略模板持续更新</li><li>优先体验新增功能</li></ul></div>
   </div>
 </section>
-<section class="cta"><div><h2>让做T从感觉变成纪律。</h2><p>盘前看方向，盘中等价格带，收盘复盘策略。</p></div><div class="hero-actions"><a class="btn primary" href="/">进入控制台</a><a class="btn" href="/register">注册体验账号</a></div></section>
-<footer class="footer">T神器 · A股做T盘中信号系统 · 策略研究工具，不承诺收益。</footer>
+<section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/">进入控制台</a> <a class="btn" href="/register">注册体验账号</a></div></section>
+<footer class="footer">做T神器 · A股智能交易助手 · 策略研究工具，不承诺收益。</footer>
 </body>
 </html>"""
-
 
 AUTH_HTML = r"""<!doctype html>
 <html lang="zh-CN">
