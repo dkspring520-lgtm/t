@@ -108,6 +108,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(RECHARGE_HTML)
             return
         if path == "/admin":
+            if not is_admin_email(email):
+                self._send_html(ACCOUNT_HTML)
+                return
             self._send_html(ADMIN_HTML)
             return
         if path == "/research":
@@ -175,10 +178,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(account_payload(self))
             return
         if path == "/api/admin/users":
+            if not is_admin_email(email):
+                self._send_json({"ok": False, "message": "没有管理员权限。"}, status=403)
+                return
             self._send_json(admin_users_payload())
             return
         if path == "/api/simulation_history":
-            self._send_json({"ok": True, "history": aggregate_sim_history(), "runs": recent_sim_history(), "latest": latest_sim_result()})
+            self._send_json({"ok": True, "history": aggregate_sim_history(email), "runs": recent_sim_history(12, email), "latest": latest_sim_result(email)})
             return
         self.send_error(404)
 
@@ -313,10 +319,10 @@ def run_task(name: str, options: dict | None = None) -> dict:
         merge_sim_chart_data(stocks, json_path)
     if name in {"simulate", "simulate5"} and stats:
         stats["review"] = build_sim_review(stocks)
-        persist_rolling_cash(options or {}, stats)
-        record_sim_history(name, options or {}, stats, stocks)
-        update_adaptive_strategy(stocks)
-        stats["history"] = aggregate_sim_history()
+        persist_rolling_cash(options or {}, stats, email)
+        record_sim_history(name, options or {}, stats, stocks, email)
+        update_adaptive_strategy(stocks, email)
+        stats["history"] = aggregate_sim_history(email)
     summary = summarize(name, raw, ok, stats)
     if name == "start_all":
         raw = clean_start_all_detail(raw)
@@ -479,7 +485,7 @@ def mask_secret(value: str) -> str:
     return f"已配置，尾号 {value[-4:]}"
 
 
-def persist_rolling_cash(options: dict, stats: dict) -> None:
+def persist_rolling_cash(options: dict, stats: dict, email: str | None = None) -> None:
     ending_cash = money_to_float(stats.get("endingCash"))
     if ending_cash <= 0:
         return
@@ -488,7 +494,8 @@ def persist_rolling_cash(options: dict, stats: dict) -> None:
             "cash": ending_cash,
             "trade": options.get("trade") or money_to_float(stats.get("trade")),
             "sample": options.get("sample") or 10,
-        }
+        },
+        email,
     )
 
 
@@ -736,6 +743,8 @@ def register_payload(handler: Handler, data: dict) -> dict | None:
         "watchLimit": 1,
         "aiReviewLimit": 5,
     }
+    if len(users) == 1:
+        users[email]["role"] = "admin"
     save_users(store)
     token = create_session(email)
     handler.send_response(200)
@@ -799,10 +808,33 @@ def account_payload(handler: Handler) -> dict:
     return {"ok": True, "loggedIn": True, "account": public_user(user)}
 
 
+def is_admin_email(email: str | None) -> bool:
+    email = str(email or "").strip().lower()
+    if not email:
+        return False
+    env_admins = {item.strip().lower() for item in os.environ.get("DASHBOARD_ADMINS", "").split(",") if item.strip()}
+    if email in env_admins:
+        return True
+    users = load_users().get("users", {})
+    user = users.get(email) or {}
+    if str(user.get("role") or "").lower() == "admin":
+        return True
+    first_email = next(iter(users.keys()), "")
+    return bool(first_email and email == str(first_email).lower())
+
+
+def account_watch_limit(email: str | None) -> int:
+    email = str(email or "").strip().lower()
+    user = load_users().get("users", {}).get(email) if email else None
+    if not user:
+        return 1
+    return clamp_int(user.get("watchLimit"), 1, 1, 500)
+
+
 def admin_users_payload() -> dict:
     store = load_users()
-    sessions = load_sessions()
-    active = {email for token, email in sessions.items() if SESSION_EXPIRES.get(token, 0) > time_mod.time()}
+    load_sessions()
+    active = {email for token, email in SESSIONS.items() if SESSION_EXPIRES.get(token, 0) > time_mod.time()}
     rows = []
     for email, user in sorted(store.get("users", {}).items()):
         row = public_user(user)
@@ -819,6 +851,7 @@ def public_user(user: dict) -> dict:
         "createdAt": user.get("createdAt"),
         "watchLimit": user.get("watchLimit", 1),
         "aiReviewLimit": user.get("aiReviewLimit", 5),
+        "role": user.get("role", ""),
     }
 
 
@@ -862,7 +895,7 @@ def realtime_payload(email: str | None = None) -> dict:
     rows = []
     signal_mod.ADAPTIVE_STRATEGY_PATH = account_strategy_path(email)
     market_context = cached_market_context()
-    for stock in dashboard_watchlist(email):
+    for stock in dashboard_watchlist(email)[: account_watch_limit(email)]:
         try:
             quote = fetch_quote(stock.symbol)
             minutes = fetch_minutes(stock.symbol)
@@ -953,7 +986,7 @@ def premarket_target_stock(code: str = "", email: str | None = None) -> dict:
         except Exception:
             pass
     try:
-        stock = (dashboard_watchlist(email) or [None])[0]
+        stock = (dashboard_watchlist(email)[: account_watch_limit(email)] or [None])[0]
         if stock:
             return {"name": stock.name, "code": stock.code, "symbol": stock.symbol}
     except Exception:
@@ -1444,7 +1477,7 @@ def watchlist_payload(email: str | None = None) -> dict:
     try:
         from monitor_config import stock_to_dict
 
-        stocks = dashboard_watchlist(email)
+        stocks = dashboard_watchlist(email)[: account_watch_limit(email)]
         return {"ok": True, "stocks": [stock_to_dict(s) for s in stocks], "text": dashboard_watchlist_text(stocks, email)}
     except Exception as exc:
         return {"ok": False, "stocks": [], "text": "", "error": str(exc)}
@@ -1456,7 +1489,11 @@ def save_watchlist_payload(data: dict, email: str | None = None) -> dict:
 
         stocks = parse_watchlist_text(str(data.get("text") or ""))
         if not stocks:
-            stocks = dashboard_watchlist(email)
+            stocks = dashboard_watchlist(email)[: account_watch_limit(email)]
+        limit = account_watch_limit(email)
+        if len(stocks) > limit:
+            current_stocks = dashboard_watchlist(email)[:limit]
+            return {"ok": False, "stocks": [stock_to_dict(s) for s in current_stocks], "text": dashboard_watchlist_text(current_stocks, email), "error": f"当前套餐最多监控 {limit} 只股票，请充值后再添加。"}
         text = dashboard_watchlist_text(stocks, email)
         current = read_dashboard_settings_file(email)
         current["watchlistText"] = text
@@ -3173,8 +3210,8 @@ def load_gemini_key() -> str:
     return ""
 
 
-def load_ai_config() -> dict:
-    settings = read_dashboard_settings_file()
+def load_ai_config(email: str | None = None) -> dict:
+    settings = read_dashboard_settings_file(email or REQUEST_EMAIL.get(""))
     provider = str(settings.get("aiProvider") or "ChatGPT").strip()
     provider = {"OpenAI": "ChatGPT", "OpenAI Compatible": "ThirdParty", "OpenAI兼容": "ThirdParty", "OpenAICompatible": "ThirdParty", "第三方API": "ThirdParty"}.get(provider, provider)
     if provider not in {"ChatGPT", "Gemini", "Claude", "ThirdParty"}:
@@ -3419,7 +3456,11 @@ def parse_sim_stats(raw: str) -> dict:
     return stats
 
 
-def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict]) -> None:
+def sim_history_path(email: str | None = None) -> Path:
+    return user_data_path(email or REQUEST_EMAIL.get(""), "simulation_history.jsonl")
+
+
+def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict], email: str | None = None) -> None:
     trigger = parse_trigger(stats.get("trigger", "--"))
     wins = sum(1 for row in stocks if float(row.get("pnl") or 0) > 0)
     record = {
@@ -3459,13 +3500,15 @@ def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict]
         ],
     }
     try:
-        with SIM_HISTORY_PATH.open("a", encoding="utf-8") as f:
+        path = sim_history_path(email)
+        path.parent.mkdir(exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
     except Exception:
         pass
 
 
-def update_adaptive_strategy(stocks: list[dict]) -> None:
+def update_adaptive_strategy(stocks: list[dict], email: str | None = None) -> None:
     defaults = {
         "buy_min_dev": -1.3,
         "buy_max_dev": -2.8,
@@ -3506,7 +3549,7 @@ def update_adaptive_strategy(stocks: list[dict]) -> None:
         "version": 8,
     }
     try:
-        current = json.loads(ADAPTIVE_STRATEGY_PATH.read_text(encoding="utf-8"))
+        current = json.loads(account_strategy_path(email).read_text(encoding="utf-8"))
     except Exception:
         current = {}
     strategy = {**defaults, **{k: current.get(k, v) for k, v in defaults.items()}}
@@ -3522,17 +3565,17 @@ def update_adaptive_strategy(stocks: list[dict]) -> None:
     strategy["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     strategy["last_notes"] = notes or ["本轮无需调参，继续累计样本"]
     try:
-        ADAPTIVE_STRATEGY_PATH.write_text(json.dumps(strategy, ensure_ascii=False, indent=2), encoding="utf-8")
+        account_strategy_path(email).write_text(json.dumps(strategy, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
 
-def aggregate_sim_history() -> dict:
+def aggregate_sim_history(email: str | None = None) -> dict:
     trades = wins = runs = no_trigger = 0
     pnl = 0.0
     failures: dict[str, int] = {}
     try:
-        lines = SIM_HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-500:]
+        lines = sim_history_path(email).read_text(encoding="utf-8").splitlines()[-500:]
     except Exception:
         lines = []
     for line in lines:
@@ -3556,9 +3599,9 @@ def aggregate_sim_history() -> dict:
     return {"runs": runs, "trades": trades, "winRate": f"{win_rate:.1f}%", "pnl": f"{pnl:+,.2f}元", "noTrigger": no_trigger, "failures": [{"type": k, "count": v} for k, v in top_failures]}
 
 
-def recent_sim_history(limit: int = 12) -> list[dict]:
+def recent_sim_history(limit: int = 12, email: str | None = None) -> list[dict]:
     try:
-        lines = SIM_HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-limit:]
+        lines = sim_history_path(email).read_text(encoding="utf-8").splitlines()[-limit:]
     except Exception:
         return []
     rows: list[dict] = []
@@ -3571,12 +3614,12 @@ def recent_sim_history(limit: int = 12) -> list[dict]:
     return rows
 
 
-def latest_sim_result() -> dict:
-    runs = recent_sim_history(1)
+def latest_sim_result(email: str | None = None) -> dict:
+    runs = recent_sim_history(1, email)
     if not runs:
         return {}
     item = runs[0]
-    stats = {"cash": item.get("cash") or "--", "trade": item.get("trade") or "--", "endingCash": item.get("endingCash") or item.get("cash") or "--", "trigger": f"{item.get('triggered', 0)}/{item.get('total', 0)}", "win": f"{(float(item.get('wins') or 0) / float(item.get('triggered') or 1) * 100):.1f}%" if item.get("triggered") else "--", "pnl": f"{float(item.get('pnl') or 0):+,.2f}元", "return": "--", "review": item.get("review") or {}, "history": aggregate_sim_history()}
+    stats = {"cash": item.get("cash") or "--", "trade": item.get("trade") or "--", "endingCash": item.get("endingCash") or item.get("cash") or "--", "trigger": f"{item.get('triggered', 0)}/{item.get('total', 0)}", "win": f"{(float(item.get('wins') or 0) / float(item.get('triggered') or 1) * 100):.1f}%" if item.get("triggered") else "--", "pnl": f"{float(item.get('pnl') or 0):+,.2f}元", "return": "--", "review": item.get("review") or {}, "history": aggregate_sim_history(email)}
     return {"stats": stats, "stocks": item.get("stocks") or [], "time": item.get("time")}
 
 

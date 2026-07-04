@@ -1,21 +1,21 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-git pull
-
-$pidValue = (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)
-if ($pidValue) {
-  Stop-Process -Id $pidValue -Force
-  Start-Sleep -Seconds 1
+$proxy = $env:GIT_PROXY
+if (-not $proxy -and (Test-Path "C:\Users\Administrator\Desktop\1.env")) {
+  $envText = Get-Content "C:\Users\Administrator\Desktop\1.env" -ErrorAction SilentlyContinue
+  $line = $envText | Where-Object { $_ -match "^(HTTPS_PROXY|HTTP_PROXY)=" } | Select-Object -First 1
+  if ($line) {
+    $proxy = ($line -split "=", 2)[1].Trim()
+  }
 }
 
-$env:DASHBOARD_HOST = "0.0.0.0"
-$env:DASHBOARD_PORT = "8765"
-
-$python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
-if (-not $python) {
-  $python = "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe"
+if ($proxy) {
+  git -c http.proxy=$proxy -c https.proxy=$proxy pull --ff-only
+} else {
+  git pull --ff-only
 }
 
-Start-Process -FilePath $python -ArgumentList "`"$PSScriptRoot\dashboard_app.py`"" -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
-Write-Host "已更新并重启：http://0.0.0.0:8765/"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PSScriptRoot\start_dashboard_background.ps1"
+Write-Host "Updated and restarted."
+Write-Host "Open: http://127.0.0.1:8765/"

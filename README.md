@@ -1,101 +1,89 @@
-# A股做T监控与选股研究
+# 做T神器
 
-一个面向 A 股日内做T和中期选股研究的本地/服务器 Web 控制台。核心思路是把分时黄线、VWAP、量能、开盘急拉急跌、外盘期货快照、新闻异动核验、多角色评审和 AI 复核合到一个简洁界面里。
+A 股日内做 T 监控、模拟复盘和选股研究的 Web 控制台。当前是 Beta 版本，重点先把账号、服务启动、策略配置和核心监控流程做稳。
 
 > 仅用于策略研究、提醒和复盘，不构成投资建议。
 
-## 主要功能
+## 当前能力
 
-- 多股票实时监控：价格、涨跌、分时曲线、黄线偏离、买卖点提示
-- 做T信号：正T低吸、反T高抛、开盘急跌急拉、冲高回落观察
-- 盘前风向：按主监控股票自动匹配黄金、白银、铜、原油、美元、离岸人民币等外盘因子
-- 快速异动核验：急拉/急跌时自动检查利好利空消息，避免无消息追涨或突发利空接刀
-- 模拟测试：随机股票做T模拟、历史统计、失败原因复盘、策略参数迭代
-- 选股研究：稳健中期、激进成长、评审团选股
-- 评审团选股：TradingAgents 风格多角色 + UZI 深度评审思路 + Kronos 路径因子
-- AI 配置：用户可在设置里自定义 Gemini Key、模型、代理地址
-- 服务器部署：支持 `DASHBOARD_HOST=0.0.0.0` 对外访问
+- 多股监控：分时曲线、黄线/VWAP 偏离、价格带、买卖点提醒。
+- 做T逻辑：正T低吸、反T高抛、开盘急跌急拉、冲高回落、量价确认。
+- 模拟测试：随机股票、自定义股票、近几日复盘、胜率和失败原因统计。
+- 策略自定义：用户可以粘贴个人做T规则，并同步到模拟和监控参数。
+- 选股研究：评审选股、RPS 主线、龙虎榜、板块资金方向。
+- AI 接入：支持 Gemini、ChatGPT/OpenAI 兼容接口、第三方中转站。
+- 商业化雏形：登录注册、30 天免登录、激活码充值、用户数据隔离。
 
 ## 快速启动
 
 ```powershell
 cd C:\dabao
-python dashboard_app.py
+powershell -ExecutionPolicy Bypass -File .\start_cloud_server.ps1
 ```
 
-默认访问：
+本机访问：
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-服务器公网部署：
-
-```powershell
-$env:DASHBOARD_HOST="0.0.0.0"
-$env:DASHBOARD_PORT="8765"
-python dashboard_app.py
-```
-
-然后访问：
+服务器访问：
 
 ```text
-http://服务器公网IP:8765/
+http://服务器IP:8765/
 ```
 
-## Windows 开机启动
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install_startup_shortcut.ps1
-```
-
-这会在当前用户启动目录写入快捷方式。登录服务器后自动启动后台服务。
-
-## AI 配置
-
-可以在网页右上角“设置”里填写 Gemini Key，也可以使用环境变量：
-
-```powershell
-$env:GEMINI_API_KEY="你的Key"
-```
-
-或参考 `.env.example`。
-
-## Git 更新服务器
-
-推荐服务器使用 Git 更新：
+## 开机自启
 
 ```powershell
 cd C:\dabao
-git pull
-$pidValue = (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)
-if ($pidValue) { Stop-Process -Id $pidValue -Force }
-$env:DASHBOARD_HOST="0.0.0.0"
-$env:DASHBOARD_PORT="8765"
-python dashboard_app.py
+powershell -ExecutionPolicy Bypass -File .\install_startup_task.ps1
 ```
 
-## 商业化方向
+## 更新服务器
 
-- 体验版：单股监控、基础提醒、盘前风向
-- 专业版：多股监控、模拟复盘、AI 买卖点复核
-- 包年版：专业版全部功能、优先更新、策略模板和云端支持
+```powershell
+cd C:\dabao
+powershell -ExecutionPolicy Bypass -File .\update_server.ps1
+```
 
-可扩展方向：
+如果 GitHub 访问慢，可以先设置代理：
 
-- 用户账号和权限
-- 支付订阅
-- 策略模板市场
-- 用户自定义做T逻辑
-- 云端数据缓存和回测
-- 微信/浏览器/短信多渠道提醒
+```powershell
+$env:GIT_PROXY="http://127.0.0.1:10808"
+```
+
+## 账号与权限
+
+- 第一个注册用户默认是管理员。
+- 登录 Cookie 保存 30 天。
+- 每个账号独立保存监控股票、模拟资金、AI Key、策略配置和模拟历史。
+- 管理员环境变量：
+
+```powershell
+$env:DASHBOARD_ADMINS="admin@example.com"
+```
+
+## 商业化计划
+
+优先级：
+
+1. 做稳 Beta：账号隔离、免登录、权限、服务自启、更新脚本。
+2. 做强做T核心：监控信号、模拟复盘、黄线/量价/开盘逻辑。
+3. 补齐选股系统：RPS、龙虎榜、板块资金、全网新闻。
+4. 完善商业包装：充值、价格页、官网、推广文案、用户后台。
+
+## 文件说明
+
+- `dashboard_app.py`：主 Web 服务。
+- `simulate_t_random.py`：做T模拟测试。
+- `stock_t_signal.py`：实时监控和信号逻辑。
+- `monitor_config.py`：股票解析和默认监控池。
+- `start_cloud_server.ps1`：前台启动服务。
+- `start_dashboard_background.ps1`：后台启动服务。
+- `install_startup_task.ps1`：安装开机自启。
+- `update_server.ps1`：拉取 GitHub 更新并重启。
 
 ## 安全提醒
 
-公网部署前建议：
-
-- 加登录保护
-- 配置 HTTPS
-- 安全组只允许自己的 IP
-- 不要提交 API Key、用户账号、日志、模拟历史
-
+正式商用前请配置 HTTPS、域名反代、数据备份、后台权限和服务器防火墙。不要提交真实 API Key、用户数据、日志和模拟历史。

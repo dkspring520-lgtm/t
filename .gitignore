@@ -17,6 +17,7 @@ node_modules/
 *_cache.json
 monitor_data.jsonl
 simulation_history.jsonl
+screener_history.json
 last_sim_result.json
 last_signal.txt
 signal_log.json
