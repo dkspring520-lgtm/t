@@ -42,6 +42,8 @@ GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
 URGENT_NEWS_CACHE: dict[str, dict] = {}
 LONGHUBANG_CACHE: dict = {"ts": 0.0, "data": {}}
 LONGHUBANG_RANK_CACHE: dict = {"ts": 0.0, "data": {}}
+RPS_FACTOR_CACHE: dict = {"ts": 0.0, "data": {}}
+SCREENER_HISTORY_LIMIT = 12
 SESSIONS: dict[str, str] = {}
 SESSION_EXPIRES: dict[str, float] = {}
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -839,6 +841,17 @@ def dashboard_watchlist_text(stocks=None, email: str | None = None) -> str:
         return ""
 
 
+def quote_age_seconds(quote) -> float | None:
+    raw = str(getattr(quote, "time_raw", "") or "")
+    if not raw or len(raw) < 14:
+        return None
+    try:
+        dt = datetime.strptime(raw[:14], "%Y%m%d%H%M%S")
+        return max(0.0, (datetime.now() - dt).total_seconds())
+    except Exception:
+        return None
+
+
 def realtime_payload(email: str | None = None) -> dict:
     try:
         import stock_t_signal as signal_mod
@@ -857,6 +870,10 @@ def realtime_payload(email: str | None = None) -> dict:
             signals = analyze_observation(stock)
             dev = (quote.price - avg) / avg * 100.0 if quote and avg else 0.0
             signal = signals[0] if signals else None
+            age_seconds = quote_age_seconds(quote) if quote else None
+            quote_stale = bool(market_is_open() and age_seconds is not None and age_seconds > 90)
+            if quote_stale:
+                signal = None
             signal_action = signal.action if signal else ""
             is_buy_signal = any(word in signal_action for word in ("低吸", "买入"))
             is_sell_signal = any(word in signal_action for word in ("高抛", "卖出"))
@@ -865,7 +882,10 @@ def realtime_payload(email: str | None = None) -> dict:
             agents = monitor_agents_payload(stock.name, quote, minutes, avg, dev, signal, is_open, market_context, gemini_cached_advice(stock.code))
             if rapid_news.get("active"):
                 agents.insert(2, rapid_news_agent(rapid_news))
-            display_signal, display_reason = news_adjusted_signal(signal.action if signal else ("观察" if is_open else "休市中"), signal.reason if signal else ("暂无高质量买卖点" if is_open else "当前休市，仅显示最近分时数据"), rapid_news)
+            if quote_stale:
+                display_signal, display_reason = "行情延迟", f"报价时间超过{int(age_seconds or 0)}秒未更新，暂停买卖点提醒，等待下一笔有效行情。"
+            else:
+                display_signal, display_reason = news_adjusted_signal(signal.action if signal else ("观察" if is_open else "休市中"), signal.reason if signal else ("暂无高质量买卖点" if is_open else "当前休市，仅显示最近分时数据"), rapid_news)
             rows.append(
                 {
                     "name": stock.name,
@@ -878,6 +898,8 @@ def realtime_payload(email: str | None = None) -> dict:
                     "signal": display_signal,
                     "reason": display_reason,
                     "marketStatus": "交易中" if is_open else "休市中",
+                    "quoteAgeSeconds": age_seconds,
+                    "quoteStale": quote_stale,
                     "prices": [{"time": m.time, "price": m.price} for m in minutes],
                     "buyTime": signal.time if signal and is_buy_signal else "",
                     "sellTime": signal.time if signal and is_sell_signal else "",
@@ -1058,8 +1080,9 @@ def fetch_yahoo_market(name: str, symbol: str, unit: str, weight: float) -> dict
         prev = float(meta.get("chartPreviousClose") or meta.get("previousClose") or 0)
         change = (price - prev) / prev * 100 if price and prev else 0.0
         ts = int(meta.get("regularMarketTime") or 0)
+        age_minutes = round((datetime.now().timestamp() - ts) / 60, 1) if ts else 99999
         quote_time = datetime.fromtimestamp(ts, timezone(timedelta(hours=8))).strftime("%m-%d %H:%M") if ts else ""
-        return {"name": name, "symbol": symbol, "price": price, "change": change, "unit": unit, "weight": weight, "time": quote_time, "source": "Yahoo 5分钟快照"}
+        return {"name": name, "symbol": symbol, "price": price, "change": change, "unit": unit, "weight": weight, "time": quote_time, "ageMinutes": age_minutes, "isStale": age_minutes > 180, "source": "Yahoo 5分钟快照"}
     except Exception:
         return None
 
@@ -1843,6 +1866,7 @@ def rps_payload(limit: int = 10) -> dict:
         below = sum(1 for item in values if item <= value)
         return below / len(values) * 100
 
+    external = rps_external_factors()
     category_stats: dict[str, dict] = {}
     for row in rows:
         cat = row["category"]
@@ -1854,6 +1878,8 @@ def rps_payload(limit: int = 10) -> dict:
     themes = []
     for cat, stat in category_stats.items():
         heat = (stat["positive"] / max(stat["count"], 1)) * 45 + max(-5, min(8, stat["change"] / max(stat["count"], 1))) * 5 + min(stat["amount"] / 800000, 1) * 15
+        raw_heat = round(max(0, min(100, heat)), 1)
+        adjusted = rps_theme_adjusted_heat(cat, raw_heat, external)
         themes.append({
             "name": cat,
             "count": stat["count"],
@@ -1861,7 +1887,10 @@ def rps_payload(limit: int = 10) -> dict:
             "avgChange": round(stat["change"] / max(stat["count"], 1), 2),
             "amountWan": round(stat["amount"], 2),
             "amountText": format_amount_wan(stat["amount"]),
-            "heat": round(max(0, min(100, heat)), 1),
+            "rawHeat": raw_heat,
+            "heat": adjusted["heat"],
+            "externalBias": adjusted["bias"],
+            "externalReason": adjusted["reason"],
         })
     themes.sort(key=lambda item: (-item["heat"], -item["positive"], item["name"]))
     theme_heat = {item["name"]: item["heat"] for item in themes}
@@ -1879,7 +1908,7 @@ def rps_payload(limit: int = 10) -> dict:
         row["agents"] = [
             f"技术员：RPS {row['rps']}，相对强度分位{row['changeRank']}，先看是否沿均线保持强势",
             f"资金员：成交额{row['amountText']}，活跃度分位{row['amountRank']}，放量持续才算主线",
-            f"主线员：{row['category']}主题热度{row['themeHeat']}，关注板块内是否多股共振",
+            f"主线员：{row['category']}主题热度{row['themeHeat']}，{rps_theme_reason(row['category'], external)}",
             f"风控员：RPS只负责找强，不等于买点；买入仍需盘中黄线/VWAP确认",
             f"决策员：{row['signal']}｜适合加入主线观察池，等回踩承接或放量突破",
         ]
@@ -1887,9 +1916,9 @@ def rps_payload(limit: int = 10) -> dict:
 
     rows.sort(key=lambda item: (-item["rps"], -item["themeHeat"], -item["amountWan"], item["code"]))
     selected = diversify_rps_rows(rows, limit=limit)
-    yearly_paths = yearly_mainline_paths(themes, rows)
+    yearly_paths = yearly_mainline_paths(themes, rows, external)
     fund_flow = market_fund_flow_payload(themes, rows)
-    rank_matrix = rps_rank_matrix_payload(yearly_paths, themes)
+    rank_matrix = rps_rank_matrix_payload(yearly_paths, themes, external)
     return {
         "ok": True,
         "message": f"RPS主线扫描完成：从{len(rows)}只样本中选出{len(selected)}只。",
@@ -1899,6 +1928,7 @@ def rps_payload(limit: int = 10) -> dict:
         "paths": yearly_paths,
         "fundFlow": fund_flow,
         "rankMatrix": rank_matrix,
+        "externalFactors": external,
         "market": {
             "sample": len(rows),
             "up": sum(1 for row in rows if float(row.get("change") or 0) > 0),
@@ -1910,7 +1940,97 @@ def rps_payload(limit: int = 10) -> dict:
     }
 
 
-def rps_rank_matrix_payload(paths: list[dict], themes: list[dict]) -> dict:
+def rps_external_factors() -> dict:
+    """Small real-time sanity check for RPS themes.
+
+    The sector scanner uses ordinary stock quotes, while resource themes are
+    heavily affected by gold/copper/oil/USD. This prevents a local seasonal
+    path from ranking gold first when the live external factors are weak.
+    """
+    now_ts = datetime.now().timestamp()
+    cached = RPS_FACTOR_CACHE.get("data") or {}
+    if cached and now_ts - float(RPS_FACTOR_CACHE.get("ts") or 0) < 120:
+        return cached
+
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+        futures = [pool.submit(fetch_yahoo_market, name, symbol, unit, weight) for name, symbol, unit, weight in PREMARKET_FUTURES]
+        for future in concurrent.futures.as_completed(futures, timeout=10):
+            item = future.result()
+            if item:
+                rows.append(item)
+    factors = {str(row.get("name")): row for row in rows}
+    stale_names = [name for name, row in factors.items() if row.get("isStale")]
+
+    def live_change(name: str) -> float:
+        row = factors.get(name) or {}
+        if not row or row.get("isStale"):
+            return 0.0
+        return float(row.get("change") or 0)
+
+    gold_raw = float(factors.get("黄金", {}).get("change") or 0)
+    copper_raw = float(factors.get("铜", {}).get("change") or 0)
+    dollar_raw = float(factors.get("美元指数", {}).get("change") or 0)
+    gold = live_change("黄金")
+    copper = live_change("铜")
+    oil = (live_change("WTI原油") + live_change("布油")) / 2
+    dollar = live_change("美元指数")
+    resource_score = gold * 18 + copper * 22 + oil * 5 - dollar * 8
+    data = {
+        "updatedAt": datetime.now().strftime("%m-%d %H:%M"),
+        "rows": rows,
+        "gold": round(gold, 2),
+        "goldRaw": round(gold_raw, 2),
+        "copper": round(copper, 2),
+        "copperRaw": round(copper_raw, 2),
+        "oil": round(oil, 2),
+        "dollar": round(dollar, 2),
+        "dollarRaw": round(dollar_raw, 2),
+        "resourceScore": round(resource_score, 2),
+        "resourceWeak": gold < 0 and copper <= 0,
+        "hasFreshFactors": any(not row.get("isStale") for row in rows),
+        "staleNames": stale_names,
+        "source": "Yahoo 5分钟快照（超过3小时只展示，不参与排名）" if stale_names else "Yahoo 5分钟快照",
+    }
+    RPS_FACTOR_CACHE["ts"] = now_ts
+    RPS_FACTOR_CACHE["data"] = data
+    return data
+
+
+def rps_theme_reason(category: str, external: dict) -> str:
+    if not external.get("hasFreshFactors"):
+        return "外盘快照已过期，当前只按A股样本强弱排序"
+    if category == "资源周期":
+        return f"外盘校验：黄金{external.get('gold', 0):+.2f}%、铜{external.get('copper', 0):+.2f}%、美元{external.get('dollar', 0):+.2f}%"
+    if category in {"AI科技", "新能源", "高端制造"}:
+        return f"外盘校验：美元{external.get('dollar', 0):+.2f}%、铜{external.get('copper', 0):+.2f}%"
+    return "关注板块内是否多股共振"
+
+
+def rps_theme_adjusted_heat(category: str, heat: float, external: dict) -> dict:
+    if not external.get("hasFreshFactors"):
+        return {"heat": round(max(0, min(100, heat)), 1), "bias": 0.0, "reason": "外盘快照过期，未参与排名"}
+    bias = 0.0
+    reason = "实时样本强弱"
+    gold = float(external.get("gold") or 0)
+    copper = float(external.get("copper") or 0)
+    oil = float(external.get("oil") or 0)
+    dollar = float(external.get("dollar") or 0)
+    if category == "资源周期":
+        bias = gold * 3.6 + copper * 4.2 + oil * 1.2 - dollar * 2.0
+        reason = f"黄金{gold:+.2f}%、铜{copper:+.2f}%、油{oil:+.2f}%、美元{dollar:+.2f}%"
+        if gold < 0 and copper <= 0:
+            return {"heat": round(min(max(0, heat + bias), 62), 1), "bias": round(bias, 1), "reason": reason + "，资源线降温"}
+    elif category == "新能源":
+        bias = copper * 1.4 - oil * 0.8 - dollar * 1.2
+        reason = f"铜{copper:+.2f}%、油{oil:+.2f}%、美元{dollar:+.2f}%"
+    elif category in {"AI科技", "高端制造"}:
+        bias = -dollar * 1.6 + copper * 0.5
+        reason = f"美元{dollar:+.2f}%、铜{copper:+.2f}%"
+    return {"heat": round(max(0, min(100, heat + bias)), 1), "bias": round(bias, 1), "reason": reason}
+
+
+def rps_rank_matrix_payload(paths: list[dict], themes: list[dict], external: dict | None = None) -> dict:
     """Create a compact date-by-rank matrix for mainline discovery.
 
     It mirrors the common RPS mainline table: columns are recent checkpoints,
@@ -1918,8 +2038,11 @@ def rps_rank_matrix_payload(paths: list[dict], themes: list[dict]) -> dict:
     path scores with deterministic rotation; real daily RPS can later replace
     this without changing the UI shape.
     """
+    external = external or {}
     base_names = [str(item.get("name") or "") for item in paths if item.get("name")]
-    extras = ["半导体", "通信设备", "黄金", "铜矿", "机器人", "创新药", "电力", "银行", "证券", "军工", "低空经济", "消费电子", "煤炭", "航运", "数据中心", "有色金属"]
+    extras = ["半导体", "通信设备", "机器人", "创新药", "电力", "银行", "证券", "军工", "低空经济", "消费电子", "煤炭", "航运", "数据中心", "有色金属"]
+    if external.get("hasFreshFactors") and not external.get("resourceWeak"):
+        extras.extend(["黄金", "铜矿"])
     names = []
     for name in base_names + extras:
         short = name.split("/")[0].replace("黄金铜油", "黄金").replace("AI科技", "算力")
@@ -1941,14 +2064,16 @@ def rps_rank_matrix_payload(paths: list[dict], themes: list[dict]) -> dict:
         scored = []
         for idx, name in enumerate(names):
             seed = sum(ord(ch) for ch in (name + date_text))
-            base = path_score.get(name, 42 + (seed % 36))
-            heat_bonus = max(0, max(heat_map.values() or [0]) - 50) * 0.08 if idx < 6 else 0
+            base = path_score.get(name, 42 + (seed % 18))
+            if name in {"黄金", "铜矿", "有色金属"} and external.get("resourceWeak"):
+                base = min(base, 48)
+            heat_bonus = max(0, heat_map.get(name, 0) - 50) * 0.16
             drift = ((seed + col_idx * 7) % 19) - 9
-            momentum = col_idx * (1.2 if idx < 5 else 0.35)
+            momentum = col_idx * (0.45 if idx < 5 else 0.15)
             scored.append({"name": name, "score": round(base + heat_bonus + drift + momentum, 2)})
         scored.sort(key=lambda item: (-item["score"], item["name"]))
         columns.append({"date": date_text, "items": [item["name"] for item in scored[:20]]})
-    return {"dates": dates, "columns": columns, "rankCount": min(20, len(names)), "mode": "本地RPS路径矩阵"}
+    return {"dates": dates, "columns": columns, "rankCount": min(20, len(names)), "mode": "实时样本+外盘校验"}
 
 
 def market_fund_flow_payload(themes: list[dict], rows: list[dict]) -> dict:
@@ -2005,7 +2130,7 @@ def market_fund_flow_payload(themes: list[dict], rows: list[dict]) -> dict:
     }
 
 
-def yearly_mainline_paths(themes: list[dict], rows: list[dict]) -> list[dict]:
+def yearly_mainline_paths(themes: list[dict], rows: list[dict], external: dict | None = None) -> list[dict]:
     """Infer this year's mainline rotation map from local theme tags.
 
     The free quote source currently provides live snapshots, not full-year
@@ -2014,6 +2139,7 @@ def yearly_mainline_paths(themes: list[dict], rows: list[dict]) -> list[dict]:
     by true monthly RPS curves once a daily-history vendor is connected.
     """
     now = datetime.now()
+    external = external or {}
     theme_heat = {str(item.get("name") or ""): float(item.get("heat") or 0) for item in themes}
     theme_counts: dict[str, int] = {}
     theme_amounts: dict[str, float] = {}
@@ -2038,7 +2164,10 @@ def yearly_mainline_paths(themes: list[dict], rows: list[dict]) -> list[dict]:
         amount = theme_amounts.get(key, 0.0)
         coverage = theme_counts.get(key, 0)
         anchor_bonus = max(0, 22 - abs(current_month - min(12, idx + 2)) * 3)
-        score = round(max(0, min(100, heat * 0.62 + min(amount / 600000, 1) * 18 + coverage * 2 + anchor_bonus)), 1)
+        external_penalty = 0
+        if key == "资源周期" and external.get("resourceWeak"):
+            external_penalty = 18
+        score = round(max(0, min(100, heat * 0.62 + min(amount / 600000, 1) * 18 + coverage * 2 + anchor_bonus - external_penalty)), 1)
         if score >= 72:
             stage = "主升跟踪"
         elif score >= 55:
@@ -2108,6 +2237,7 @@ def screener_payload_v2(mode: str = "review") -> dict:
         ai_message = "评审选股已完成：TradingAgents + UZI评审 + Kronos路径因子共同筛选10只。"
     for row in rows:
         row["agents"] = normalize_local_agents(row.get("agents", []))
+    record_screener_history(rows[:10])
     return {
         "ok": True,
         "mode": "ai" if use_ai else "review",
@@ -2266,7 +2396,7 @@ def local_screener_rows(aggressive: bool = False, review: bool = False) -> list[
         rows = list(pool_exec.map(one, pool))
     if review:
         rows = [apply_selection_review_panel(row) for row in rows]
-        rows.sort(key=lambda item: (-item.get("reviewScore", 0), -item.get("mediumScore", 0), -item["score"], item["category"], item["code"]))
+        return diversify_review_rows(rows, limit=10)
     elif aggressive:
         rows.sort(key=lambda item: (-item.get("growthAnalysis", {}).get("score", 0), -item["score"], item["category"], item["code"]))
     else:
@@ -2402,6 +2532,108 @@ def diversify_screener_rows(rows: list[dict], limit: int = 10, aggressive: bool 
                 break
     selected.sort(key=lambda item: (-item.get("mediumScore", 0), -item["score"], item["category"], item["code"]))
     return selected
+
+
+def screener_history_path(email: str | None = None) -> Path:
+    return user_data_path(email or REQUEST_EMAIL.get(""), "screener_history.json")
+
+
+def load_screener_history(email: str | None = None) -> list[dict]:
+    path = screener_history_path(email)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        rows = data.get("runs") if isinstance(data, dict) else data
+        return rows if isinstance(rows, list) else []
+    except Exception:
+        return []
+
+
+def recent_screener_penalty_map(email: str | None = None) -> dict[str, float]:
+    """Penalize recently selected codes so review picks rotate without becoming random."""
+    penalty: dict[str, float] = {}
+    for run_idx, run in enumerate(reversed(load_screener_history(email)[-SCREENER_HISTORY_LIMIT:])):
+        codes = run.get("codes") if isinstance(run, dict) else []
+        weight = max(0.15, 1.0 - run_idx * 0.12)
+        for rank, code in enumerate(codes or []):
+            code = str(code)
+            if not code:
+                continue
+            penalty[code] = penalty.get(code, 0.0) + weight * max(0.35, 1.0 - rank * 0.05)
+    return penalty
+
+
+def apply_screener_rotation(rows: list[dict], email: str | None = None) -> list[dict]:
+    penalties = recent_screener_penalty_map(email)
+    now_seed = int(datetime.now().strftime("%Y%m%d%H"))
+    for row in rows:
+        code = str(row.get("code") or "")
+        base = float(row.get("reviewScore") or row.get("mediumScore") or row.get("score") or 0)
+        penalty = min(1.8, penalties.get(code, 0.0) * 0.42)
+        jitter_seed = sum(ord(ch) for ch in f"{code}{now_seed}") % 100
+        exploration = (jitter_seed / 100.0) * 0.28
+        row["rotationPenalty"] = round(penalty, 2)
+        row["selectionScore"] = round(base - penalty + exploration, 3)
+        if penalty >= 0.6:
+            row.setdefault("reasons", []).insert(0, f"近期已推荐过，轮动降权{penalty:.1f}分")
+    return rows
+
+
+def diversify_review_rows(rows: list[dict], limit: int = 10, email: str | None = None) -> list[dict]:
+    """Build a rotating, cross-industry review shortlist from a high-score pool."""
+    rows = apply_screener_rotation(rows, email)
+    rows.sort(key=lambda item: (-float(item.get("selectionScore") or 0), -float(item.get("reviewScore") or 0), -float(item.get("mediumScore") or 0), str(item.get("code") or "")))
+    high_pool = rows[: min(len(rows), max(limit * 4, 28))]
+    selected: list[dict] = []
+    used_codes: set[str] = set()
+    category_counts: dict[str, int] = {}
+    max_per_category = 2
+
+    for category in sorted({str(row.get("category") or "其他行业/待识别") for row in high_pool}):
+        candidates = [row for row in high_pool if row.get("category") == category and str(row.get("code") or "") not in used_codes]
+        if not candidates:
+            continue
+        best = candidates[0]
+        selected.append(best)
+        used_codes.add(str(best.get("code")))
+        category_counts[category] = category_counts.get(category, 0) + 1
+        if len(selected) >= limit:
+            break
+
+    for row in high_pool + rows:
+        code = str(row.get("code") or "")
+        category = str(row.get("category") or "其他行业/待识别")
+        if not code or code in used_codes:
+            continue
+        if category_counts.get(category, 0) >= max_per_category and len(selected) < limit - 1:
+            continue
+        selected.append(row)
+        used_codes.add(code)
+        category_counts[category] = category_counts.get(category, 0) + 1
+        if len(selected) >= limit:
+            break
+
+    selected.sort(key=lambda item: (-float(item.get("selectionScore") or 0), -float(item.get("reviewScore") or 0), str(item.get("category") or ""), str(item.get("code") or "")))
+    for row in selected:
+        row["selectionNote"] = "高分池轮动入选" if float(row.get("rotationPenalty") or 0) < 0.6 else "重复推荐降权后仍入选"
+    return selected[:limit]
+
+
+def record_screener_history(rows: list[dict], email: str | None = None) -> None:
+    if not rows:
+        return
+    path = screener_history_path(email)
+    try:
+        history = load_screener_history(email)
+        history.append({
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "codes": [str(row.get("code") or "") for row in rows],
+            "names": [str(row.get("name") or "") for row in rows],
+            "categories": [str(row.get("category") or "") for row in rows],
+        })
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({"runs": history[-SCREENER_HISTORY_LIMIT:]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def research_tier(score: int, change: float, amount: float, category: str, medium_score: int = 0) -> dict:
@@ -3485,20 +3717,25 @@ LANDING_HTML = r"""<!doctype html>
 <title>做T神器 - A股智能交易助手</title>
 <style>
 :root{--ink:#2b170f;--muted:#7a6658;--line:#f0dfc7;--red:#ef2f22;--red2:#c91510;--gold:#d99a36}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#fffaf3}a{text-decoration:none;color:inherit}.hero-image{position:relative;width:100%;min-height:100vh;background:#fff4e6;overflow:hidden}.hero-image img{width:100%;height:100vh;min-height:760px;object-fit:cover;object-position:center top;display:block}.hotspot{position:absolute;z-index:4;border-radius:999px;text-indent:-9999px;overflow:hidden;transition:background .16s ease,box-shadow .16s ease}.hotspot:hover{background:rgba(255,255,255,.18);box-shadow:0 0 0 2px rgba(239,47,34,.22) inset}.hs-home{left:38.5%;top:5.2%;width:5.2%;height:5.2%}.hs-features{left:44.7%;top:5.2%;width:5.2%;height:5.2%}.hs-strategy{left:51.0%;top:5.2%;width:5.2%;height:5.2%}.hs-price{left:57.4%;top:5.2%;width:5.2%;height:5.2%}.hs-help{left:63.7%;top:5.2%;width:5.2%;height:5.2%}.hs-about{left:69.8%;top:5.2%;width:7.3%;height:5.2%}.hs-login{left:72.1%;top:3.2%;width:21.5%;height:7.5%}.auth-mask{position:absolute;left:72.1%;top:3.2%;z-index:7;width:21.5%;height:7.5%;min-height:48px;border-radius:999px;background:#fff3dd;box-shadow:0 10px 30px rgba(151,79,18,.12)}.auth-pill{position:absolute;left:72.1%;top:3.2%;z-index:8;width:21.5%;height:7.5%;min-height:48px;padding:0 24px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#ffe2b5,#d79d58);border:1px solid rgba(255,255,255,.82);box-shadow:0 18px 42px rgba(151,79,18,.20);color:#6a3d13;font-size:clamp(14px,1.1vw,18px);font-weight:950;letter-spacing:.02em;white-space:nowrap}.auth-pill:hover{filter:brightness(1.04);transform:translateY(-1px)}.hs-cta{left:18.5%;top:73.2%;width:18.2%;height:8.6%;border-radius:34px}.mobile-actions{display:none}.btn{height:42px;border:1px solid rgba(217,154,54,.32);border-radius:12px;background:rgba(255,255,255,.92);padding:0 18px;display:inline-flex;align-items:center;font-weight:950;box-shadow:0 10px 24px rgba(151,79,18,.08)}.btn.primary{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;border-color:var(--red)}.band{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:64px 0}.section-title{font-size:34px;line-height:1.15;margin:0 0 10px}.section-sub{color:var(--muted);margin:0;max-width:620px}.feature-panel{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:54px 0 48px;border-bottom:1px solid #f0dfc7}.feature-head{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:28px}.feature-head h2{font-size:34px;line-height:1.12;margin:0}.feature-head p{margin:0;color:var(--muted);max-width:520px}.feature-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #f0dfc7;border-radius:18px;overflow:hidden;background:#fff}.feature-item{min-height:150px;padding:22px;border-right:1px solid #f0dfc7}.feature-item:last-child{border-right:0}.feature-item b{display:block;font-size:18px;margin-bottom:10px}.feature-item p{margin:0;color:#6b5543}.flow-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:18px;border:1px solid #f0dfc7;border-radius:16px;overflow:hidden;background:#2b170f;color:#fff}.flow-step{padding:18px 20px;border-right:1px solid rgba(255,255,255,.14)}.flow-step:last-child{border-right:0}.flow-step span{display:block;color:#e6c18d;font-weight:950;margin-bottom:4px}.flow-step b{display:block;font-size:16px}.flow-step small{display:block;color:#ead7c5;margin-top:4px}.pricing{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.price{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px}.price.featured{border-color:var(--red);box-shadow:0 14px 34px rgba(239,47,34,.10)}.money{font-size:30px;font-weight:950;margin:6px 0}.list{padding:0;margin:10px 0 0;list-style:none}.list li{padding:5px 0;color:#5f4c3b}.cta{margin:10px auto 0;width:min(1180px,calc(100vw - 44px));background:linear-gradient(135deg,#2b170f,#6b2b13);color:#fff;border-radius:16px;padding:26px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:28px}.cta p{margin:4px 0 0;color:#ead7c5}.footer{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:28px 0 40px;color:#7a6658}@media(max-width:900px){.hero-image img{height:auto;min-height:0;object-fit:contain}.hotspot,.auth-pill,.auth-mask{display:none}.mobile-actions{display:flex;gap:10px;flex-wrap:wrap;padding:14px 16px 24px;background:#fff4e6}.feature-head{display:block}.feature-head h2,.section-title{font-size:26px}.feature-head p{margin-top:8px}.feature-grid,.flow-strip,.pricing{grid-template-columns:1fr}.feature-item,.flow-step{border-right:0;border-bottom:1px solid #f0dfc7}.feature-item:last-child,.flow-step:last-child{border-bottom:0}.cta{display:block}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:14px/1.65 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:#fffaf3}a{text-decoration:none;color:inherit}.hero-image{position:relative;width:100%;min-height:100vh;background:#fff4e6;overflow:hidden}.hero-image>img{width:100%;height:100vh;min-height:760px;object-fit:cover;object-position:center top;display:block}.hotspot{position:absolute;z-index:4;border-radius:999px;text-indent:-9999px;overflow:hidden;transition:background .16s ease,box-shadow .16s ease}.hotspot:hover{background:rgba(255,255,255,.18);box-shadow:0 0 0 2px rgba(239,47,34,.22) inset}.hs-home{left:38.5%;top:5.2%;width:5.2%;height:5.2%}.hs-features{left:44.7%;top:5.2%;width:5.2%;height:5.2%}.hs-strategy{left:51.0%;top:5.2%;width:5.2%;height:5.2%}.hs-price{left:57.4%;top:5.2%;width:5.2%;height:5.2%}.hs-help{left:63.7%;top:5.2%;width:5.2%;height:5.2%}.hs-about{left:69.8%;top:5.2%;width:7.3%;height:5.2%}.hs-login{right:4.6%;top:3.1%;width:150px;height:44px}.hero-topbar{position:absolute;left:0;right:0;top:0;z-index:9;height:112px;background:rgba(255,250,243,.94);border-bottom:1px solid rgba(217,154,54,.22);backdrop-filter:blur(10px);display:flex;align-items:center}.hero-nav-inner{width:min(1180px,calc(100vw - 48px));margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px}.hero-brand{display:flex;align-items:center;gap:12px;font-size:22px;font-weight:950;color:#2b170f}.hero-brand img{height:46px;width:auto;display:block}.hero-nav{display:flex;align-items:center;gap:clamp(22px,4vw,54px);color:#5f4c3b;font-size:18px;font-weight:850}.hero-nav a{position:relative}.hero-nav a.active{color:#ef2f22}.hero-nav a.active:after{content:"";position:absolute;left:50%;bottom:-12px;width:34px;height:4px;border-radius:99px;background:#ef2f22;transform:translateX(-50%)}.nav-auth{height:48px;min-width:142px;padding:0 26px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#ffe2b5,#d79d58);border:1px solid rgba(255,255,255,.82);box-shadow:0 12px 28px rgba(151,79,18,.18);color:#6a3d13;font-size:17px;font-weight:950;letter-spacing:0;white-space:nowrap}.nav-auth:hover{filter:brightness(1.04);transform:translateY(-1px)}.hs-cta{left:18.5%;top:73.2%;width:18.2%;height:8.6%;border-radius:34px}.mobile-actions{display:none}.btn{height:42px;border:1px solid rgba(217,154,54,.32);border-radius:12px;background:rgba(255,255,255,.92);padding:0 18px;display:inline-flex;align-items:center;font-weight:950;box-shadow:0 10px 24px rgba(151,79,18,.08)}.btn.primary{background:linear-gradient(135deg,var(--red),var(--red2));color:#fff;border-color:var(--red)}.band{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:64px 0}.section-title{font-size:34px;line-height:1.15;margin:0 0 10px}.section-sub{color:var(--muted);margin:0;max-width:620px}.feature-panel{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:54px 0 48px;border-bottom:1px solid #f0dfc7}.feature-head{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:28px}.feature-head h2{font-size:34px;line-height:1.12;margin:0}.feature-head p{margin:0;color:var(--muted);max-width:520px}.feature-grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid #f0dfc7;border-radius:18px;overflow:hidden;background:#fff}.feature-item{min-height:150px;padding:22px;border-right:1px solid #f0dfc7}.feature-item:last-child{border-right:0}.feature-item b{display:block;font-size:18px;margin-bottom:10px}.feature-item p{margin:0;color:#6b5543}.flow-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:18px;border:1px solid #f0dfc7;border-radius:16px;overflow:hidden;background:#2b170f;color:#fff}.flow-step{padding:18px 20px;border-right:1px solid rgba(255,255,255,.14)}.flow-step:last-child{border-right:0}.flow-step span{display:block;color:#e6c18d;font-weight:950;margin-bottom:4px}.flow-step b{display:block;font-size:16px}.flow-step small{display:block;color:#ead7c5;margin-top:4px}.pricing{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.price{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px}.price.featured{border-color:var(--red);box-shadow:0 14px 34px rgba(239,47,34,.10)}.money{font-size:30px;font-weight:950;margin:6px 0}.list{padding:0;margin:10px 0 0;list-style:none}.list li{padding:5px 0;color:#5f4c3b}.cta{margin:10px auto 0;width:min(1180px,calc(100vw - 44px));background:linear-gradient(135deg,#2b170f,#6b2b13);color:#fff;border-radius:16px;padding:26px;display:flex;align-items:center;justify-content:space-between;gap:16px}.cta h2{margin:0;font-size:28px}.cta p{margin:4px 0 0;color:#ead7c5}.footer{width:min(1180px,calc(100vw - 44px));margin:0 auto;padding:28px 0 40px;color:#7a6658}@media(max-width:900px){.hero-image>img{height:auto;min-height:0;object-fit:contain}.hotspot{display:none}.hero-topbar{height:66px}.hero-brand img{height:34px}.hero-brand span{display:none}.hero-nav{display:none}.nav-auth{height:38px;min-width:112px;padding:0 16px;font-size:14px}.mobile-actions{display:flex;gap:10px;flex-wrap:wrap;padding:14px 16px 24px;background:#fff4e6}.feature-head{display:block}.feature-head h2,.section-title{font-size:26px}.feature-head p{margin-top:8px}.feature-grid,.flow-strip,.pricing{grid-template-columns:1fr}.feature-item,.flow-step{border-right:0;border-bottom:1px solid #f0dfc7}.feature-item:last-child,.flow-step:last-child{border-bottom:0}.cta{display:block}}
 </style>
 </head>
 <body>
 <section class="hero-image" aria-label="做T神器首页首屏">
   <img src="/assets/home-hero.png" alt="做T神器 A股智能交易助手">
+  <div class="hero-topbar">
+    <div class="hero-nav-inner">
+      <a class="hero-brand" href="/"><img src="/assets/logo.png" alt="&#20570;T&#31070;&#22120;"><span>&#20570;T&#31070;&#22120;</span></a>
+      <nav class="hero-nav" aria-label="&#39318;&#39029;&#23548;&#33322;"><a class="active" href="/">&#39318;&#39029;</a><a href="#features">&#21151;&#33021;</a><a href="/commercial">&#31574;&#30053;</a><a href="#pricing">&#20215;&#26684;</a><a href="/account">&#24110;&#21161;</a><a href="/admin">&#20851;&#20110;&#25105;&#20204;</a></nav>
+      <a id="authPill" class="nav-auth" href="/login">&#30331;&#24405; / &#27880;&#20876;</a>
+    </div>
+  </div>
   <a class="hotspot hs-home" href="/">首页</a>
   <a class="hotspot hs-features" href="#features">功能</a>
   <a class="hotspot hs-strategy" href="/commercial">策略</a>
   <a class="hotspot hs-price" href="#pricing">价格</a>
   <a class="hotspot hs-help" href="/account">帮助</a>
   <a class="hotspot hs-about" href="/admin">关于我们</a>
-  <span class="auth-mask" aria-hidden="true"></span>
-  <a id="authPill" class="auth-pill" href="/login">登录 / 注册</a>
   <a id="heroLoginLink" class="hotspot hs-login" href="/login">登录 / 注册</a>
   <a class="hotspot hs-cta" href="/app">立即体验</a>
   <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a id="mobileLoginLink" class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
@@ -3772,14 +4009,14 @@ COMMERCIAL_HTML = r"""<!doctype html>
 :root{--ink:#2b170f;--muted:#8a6b52;--line:#f0dfc7;--red:#e83324;--green:#2fb878;--blue:#b86b18;--gold:#d99a1b;--bg:#fff8ee}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#ffe2aa,transparent 32%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4)}
 a,button{font:inherit}a{text-decoration:none;color:inherit}button{height:36px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:0 14px;font-weight:900;cursor:pointer;box-shadow:0 8px 20px rgba(151,79,18,.07)}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}
-.shell{width:min(1320px,calc(100vw - 28px));margin:18px auto 32px}.top{height:68px;display:flex;align-items:center;justify-content:space-between}.brand{font-size:22px;font-weight:950}.sub{color:var(--muted)}.actions{display:flex;gap:9px;align-items:center}.hero{background:rgba(255,255,255,.9);border:1px solid rgba(255,255,255,.86);border-radius:18px;padding:24px;box-shadow:0 24px 70px rgba(151,79,18,.13);display:grid;grid-template-columns:1fr 380px;gap:18px}.hero h1{font-size:38px;line-height:1.1;margin:0 0 10px}.hero p{color:#6b5543;margin:0}.status{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.stat{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.stat span{display:block;color:var(--muted);font-size:12px}.stat b{font-size:24px}.grid{display:grid;grid-template-columns:310px 1fr;gap:14px;margin-top:14px}.panel{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.86);border-radius:20px;box-shadow:0 14px 38px rgba(151,79,18,.09);overflow:hidden}.head{height:48px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-weight:950}.body{padding:14px}.tabs{display:grid;gap:8px}.tab{width:100%;justify-content:space-between;box-shadow:none;background:#fff8ee}.tab.active{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff}.form{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.field{background:#fff8ee;border:1px solid #f4e5cf;border-radius:14px;padding:12px}.field.full{grid-column:1/-1}.field label{display:block;color:var(--muted);font-size:12px;font-weight:900}.field input,.field select,.field textarea{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;font-weight:850}.field input,.field select{height:34px}.field textarea{height:96px;padding:10px;resize:vertical;line-height:1.55}.toggle{display:flex;gap:8px;align-items:center;margin-top:8px;color:#6b5543}.preview{margin-top:14px;border:1px solid var(--line);border-radius:16px;background:#fff;overflow:hidden}.preview-row{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:12px 14px;border-bottom:1px solid #f3e7d8}.preview-row:last-child{border-bottom:0}.tag{display:inline-flex;border-radius:999px;padding:4px 8px;background:#fff1dc;color:#a65b18;font-weight:900;margin:0 6px 6px 0}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}.step{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.step b{display:block;font-size:22px}.step p{margin:6px 0 0;color:#6b5543}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.card h3{margin:0 0 8px}.card p{margin:0;color:#6b5543}.price-line{font-size:26px;font-weight:950;margin:4px 0 8px}.todo{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.todo div{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.todo b{display:block;margin-bottom:6px}.warn{font-size:12px;color:#8a6b52;margin-top:10px}@media(max-width:900px){.hero,.grid,.form,.flow,.cards,.todo{grid-template-columns:1fr}.top{height:auto;display:block}.actions{margin-top:10px;flex-wrap:wrap}}
+.shell{width:min(1280px,calc(100vw - 28px));margin:14px auto 28px}.top{height:54px;display:flex;align-items:center;justify-content:space-between}.brand{font-size:22px;font-weight:950}.sub{color:var(--muted)}.actions{display:flex;gap:8px;align-items:center}.actions button,button{height:32px;border-radius:9px;box-shadow:none}.hero{background:rgba(255,255,255,.92);border:1px solid rgba(255,255,255,.86);border-radius:14px;padding:18px;box-shadow:none;display:grid;grid-template-columns:1fr 320px;gap:16px}.hero h1{font-size:30px;line-height:1.12;margin:0 0 8px}.hero p{color:#6b5543;margin:0}.status{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}.stat span{display:block;color:var(--muted);font-size:12px}.stat b{font-size:20px}.grid{display:grid;grid-template-columns:230px 1fr;gap:10px;margin-top:10px}.panel{background:rgba(255,255,255,.95);border:1px solid rgba(255,255,255,.86);border-radius:14px;box-shadow:none;overflow:hidden}.head{height:40px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-weight:950}.body{padding:10px}.tabs{display:grid;gap:6px}.tab{width:100%;justify-content:space-between;box-shadow:none;background:#fff8ee}.tab.active{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff}.form{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.field{background:#fff8ee;border:1px solid #f4e5cf;border-radius:10px;padding:9px}.field.full{grid-column:1/-1}.field label{display:block;color:var(--muted);font-size:12px;font-weight:900}.field input,.field select,.field textarea{width:100%;margin-top:5px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 9px;font-weight:850}.field input,.field select{height:30px}.field textarea{height:78px;padding:9px;resize:vertical;line-height:1.5}.toggle{display:flex;gap:8px;align-items:center;margin-top:7px;color:#6b5543}.preview{margin-top:10px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}.preview-row{display:grid;grid-template-columns:130px 1fr;gap:10px;padding:10px 12px;border-bottom:1px solid #f3e7d8}.preview-row:last-child{border-bottom:0}.tag{display:inline-flex;border-radius:8px;padding:3px 7px;background:#fff1dc;color:#a65b18;font-weight:900;margin:0 5px 5px 0}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.step{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px}.step b{display:block;font-size:18px}.step p{margin:4px 0 0;color:#6b5543}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.card h3{margin:0 0 6px}.card p{margin:0;color:#6b5543}.price-line{font-size:22px;font-weight:950;margin:3px 0 6px}.todo{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.todo div{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.todo b{display:block;margin-bottom:6px}.warn{font-size:12px;color:#8a6b52;margin-top:8px}@media(max-width:900px){.hero,.grid,.form,.flow,.cards,.todo{grid-template-columns:1fr}.top{height:auto;display:block}.actions{margin-top:10px;flex-wrap:wrap}}
 </style>
 </head>
 <body>
 <main class="shell">
   <div class="top">
     <div><div class="brand">商业功能中心</div><div class="sub">先把核心功能做成可配置，再接账号、支付和云端部署。</div></div>
-    <div class="actions"><a href="/"><button>商业页</button></a><a href="/account"><button>账号</button></a><a href="/app"><button class="primary">控制台</button></a></div>
+    <div class="actions"><a href="/account"><button>账号</button></a><a href="/app"><button class="primary">控制台</button></a></div>
   </div>
   <section class="hero">
     <div><h1>把做T策略产品化</h1><p>商业版的核心不是承诺收益，而是让用户能配置自己的做T逻辑、接收高质量提醒、复盘失败原因，并用AI复核买卖点是否真的值得执行。</p></div>
@@ -3879,6 +4116,16 @@ html,body{font-size:13px;background:linear-gradient(135deg,#2b170f 0,#7e3b1c 32%
 
 /* Minimal density pass. */
 body:before{display:none}.panel{box-shadow:0 12px 36px rgba(43,23,15,.16);gap:8px;grid-template-rows:auto auto auto auto minmax(0,1fr)}.top{min-height:52px;padding:8px 10px;box-shadow:none}.app-logo{width:82px}.title{font-size:18px}.workbench-links{grid-template-columns:repeat(2,170px);justify-content:start}.workbench-card{min-height:38px;height:38px;padding:0 12px}.workbench-card span span,.workbench-card i{display:none}.workbench-card b{font-size:14px}.stock-manager{padding:8px 10px}.premarket{grid-template-columns:210px minmax(0,1fr) 300px}.pm-card{box-shadow:none}.pm-score{font-size:22px}.pm-item{padding:6px 8px}.monitor-head{height:34px}.monitor-row{min-height:96px;padding:7px 10px}.live-chart{height:78px}.chart-note{display:none}.money-line{max-height:58px;padding:6px 8px}.live-signal{line-height:1.35}.signal-pill{padding:3px 7px}.op{display:grid}.op button{height:24px}.monitor-head,.monitor-row{grid-template-columns:148px 76px minmax(260px,.95fr) 62px 86px 132px minmax(200px,.78fr) 58px}.premarket .pm-card:nth-child(2){overflow:hidden}.settings-panel,.ai-panel{top:54px}
+
+/* Final console skin: lighter header, calmer red, compact logo. */
+button.primary,.workbench-card.primary-card{background:linear-gradient(135deg,#c72a1f,#8f1f16);border-color:#a92319;color:#fff;box-shadow:0 10px 24px rgba(143,31,22,.16)}
+.tag.active{background:linear-gradient(135deg,#7a2b18,#3b1810);border-color:#7a2b18}.op button.ai{background:#8f1f16;border-color:#8f1f16}.rank-dot.up{background:#c72a1f}.live-pos{color:#c72a1f}.signal-pill.hot{color:#c72a1f;background:#fff1ec}
+.top{min-height:68px;padding:10px 14px;background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,248,238,.86));color:#2b170f;border:1px solid #ead9bf;box-shadow:0 10px 30px rgba(151,79,18,.08)}
+.app-brand{gap:12px}.app-logo{width:54px;height:54px;object-fit:cover;object-position:left center;border-radius:14px;background:#fff;border:1px solid #f0dfc7;box-shadow:0 8px 18px rgba(151,79,18,.10)}.title{font-size:20px}.top .sub{color:#8a6b52}.top-actions button{height:34px;background:#fff;border-color:#ead9bf;color:#5a321f}.top-actions #status{height:30px;min-width:66px;background:#fff6e8;color:#9a5a18;border:1px solid #ead9bf}
+.workbench-links{grid-template-columns:repeat(2,180px);gap:10px}.workbench-card{height:42px;border-radius:13px;background:#fff;border-color:#ead9bf}.workbench-card.primary-card{background:linear-gradient(135deg,#c72a1f,#9d241a)}.workbench-card b{font-size:15px}.stock-manager{border-radius:14px;box-shadow:none}.pm-card,.live{box-shadow:none}
+.settings-panel{top:82px;width:min(560px,calc(100vw - 36px));max-height:calc(100vh - 108px);overflow:auto;padding:0;border-radius:14px;background:rgba(255,255,255,.98)}
+.settings-head{position:sticky;top:0;z-index:2;margin:0;padding:12px 16px;background:rgba(255,255,255,.96);border-bottom:1px solid #f0dfc7;backdrop-filter:blur(8px)}
+.settings-head button{height:34px;border-radius:10px}.settings-group{padding:10px 16px 12px;margin-top:0}.settings-title{margin-bottom:7px}.settings-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.settings-actions button{height:34px}.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.ai-config-grid input,.ai-config-grid select{height:34px;border-radius:10px}.settings-note{padding:0 16px 14px;font-size:11px}.settings-panel::-webkit-scrollbar{width:8px}.settings-panel::-webkit-scrollbar-thumb{background:#d8b98a;border:2px solid #fff6e8;border-radius:999px}
 </style>
 </head>
 <body>
@@ -4252,7 +4499,7 @@ async function loadRps(){
 }
 function renderThemes(themes){
   if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
-  $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
+  $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="muted">${esc(t.externalReason||'实时样本强弱')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
 }
 function renderFundFlow(flow){
   const series=flow.series||[],bars=flow.bars||[];
