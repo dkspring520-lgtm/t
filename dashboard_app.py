@@ -32,11 +32,14 @@ SETTINGS_PATH = BASE_DIR / "dashboard_settings.json"
 USER_DATA_DIR = BASE_DIR / "user_data"
 ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
 USERS_PATH = BASE_DIR / "commercial_users.json"
+SESSIONS_PATH = BASE_DIR / "commercial_sessions.json"
 LAST_GEMINI_ERROR = ""
 MARKET_CONTEXT_CACHE: dict = {"ts": 0.0, "data": {}}
 GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
 URGENT_NEWS_CACHE: dict[str, dict] = {}
 SESSIONS: dict[str, str] = {}
+SESSION_EXPIRES: dict[str, float] = {}
+SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 REQUEST_EMAIL: contextvars.ContextVar[str] = contextvars.ContextVar("request_email", default="")
 LOGIN_FAILURES: dict[str, dict] = {}
 MAX_LOGIN_FAILURES = 6
@@ -499,14 +502,75 @@ def clear_login_failures(key: str) -> None:
     LOGIN_FAILURES.pop(key, None)
 
 
+def load_sessions() -> None:
+    if SESSIONS:
+        return
+    try:
+        data = json.loads(SESSIONS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    now = time_mod.time()
+    changed = False
+    for token, item in (data.get("sessions") or {}).items():
+        email = str(item.get("email") or "").strip().lower()
+        expires = float(item.get("expires") or 0)
+        if re.fullmatch(r"[a-f0-9]{48}", str(token)) and email and expires > now:
+            SESSIONS[str(token)] = email
+            SESSION_EXPIRES[str(token)] = expires
+        else:
+            changed = True
+    if changed:
+        save_sessions()
+
+
+def save_sessions() -> None:
+    now = time_mod.time()
+    payload = {"sessions": {}}
+    for token, email in list(SESSIONS.items()):
+        expires = float(SESSION_EXPIRES.get(token) or 0)
+        if expires <= now:
+            SESSIONS.pop(token, None)
+            SESSION_EXPIRES.pop(token, None)
+            continue
+        payload["sessions"][token] = {"email": email, "expires": expires}
+    try:
+        SESSIONS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def create_session(email: str) -> str:
+    token = secrets.token_hex(24)
+    SESSIONS[token] = email
+    SESSION_EXPIRES[token] = time_mod.time() + SESSION_TTL_SECONDS
+    save_sessions()
+    return token
+
+
+def remove_session(token: str) -> None:
+    SESSIONS.pop(token, None)
+    SESSION_EXPIRES.pop(token, None)
+    save_sessions()
+
+
 def current_email(handler: Handler) -> str:
     cookie = handler.headers.get("Cookie", "")
     m = re.search(r"session=([a-f0-9]+)", cookie)
-    return SESSIONS.get(m.group(1), "") if m else ""
+    if not m:
+        return ""
+    load_sessions()
+    token = m.group(1)
+    email = SESSIONS.get(token, "")
+    if not email:
+        return ""
+    if SESSION_EXPIRES.get(token, 0) <= time_mod.time():
+        remove_session(token)
+        return ""
+    return email
 
 
 def set_session_cookie(handler: Handler, token: str) -> None:
-    handler.send_header("Set-Cookie", f"session={token}; Path=/; HttpOnly; SameSite=Lax")
+    handler.send_header("Set-Cookie", f"session={token}; Path=/; Max-Age={SESSION_TTL_SECONDS}; HttpOnly; SameSite=Lax")
 
 
 def register_payload(handler: Handler, data: dict) -> dict | None:
@@ -533,8 +597,7 @@ def register_payload(handler: Handler, data: dict) -> dict | None:
         "aiReviewLimit": 5,
     }
     save_users(store)
-    token = secrets.token_hex(24)
-    SESSIONS[token] = email
+    token = create_session(email)
     handler.send_response(200)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     set_session_cookie(handler, token)
@@ -560,8 +623,7 @@ def login_payload(handler: Handler, data: dict) -> dict | None:
         return {"ok": False, "message": "邮箱或密码不正确。"}
     clear_login_failures(throttle_key)
     maybe_upgrade_password(password, user, store)
-    token = secrets.token_hex(24)
-    SESSIONS[token] = email
+    token = create_session(email)
     handler.send_response(200)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     set_session_cookie(handler, token)
@@ -576,7 +638,7 @@ def logout_payload(handler: Handler) -> None:
     cookie = handler.headers.get("Cookie", "")
     m = re.search(r"session=([a-f0-9]+)", cookie)
     if m:
-        SESSIONS.pop(m.group(1), None)
+        remove_session(m.group(1))
     handler.send_response(200)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
@@ -2913,7 +2975,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}button{height:36px;bo
 <script>
 const state={module:'strategy',strategySource:'使用官方默认策略',risk:'稳健',maxDaily:'1',buyDev:'-1.30',sellDev:'1.50',takeProfit:'0.75',aiReview:true,secondConfirm:true,pathGate:true,alert:'强提醒',plan:'专业版'};
 const modules={
-strategy:{title:'自定义策略',html:`<div class="form"><div class="field"><label>策略来源</label><select id="strategySource" onchange="setVal('strategySource',this.value)"><option>使用官方默认策略</option><option>复制默认后自定义</option><option>导入个人策略</option></select></div><div class="field"><label>策略风格</label><select id="risk" onchange="setVal('risk',this.value)"><option>稳健</option><option>平衡</option><option>激进</option></select></div><div class="field"><label>每日最多交易</label><input id="maxDaily" type="number" min="0" max="5" value="1" oninput="setVal('maxDaily',this.value)"></div><div class="field"><label>正T低吸阈值</label><input id="buyDev" type="number" step="0.05" value="-1.30" oninput="setVal('buyDev',this.value)"></div><div class="field"><label>反T高抛阈值</label><input id="sellDev" type="number" step="0.05" value="1.50" oninput="setVal('sellDev',this.value)"></div><div class="field"><label>止盈目标%</label><input id="takeProfit" type="number" step="0.05" value="0.75" oninput="setVal('takeProfit',this.value)"></div><div class="field"><label>二次确认</label><div class="toggle"><input id="secondConfirm" type="checkbox" checked onchange="setBool('secondConfirm',this.checked)">低点回踩不破/高点反抽不过</div></div><div class="field"><label>路径预判</label><div class="toggle"><input id="pathGate" type="checkbox" checked onchange="setBool('pathGate',this.checked)">先判断低开修复/冲高回落/单边弱</div></div></div><p class="warn">默认使用官方策略。用户自定义只改变提醒和模拟参数，不承诺收益，保存前必须通过模拟测试。</p>`},
+strategy:{title:'自定义策略',html:`<div class="form"><div class="field"><label>策略来源</label><select id="strategySource" onchange="setVal('strategySource',this.value)"><option>使用官方默认策略</option><option>复制默认后自定义</option><option>使用控制台设置</option></select></div><div class="field"><label>策略风格</label><select id="risk" onchange="setVal('risk',this.value)"><option>稳健</option><option>平衡</option><option>激进</option></select></div><div class="field"><label>每日最多交易</label><input id="maxDaily" type="number" min="0" max="5" value="1" oninput="setVal('maxDaily',this.value)"></div><div class="field"><label>正T低吸阈值</label><input id="buyDev" type="number" step="0.05" value="-1.30" oninput="setVal('buyDev',this.value)"></div><div class="field"><label>反T高抛阈值</label><input id="sellDev" type="number" step="0.05" value="1.50" oninput="setVal('sellDev',this.value)"></div><div class="field"><label>止盈目标%</label><input id="takeProfit" type="number" step="0.05" value="0.75" oninput="setVal('takeProfit',this.value)"></div><div class="field"><label>二次确认</label><div class="toggle"><input id="secondConfirm" type="checkbox" checked onchange="setBool('secondConfirm',this.checked)">低点回踩不破/高点反抽不过</div></div><div class="field"><label>路径预判</label><div class="toggle"><input id="pathGate" type="checkbox" checked onchange="setBool('pathGate',this.checked)">先判断低开修复/冲高回落/单边弱</div></div></div><p class="warn">当前正式生效入口在控制台“设置”：低吸阈值、高抛阈值、提醒次数、冷却和策略说明会同步给模拟测试与实时监控。</p>`},
 ai:{title:'AI集中复核',html:`<div class="form"><div class="field"><label>AI复核</label><div class="toggle"><input id="aiReview" type="checkbox" checked onchange="setBool('aiReview',this.checked)">买卖点出现后先让AI讨论是否最优</div></div><div class="field"><label>复核重点</label><select><option>是否追高/接刀</option><option>大方向是否一致</option><option>价格带是否合理</option></select></div><div class="field"><label>输出格式</label><select><option>一句话结论 + 价格</option><option>五角色短评</option><option>详细复盘</option></select></div><div class="field"><label>模型策略</label><select><option>Gemini优先，本地兜底</option><option>本地规则优先</option><option>人工确认</option></select></div></div>`},
 alert:{title:'提醒规则',html:`<div class="form"><div class="field"><label>提醒强度</label><select id="alert" onchange="setVal('alert',this.value)"><option>强提醒</option><option>普通提醒</option><option>只记录不提醒</option></select></div><div class="field"><label>单股每日提醒</label><select><option>买卖各1次</option><option>最多2次</option><option>不限但限频</option></select></div><div class="field"><label>推送渠道</label><select><option>微信ClawBot</option><option>浏览器声音</option><option>短信/邮件预留</option></select></div><div class="field"><label>提醒内容</label><select><option>股票名 + 价格带 + 原因</option><option>简约一句话</option><option>详细角色分析</option></select></div></div>`},
 member:{title:'会员能力',html:`<div class="cards"><div class="card"><h3>体验版</h3><p>免费试用，基础单股监控、盘前风向、模拟体验。</p></div><div class="card"><h3>月卡</h3><p>¥9.9/月，多股监控、强提醒、AI买卖点复核。</p></div><div class="card"><h3>永久版</h3><p>¥99，核心功能长期使用，策略模板持续更新。</p></div></div><p class="warn">所有页面只做研究辅助，不承诺收益。</p>`}
@@ -3114,7 +3176,8 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
     <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
-    <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="syncCards()" /></label>
+    <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
+    <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
@@ -3146,12 +3209,13 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
   </section>
 </div>
 <script>
-const $=id=>document.getElementById(id);let tradeManual=false,settingsTimer=null;
-window.addEventListener('DOMContentLoaded',()=>{loadSettings();loadHistory();restoreLatestSim();});
+const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false,settingsTimer=null;
+window.addEventListener('DOMContentLoaded',()=>{loadSettings();syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
 function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();saveSettings();try{const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
+async function syncWatchlistStocks(force){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();const stocks=(data.stocks||[]).map(s=>s.code||String(s.symbol||'').slice(2)).filter(Boolean);if(!stocks.length)return;if(force||(!$('stocksInput').value.trim()&&!stocksManual)){$('stocksInput').value=stocks.join(',');$('sampleInput').value=Math.min(Math.max(stocks.length,1),30);stocksManual=false;syncCards();$('status').textContent='已同步监控股票：'+stocks.join('、')}}catch(e){if(force)$('status').textContent='同步监控股票失败：'+(e.message||e)}}
 let progressTimer=null,progressStep=0;
 function startProgress(){progressStep=0;$('progress').classList.add('on');markProgress(0);clearInterval(progressTimer);progressTimer=setInterval(()=>{progressStep=Math.min(progressStep+1,3);markProgress(progressStep)},1800)}
 function markProgress(step){progressStep=Math.max(progressStep,step);document.querySelectorAll('#progress .step').forEach((el,i)=>{el.classList.toggle('done',i<progressStep);el.classList.toggle('active',i===progressStep)})}
