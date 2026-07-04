@@ -3497,9 +3497,9 @@ LANDING_HTML = r"""<!doctype html>
   <a class="hotspot hs-price" href="#pricing">价格</a>
   <a class="hotspot hs-help" href="/account">帮助</a>
   <a class="hotspot hs-about" href="/admin">关于我们</a>
-  <a class="hotspot hs-login" href="/login">登录 / 注册</a>
+  <a id="heroLoginLink" class="hotspot hs-login" href="/login">登录 / 注册</a>
   <a class="hotspot hs-cta" href="/app">立即体验</a>
-  <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
+  <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a id="mobileLoginLink" class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
 </section>
 <section id="features" class="band">
   <h2 class="section-title">一图看懂做T神器</h2>
@@ -3520,8 +3520,23 @@ LANDING_HTML = r"""<!doctype html>
     <div class="price"><h3>永久版</h3><div class="money">¥99</div><ul class="list"><li>包含月卡核心功能</li><li>永久使用当前版本</li><li>策略模板持续更新</li><li>优先体验新增功能</li></ul></div>
   </div>
 </section>
-<section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/app">进入控制台</a> <a class="btn" href="/register">注册体验账号</a></div></section>
+<section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/app">进入控制台</a> <a id="ctaRegisterLink" class="btn" href="/register">注册体验账号</a></div></section>
 <footer class="footer">做T神器 · A股智能交易助手 · 策略研究工具，不承诺收益。</footer>
+<script>
+async function syncLandingAuth(){
+  try{
+    const data=await fetch('/api/account',{cache:'no-store'}).then(r=>r.json());
+    if(!data.loggedIn)return;
+    const login=document.getElementById('heroLoginLink');
+    const mobile=document.getElementById('mobileLoginLink');
+    const cta=document.getElementById('ctaRegisterLink');
+    if(login){login.href='/account';login.textContent='会员中心'}
+    if(mobile){mobile.href='/account';mobile.textContent='会员中心'}
+    if(cta){cta.href='/account';cta.textContent='会员中心'}
+  }catch(e){}
+}
+document.addEventListener('DOMContentLoaded',syncLandingAuth);
+</script>
 </body>
 </html>"""
 
