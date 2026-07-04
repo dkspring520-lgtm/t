@@ -2039,13 +2039,21 @@ def rps_rank_matrix_payload(paths: list[dict], themes: list[dict], external: dic
     this without changing the UI shape.
     """
     external = external or {}
+    def mainline_name(name: str) -> str:
+        name = str(name or "").split("/")[0]
+        if name in {"黄金铜油", "黄金", "铜矿", "有色金属"}:
+            return "资源周期"
+        if name == "AI科技":
+            return "算力"
+        return name
+
     base_names = [str(item.get("name") or "") for item in paths if item.get("name")]
     extras = ["半导体", "通信设备", "机器人", "创新药", "电力", "银行", "证券", "军工", "低空经济", "消费电子", "煤炭", "航运", "数据中心", "有色金属"]
     if external.get("hasFreshFactors") and not external.get("resourceWeak"):
-        extras.extend(["黄金", "铜矿"])
+        extras.extend(["资源周期"])
     names = []
     for name in base_names + extras:
-        short = name.split("/")[0].replace("黄金铜油", "黄金").replace("AI科技", "算力")
+        short = mainline_name(name)
         if short and short not in names:
             names.append(short)
     names = names[:20]
@@ -2058,14 +2066,14 @@ def rps_rank_matrix_payload(paths: list[dict], themes: list[dict], external: dic
         d -= timedelta(days=1)
     dates.reverse()
     heat_map = {str(item.get("name") or ""): float(item.get("heat") or 0) for item in themes}
-    path_score = {str(item.get("name") or "").split("/")[0].replace("黄金铜油", "黄金").replace("AI科技", "算力"): float(item.get("score") or 0) for item in paths}
+    path_score = {mainline_name(str(item.get("name") or "")): float(item.get("score") or 0) for item in paths}
     columns = []
     for col_idx, date_text in enumerate(dates):
         scored = []
         for idx, name in enumerate(names):
             seed = sum(ord(ch) for ch in (name + date_text))
             base = path_score.get(name, 42 + (seed % 18))
-            if name in {"黄金", "铜矿", "有色金属"} and external.get("resourceWeak"):
+            if name == "资源周期" and external.get("resourceWeak"):
                 base = min(base, 48)
             heat_bonus = max(0, heat_map.get(name, 0) - 50) * 0.16
             drift = ((seed + col_idx * 7) % 19) - 9
@@ -4160,6 +4168,24 @@ button.primary,.workbench-card.primary-card{background:linear-gradient(135deg,#c
 .live-chart{height:184px;border-radius:12px;background:#fff;box-shadow:inset 0 0 0 1px rgba(240,223,199,.85)}
 .chart-note{display:flex;gap:10px;margin-top:7px;font-size:11px}.live-price{font-size:30px;line-height:1.05}.live-name{font-size:16px}.live-code{display:block;margin:2px 0 0 18px}.signal-pill{border-radius:10px}.money-line{max-height:108px;background:#fff7ea}.op{display:grid;gap:7px}.op button{width:100%;height:30px}
 @media(max-width:1050px){.monitor-table{min-width:980px}.monitor-row{grid-template-columns:160px 500px 78px 130px 170px 54px}.live-chart{height:170px}}
+
+/* Full console rebuild: left navigation, clean workspace, persistent settings rail. */
+html,body{background:#f5f7fb;color:#111827;overflow:hidden}
+.shell{padding:0;background:#eef2f7;align-items:stretch}
+.panel{width:100vw;height:100vh;border:0;border-radius:0;padding:18px;gap:18px;background:#f7f8fb;box-shadow:none;display:grid;grid-template-columns:220px minmax(760px,1fr) 360px;grid-template-rows:72px 64px 118px minmax(0,1fr) 24px;grid-template-areas:"nav top settings" "nav workbench settings" "nav stocks settings" "nav live settings" "nav foot settings";overflow:hidden}
+.side-nav{grid-area:nav;display:flex;flex-direction:column;gap:22px;padding:20px 16px;background:rgba(255,255,255,.86);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}
+.side-brand{display:flex;gap:12px;align-items:center}.side-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.side-brand b{display:block;font-size:18px}.side-brand span{display:block;color:#7b8494;font-size:12px}
+.side-menu{display:grid;gap:10px}.side-menu button{height:46px;border-radius:10px;justify-content:flex-start;text-align:left;background:transparent;border:0;box-shadow:none;color:#5c6677;padding:0 14px}.side-menu button.active{background:#111827;color:#fff}.side-menu small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}
+.side-bottom{margin-top:auto;display:grid;gap:10px;border-top:1px solid #edf0f5;padding-top:16px}.side-bottom button{height:34px;background:transparent;border:0;box-shadow:none;text-align:left;color:#5c6677}.side-user{display:flex;gap:10px;align-items:center;margin-top:12px}.side-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444)}.side-user b{display:block;font-size:13px}.side-user span{display:block;color:#8b95a5;font-size:11px}
+.top{grid-area:top;min-height:0;padding:0;background:transparent;border:0;box-shadow:none;border-radius:0}.top .app-brand{display:block}.top .app-logo{display:none}.title{font-size:24px;color:#111827}.top .sub{font-size:13px;color:#768197}.top-actions{margin-left:auto}.top-actions button{height:38px;border-radius:10px;background:#fff;border-color:#e3e8f0;color:#111827}.top-actions #settingsBtn{background:#111827;color:#fff;border-color:#111827}.top-actions #status{height:38px;background:#fff;color:#16a34a;border:0}
+.workbench-links{grid-area:workbench;max-width:none;height:100%;display:flex;align-items:center;gap:10px;padding:0 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}
+.workbench-card,.workbench-card.primary-card{width:auto;min-width:128px;height:38px;padding:0 16px;background:#f8fafc;border:1px solid #e3e8f0;color:#111827;border-radius:10px}.workbench-card.primary-card:before{display:none}.workbench-card.primary-card{background:#111827;color:#fff;border-color:#111827}.workbench-card b{font-size:14px}.workbench-card span span,.workbench-card i{display:none}
+.stock-manager{grid-area:stocks;display:grid;grid-template-columns:auto minmax(0,1fr) 240px 70px;align-items:center;min-height:0;padding:0 14px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}.stock-manager-title{font-size:16px;color:#111827}.watch-tags{gap:8px}.tag{height:30px;border-radius:999px;background:#f1f5f9;color:#334155;border:1px solid #e2e8f0}.tag.active{background:#111827;color:#fff;border-color:#111827}.stock-manager input{height:36px;border-color:#e2e8f0;border-radius:10px}
+.premarket{grid-area:stocks;align-self:end;transform:translateY(128px);display:grid;grid-template-columns:280px minmax(0,1fr) 320px;gap:10px;pointer-events:auto}.pm-card{border-radius:14px;border:1px solid #e7ebf2;background:#fff;box-shadow:none;padding:14px}.pm-list{grid-template-columns:repeat(6,minmax(110px,1fr))}.pm-item{background:#f8fafc;border:1px solid #e7ebf2}.pm-title{color:#64748b}.pm-score{font-size:28px;color:#111827}.pm-reasons{color:#64748b}
+.live{grid-area:live;margin-top:136px;padding:0;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 16px 46px rgba(17,24,39,.05);overflow:auto}.monitor-table{display:block;min-width:1040px}.monitor-head{position:sticky;top:0;z-index:3;height:50px;display:grid;grid-template-columns:180px 100px 120px minmax(260px,1fr) 120px 120px 110px 92px;padding:0 22px;background:#fbfcfe;border-bottom:1px solid #e7ebf2;color:#7b8494;font-size:12px}.monitor-row{display:grid;grid-template-columns:180px 100px 120px minmax(260px,1fr) 120px 120px 110px 92px;grid-template-areas:none;min-height:112px;padding:16px 22px;border:0;border-bottom:1px solid #eef2f6;border-radius:0;background:#fff;box-shadow:none;gap:18px}.monitor-row:hover{background:#fbfcfe}.monitor-row>div{grid-area:auto!important;text-align:left!important}.live-chart{height:70px;border-radius:0;background:transparent;box-shadow:none}.chart-note{display:none}.live-price{font-size:18px}.live-name{font-size:15px}.live-code{display:block;margin:2px 0 0 18px}.signal-pill{background:#fff7ed;color:#c2410c;border-radius:8px}.money-line{max-height:70px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;color:#7c2d12}.op{display:flex;gap:8px}.op button{height:34px;border-radius:10px}.op button.ai{background:#991b1b;border-color:#991b1b}
+.settings-panel,.settings-panel[hidden]{grid-area:settings;position:static;display:block;width:auto;max-height:none;overflow:auto;padding:0;background:#fff;border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.settings-head{height:70px;padding:0 20px;border-bottom:1px solid #eef2f6;background:#fff}.settings-head span{font-size:20px}.settings-head button{background:#fff;border:0;font-size:0}.settings-head button:after{content:"×";font-size:24px;color:#334155}.settings-group{padding:18px 20px;border-top:0}.settings-title{font-size:18px;color:#111827;margin:0 0 14px}.ai-config-grid{gap:14px}.ai-config-grid label{color:#64748b}.ai-config-grid input,.ai-config-grid select,.ai-config-grid textarea{height:38px;border-color:#e2e8f0;border-radius:9px;background:#fbfcfe}.settings-actions button{height:38px;border-radius:10px;background:#111827;color:#fff}.settings-actions button:nth-child(2n){background:#fff;color:#111827;border-color:#e2e8f0}.settings-note{padding:0 20px 18px;color:#8b95a5}
+.bar{grid-area:foot;height:3px;background:#22c55e}.bar:not(.on){opacity:.2}.bottom,.signal-toasts{display:none}
+@media(max-width:1180px){html,body{overflow:auto}.panel{width:100%;height:auto;min-height:100vh;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "workbench" "stocks" "live" "settings";overflow:visible}.side-nav{display:none}.premarket{position:static;transform:none;grid-area:stocks;margin-top:10px;grid-template-columns:1fr}.live{margin-top:0}.settings-panel,.settings-panel[hidden]{max-height:none}.monitor-table{min-width:980px}}
 .hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
 @media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
 </style>
@@ -4315,9 +4341,41 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
 
 /* Compact simulation layout. */
 body{background:#fffaf4}.page{padding:12px;grid-template-rows:auto auto auto minmax(0,1fr);gap:8px}.top,.controls,.panel,.metric{border-radius:12px;box-shadow:none;border-color:#ead9bf}.top{height:50px;padding:0 12px}.title{font-size:18px}.top .sub{display:none}button{height:30px;border-radius:8px;box-shadow:none}.controls{padding:8px;gap:6px;align-items:center}.field span{display:none}.field input{width:112px;height:30px;border-radius:8px}.field.wide input{width:190px}.metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.metric{padding:7px 10px}.metric .k{font-size:10px}.metric .v{font-size:16px}.progress{display:none!important}.layout{gap:8px}.head{height:34px;padding:0 12px}.sim-head{height:32px}.sim-row{min-height:56px;padding:6px 12px}.chart{height:42px}.side{max-height:126px;min-height:108px}.content{padding:8px 12px;line-height:1.45}.run-item{padding:4px 0}.sim-head,.sim-row{grid-template-columns:170px 90px minmax(260px,1fr) 70px 110px minmax(210px,.7fr)}@media(max-width:1050px){.top{height:auto;padding:10px;gap:8px}.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.field input,.field.wide input{width:100%}.metrics{grid-template-columns:repeat(2,1fr)}}
+
+/* Simulation rebuild: same clean cockpit as the console reference. */
+body{background:#f5f7fb;color:#111827;overflow:hidden}
+.sim-shell{height:100vh;display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px;padding:16px;background:#f4f6fa}
+.side-nav{display:flex;flex-direction:column;gap:22px;padding:20px 16px;background:rgba(255,255,255,.9);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}
+.side-brand{display:flex;gap:12px;align-items:center}.side-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.side-brand b{display:block;font-size:18px}.side-brand span{display:block;color:#7b8494;font-size:12px}
+.side-menu{display:grid;gap:10px}.side-menu button{height:46px;border:0;border-radius:10px;background:transparent;box-shadow:none;color:#5c6677;text-align:left;padding:0 14px}.side-menu button.active{background:#111827;color:#fff}.side-menu small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}
+.side-bottom{margin-top:auto;display:grid;gap:10px;border-top:1px solid #edf0f5;padding-top:16px}.side-bottom button{height:34px;border:0;background:transparent;box-shadow:none;text-align:left;color:#5c6677}.side-user{display:flex;gap:10px;align-items:center;margin-top:12px}.side-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444)}.side-user b{display:block;font-size:13px}.side-user span{display:block;color:#8b95a5;font-size:11px}
+.page{min-height:0;height:100%;padding:14px 4px 8px;grid-template-rows:60px 84px auto minmax(0,1fr);gap:18px;background:transparent}
+.top{height:60px;padding:0;background:transparent;border:0;box-shadow:none}.title{font-size:26px;color:#111827}.top .sub{display:block;color:#64748b;font-size:14px}.top button{height:42px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;color:#111827;box-shadow:none}.top button:first-child{margin-right:8px}
+.controls{min-height:84px;padding:14px 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);display:flex;gap:12px;align-items:center;flex-wrap:nowrap;overflow:auto}.field span{display:block;position:static;margin-bottom:4px;font-size:12px;color:#7b8494}.field input,.field.wide input{height:40px;width:118px;border:1px solid #e2e8f0;border-radius:10px;background:#fbfcfe;padding:0 12px;color:#111827;font-weight:800}.field.wide input{width:170px}button{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}button.primary{background:#111827;border-color:#111827;color:#fff}
+.bar{height:3px;background:#22c55e;border-radius:99px}.bar:not(.on){opacity:.2}.progress{display:none!important}
+.metrics{grid-template-columns:repeat(6,minmax(140px,1fr));gap:14px}.metric{min-height:112px;display:flex;flex-direction:column;justify-content:center;padding:18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}.metric .k{font-size:13px;color:#7b8494}.metric .v{font-size:24px;color:#111827}.metric:nth-child(5) .v{color:#10b981}
+.layout{grid-template-rows:minmax(0,1fr) 190px;gap:18px}.panel{border:1px solid #e7ebf2;border-radius:14px;background:#fff;box-shadow:0 12px 34px rgba(17,24,39,.04)}.head{height:54px;padding:0 22px;border-bottom:1px solid #eef2f6;color:#111827}.badge{background:#f1f5f9;color:#475569;border-radius:999px}
+.sim-table{min-width:1080px}.sim-head,.sim-row{grid-template-columns:180px 110px minmax(320px,1fr) 110px 130px minmax(280px,.8fr);gap:18px}.sim-head{height:48px;padding:0 22px;background:#fbfcfe;border-bottom:1px solid #e7ebf2;color:#7b8494}.sim-row{min-height:96px;padding:14px 22px;border-bottom:1px solid #eef2f6}.stock{font-size:15px}.code{display:block;margin:2px 0 0;color:#64748b}.chart{height:70px}.status{display:inline-flex;padding:6px 10px;border-radius:8px;background:#fff1f2;color:#e11d48}.pos{color:#10b981!important}.neg{color:#ef4444!important}.reason{color:#64748b;font-size:13px}
+.side{grid-template-columns:1fr 1.1fr;max-height:none;min-height:0}.content{padding:16px 22px;color:#334155;line-height:1.65}.run-item{padding:8px 0;border-bottom:1px solid #eef2f6}
+@media(max-width:1180px){body{overflow:auto}.sim-shell{height:auto;grid-template-columns:1fr}.side-nav{display:none}.page{height:auto}.controls{flex-wrap:wrap}.metrics{grid-template-columns:repeat(2,1fr)}.layout{grid-template-rows:auto auto}.side{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
+<div class="sim-shell">
+  <aside class="side-nav">
+    <div class="side-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+    <div class="side-menu">
+      <button class="active" onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
+      <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
+    </div>
+    <div class="side-bottom">
+      <button onclick="location.href='/app'">系统设置</button>
+      <button onclick="location.href='/app'">API 管理</button>
+      <button onclick="location.href='/commercial'">策略配置</button>
+      <button onclick="loadHistory()">日志中心</button>
+      <div class="side-user"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
+    </div>
+  </aside>
 <div class="page">
   <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控同步、日内曲线、买卖点、历史缓存压力测试</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
   <div class="controls">
@@ -4483,7 +4541,7 @@ RPS_HTML = r"""<!doctype html>
 <main class="shell">
   <div class="top">
     <div><div class="title">RPS主线雷达</div><div class="sub">大盘资金动向、板块热度、相对强度排名、龙虎榜观察位</div></div>
-    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" onclick="loadRps()">刷新主线</button></div>
+    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" id="rpsRefreshBtn" onclick="loadRps()">刷新主线</button></div>
   </div>
   <div class="cards">
     <div class="card"><span>扫描样本</span><b id="sample">--</b></div>
@@ -4525,14 +4583,16 @@ const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
 function cls(v){const n=Number(v);return n>0?'up':n<0?'down':''}
 async function loadRps(){
+  const btn=$('rpsRefreshBtn');if(btn){btn.disabled=true;btn.textContent='刷新中...'}
   $('rows').innerHTML='<tr><td colspan="7" class="empty">正在扫描主线...</td></tr>';
   try{
-    const data=await (await fetch('/api/rps?limit=10',{cache:'no-store'})).json();
+    const data=await (await fetch('/api/rps?limit=10&_='+Date.now(),{cache:'no-store'})).json();
     if(!data.ok)throw new Error(data.message||'RPS读取失败');
     const m=data.market||{};
     $('sample').textContent=m.sample??'--';$('up').textContent=m.up??'--';$('down').textContent=m.down??'--';$('leader').textContent=m.leader||'--';$('heat').textContent=(m.leaderHeat??'--')+'分';$('updated').textContent=data.updatedAt||'';
     renderFundFlow(data.fundFlow||{});renderRankMatrix(data.rankMatrix||{});renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
   }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
+  finally{if(btn){btn.disabled=false;btn.textContent='刷新主线'}}
 }
 function renderThemes(themes){
   if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
