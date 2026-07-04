@@ -4149,6 +4149,17 @@ button.primary,.workbench-card.primary-card{background:linear-gradient(135deg,#c
 .chart-note{display:flex;font-size:11px;margin-top:6px}
 .live-price{font-size:24px}.kv b{font-size:16px}.money-line{max-height:94px;font-size:11px;line-height:1.45}.live-signal{font-size:11px;line-height:1.45}
 @media(max-width:1050px){.monitor-table{min-width:1320px}.monitor-head,.monitor-row{grid-template-columns:150px 78px 560px 66px 100px 140px 150px 58px}.live-chart{height:142px}}
+
+/* Trading-card monitor layout: stop reading like a spreadsheet. */
+.live{padding:10px;background:#fffdf8}
+.monitor-table{min-width:0;display:grid;gap:10px;width:100%}
+.monitor-head{display:none}
+.monitor-row{display:grid;grid-template-columns:180px minmax(520px,1fr) 86px 150px 190px 56px;grid-template-areas:"stock chart change avg signal op" "price chart change avg agents op";gap:12px;min-height:222px;padding:14px;border:1px solid #ead9bf;border-radius:14px;background:linear-gradient(180deg,#fff,#fffaf3);box-shadow:0 10px 26px rgba(151,79,18,.06);align-items:center}
+.monitor-row:hover{background:#fff9ef}
+.monitor-row>div:nth-child(1){grid-area:stock;align-self:end}.monitor-row>div:nth-child(2){grid-area:price;align-self:start}.monitor-row>div:nth-child(3){grid-area:chart}.monitor-row>div:nth-child(4){grid-area:change;text-align:center;font-size:15px}.monitor-row>div:nth-child(5){grid-area:avg;text-align:center}.monitor-row>div:nth-child(6){grid-area:signal}.monitor-row>div:nth-child(7){grid-area:agents}.monitor-row>div:nth-child(8){grid-area:op}
+.live-chart{height:184px;border-radius:12px;background:#fff;box-shadow:inset 0 0 0 1px rgba(240,223,199,.85)}
+.chart-note{display:flex;gap:10px;margin-top:7px;font-size:11px}.live-price{font-size:30px;line-height:1.05}.live-name{font-size:16px}.live-code{display:block;margin:2px 0 0 18px}.signal-pill{border-radius:10px}.money-line{max-height:108px;background:#fff7ea}.op{display:grid;gap:7px}.op button{width:100%;height:30px}
+@media(max-width:1050px){.monitor-table{min-width:980px}.monitor-row{grid-template-columns:160px 500px 78px 130px 170px 54px}.live-chart{height:170px}}
 .hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
 @media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
 </style>
