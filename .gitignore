@@ -27,9 +27,12 @@ global_events_seen.json
 
 # Local user/account/config data
 commercial_users.json
+commercial_sessions.json
+activation_codes.json
 dashboard_settings.json
 monitor_watchlist.json
 runtime_vendor_config.json
+user_data/
 *.env
 1.env
 
