@@ -4138,6 +4138,17 @@ button.primary,.workbench-card.primary-card{background:linear-gradient(135deg,#c
 .stock-manager{min-height:44px;padding:7px 10px}.premarket{grid-template-columns:220px minmax(0,1fr) 320px}.pm-card{min-height:122px}.live{border-radius:12px}
 .settings-panel{top:76px;right:14px;width:min(500px,calc(100vw - 32px));max-height:calc(100vh - 104px)}
 .settings-actions button{height:32px}.ai-config-grid input,.ai-config-grid select{height:32px}.settings-group{padding:9px 14px 11px}.settings-head{padding:10px 14px}
+
+/* Intraday structure is the main read: give the chart the room, not the side notes. */
+.live{overflow:auto}
+.monitor-table{min-width:1360px}
+.monitor-head,.monitor-row{grid-template-columns:168px 88px minmax(600px,1.8fr) 70px 108px 150px minmax(150px,.5fr) 58px;gap:12px}
+.monitor-head{height:36px}
+.monitor-row{min-height:176px;padding:12px 14px;align-items:center}
+.live-chart{height:152px;border-radius:12px;background:linear-gradient(180deg,#fff,#fff8ef);box-shadow:inset 0 0 0 1px rgba(240,223,199,.72)}
+.chart-note{display:flex;font-size:11px;margin-top:6px}
+.live-price{font-size:24px}.kv b{font-size:16px}.money-line{max-height:94px;font-size:11px;line-height:1.45}.live-signal{font-size:11px;line-height:1.45}
+@media(max-width:1050px){.monitor-table{min-width:1320px}.monitor-head,.monitor-row{grid-template-columns:150px 78px 560px 66px 100px 140px 150px 58px}.live-chart{height:142px}}
 .hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
 @media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
 </style>
