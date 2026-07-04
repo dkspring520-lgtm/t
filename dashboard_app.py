@@ -84,11 +84,11 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/assets/"):
             self._send_asset(path)
             return
-        if path in {"/", "/index.html"}:
-            self._send_html(HTML)
-            return
-        if path == "/landing":
+        if path in {"/", "/index.html", "/landing"}:
             self._send_html(LANDING_HTML)
+            return
+        if path == "/app":
+            self._send_html(HTML)
             return
         if path == "/commercial":
             self._send_html(COMMERCIAL_HTML)
@@ -219,12 +219,12 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _requires_login(self, path: str) -> bool:
-        public_paths = {"/landing", "/login", "/register", "/account", "/api/account", "/api/login", "/api/register", "/api/logout", "/api/status"}
+        public_paths = {"/", "/index.html", "/landing", "/login", "/register", "/account", "/api/account", "/api/login", "/api/register", "/api/logout", "/api/status"}
         if path in public_paths:
             return False
         if path.startswith("/assets/"):
             return False
-        return path in {"/", "/index.html", "/commercial", "/research", "/longhubang", "/rps", "/simulation", "/admin", "/recharge"} or path.startswith("/api/")
+        return path in {"/app", "/commercial", "/research", "/longhubang", "/rps", "/simulation", "/admin", "/recharge"} or path.startswith("/api/")
 
     def _redirect(self, location: str) -> None:
         self.send_response(302)
@@ -3491,15 +3491,15 @@ LANDING_HTML = r"""<!doctype html>
 <body>
 <section class="hero-image" aria-label="做T神器首页首屏">
   <img src="/assets/home-hero.png" alt="做T神器 A股智能交易助手">
-  <a class="hotspot hs-home" href="/landing">首页</a>
+  <a class="hotspot hs-home" href="/">首页</a>
   <a class="hotspot hs-features" href="#features">功能</a>
   <a class="hotspot hs-strategy" href="/commercial">策略</a>
   <a class="hotspot hs-price" href="#pricing">价格</a>
   <a class="hotspot hs-help" href="/account">帮助</a>
   <a class="hotspot hs-about" href="/admin">关于我们</a>
   <a class="hotspot hs-login" href="/login">登录 / 注册</a>
-  <a class="hotspot hs-cta" href="/">立即体验</a>
-  <div class="mobile-actions"><a class="btn primary" href="/">立即体验</a><a class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
+  <a class="hotspot hs-cta" href="/app">立即体验</a>
+  <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
 </section>
 <section id="features" class="band">
   <h2 class="section-title">一图看懂做T神器</h2>
@@ -3520,7 +3520,7 @@ LANDING_HTML = r"""<!doctype html>
     <div class="price"><h3>永久版</h3><div class="money">¥99</div><ul class="list"><li>包含月卡核心功能</li><li>永久使用当前版本</li><li>策略模板持续更新</li><li>优先体验新增功能</li></ul></div>
   </div>
 </section>
-<section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/">进入控制台</a> <a class="btn" href="/register">注册体验账号</a></div></section>
+<section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/app">进入控制台</a> <a class="btn" href="/register">注册体验账号</a></div></section>
 <footer class="footer">做T神器 · A股智能交易助手 · 策略研究工具，不承诺收益。</footer>
 </body>
 </html>"""
@@ -3603,7 +3603,7 @@ ACCOUNT_HTML = r"""<!doctype html>
 <main class="shell">
   <div class="top">
     <div><div class="brand">会员中心</div><div class="sub">本地内测账号，后续可升级为云端商业版。</div></div>
-    <div class="actions"><a href="/"><button>控制台</button></a><a href="/recharge"><button class="primary">激活码充值</button></a><a href="/commercial"><button>功能中心</button></a><a href="/landing"><button>商业页</button></a></div>
+    <div class="actions"><a href="/app"><button>控制台</button></a><a href="/recharge"><button class="primary">激活码充值</button></a><a href="/commercial"><button>功能中心</button></a><a href="/"><button>商业页</button></a></div>
   </div>
   <section id="root" class="panel"><div class="empty">正在读取账号状态...</div></section>
 </main>
@@ -3620,7 +3620,7 @@ async function loadAccount(){
     <div class="card"><h2>${a.nickname||'用户'}，欢迎回来</h2><div class="sub">当前套餐：${a.plan||'体验版'}。这是本地商业化原型，正式上线后会接支付、数据库和云端权限。</div></div>
     <div class="grid">
       <div class="card"><h3>账号信息</h3><div class="kv"><div>邮箱</div><div>${a.email||'--'}</div><div>昵称</div><div>${a.nickname||'--'}</div><div>套餐</div><div>${a.plan||'体验版'}</div><div>到期时间</div><div>${a.planExpireAt||'体验权限'}</div><div>注册时间</div><div>${a.createdAt||'--'}</div><div>监控额度</div><div>${a.watchLimit||1} 只股票</div><div>AI复核额度</div><div>${a.aiReviewLimit||5} 次/日</div></div></div>
-      <div class="card"><h3>快捷入口</h3><p><a href="/"><button class="primary">进入控制台</button></a></p><p><a href="/recharge"><button class="primary">激活码充值</button></a></p><p><a href="/admin"><button>用户管理</button></a><a href="/commercial"><button>配置商业功能</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
+      <div class="card"><h3>快捷入口</h3><p><a href="/app"><button class="primary">进入控制台</button></a></p><p><a href="/recharge"><button class="primary">激活码充值</button></a></p><p><a href="/admin"><button>用户管理</button></a><a href="/commercial"><button>配置商业功能</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
     </div>
     <div class="card" style="margin-top:14px"><h3>套餐规划</h3><div class="plan"><div class="price active"><b>体验版</b><p>免费试用</p><ul><li>基础单股监控</li><li>盘前方向预览</li><li>模拟测试体验</li></ul></div><div class="price"><b>月卡</b><p>¥9.9 / 月</p><ul><li>多股实时监控</li><li>模拟测试与复盘</li><li>AI买卖点复核</li></ul></div><div class="price"><b>永久版</b><p>¥99</p><ul><li>核心功能长期使用</li><li>策略模板更新</li><li>优先体验新增功能</li></ul></div></div></div>`;
 }
@@ -3646,7 +3646,7 @@ RECHARGE_HTML = r"""<!doctype html>
 <main class="shell">
   <div class="top">
     <div><div class="brand">激活码充值</div><div class="sub">月卡 9.9 元，永久版 99 元；当前为本地商业化原型。</div></div>
-    <div class="actions"><a href="/"><button>控制台</button></a><a href="/account"><button>会员中心</button></a><a href="/commercial"><button>功能中心</button></a></div>
+    <div class="actions"><a href="/app"><button>控制台</button></a><a href="/account"><button>会员中心</button></a><a href="/commercial"><button>功能中心</button></a></div>
   </div>
   <section class="hero">
     <div>
@@ -3707,7 +3707,7 @@ a,button{font:inherit;text-decoration:none;color:inherit}button{height:38px;bord
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">本机内测后台：查看注册用户、套餐和当前登录状态。</div></div><div class="actions"><a href="/"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
+  <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">本机内测后台：查看注册用户、套餐和当前登录状态。</div></div><div class="actions"><a href="/app"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
   <section class="panel">
     <div class="cards"><div class="card"><span>注册用户</span><b id="userCount">--</b></div><div class="card"><span>在线会话</span><b id="onlineCount">--</b></div><div class="card"><span>数据文件</span><b>本机JSON</b></div></div>
     <div style="overflow:auto"><table><thead><tr><th>邮箱</th><th>昵称</th><th>套餐</th><th>注册时间</th><th>监控额度</th><th>AI额度</th><th>状态</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody></table></div>
@@ -3749,7 +3749,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}button{height:36px;bo
 <main class="shell">
   <div class="top">
     <div><div class="brand">商业功能中心</div><div class="sub">先把核心功能做成可配置，再接账号、支付和云端部署。</div></div>
-    <div class="actions"><a href="/landing"><button>商业页</button></a><a href="/account"><button>账号</button></a><a href="/"><button class="primary">控制台</button></a></div>
+    <div class="actions"><a href="/"><button>商业页</button></a><a href="/account"><button>账号</button></a><a href="/app"><button class="primary">控制台</button></a></div>
   </div>
   <section class="hero">
     <div><h1>把做T策略产品化</h1><p>商业版的核心不是承诺收益，而是让用户能配置自己的做T逻辑、接收高质量提醒、复盘失败原因，并用AI复核买卖点是否真的值得执行。</p></div>
@@ -3996,7 +3996,7 @@ button,input{font:inherit}button{height:36px;border:1px solid var(--line);border
 </head>
 <body>
 <div class="page">
-  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控同步、日内曲线、买卖点、历史缓存压力测试</div></div><div><button onclick="location.href='/'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
+  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控同步、日内曲线、买卖点、历史缓存压力测试</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
   <div class="controls">
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
@@ -4074,7 +4074,7 @@ RESEARCH_HTML = r"""<!doctype html>
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/rps">RPS主线</a><a class="btn" href="/longhubang">龙虎榜</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
+  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/rps">RPS主线</a><a class="btn" href="/longhubang">龙虎榜</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
   <div class="status" id="status">准备加载本地选股...</div>
   <section class="single-bar">
     <b>单股研究</b>
@@ -4119,7 +4119,7 @@ LONGHUBANG_HTML = r"""<!doctype html>
 <main class="shell">
   <div class="top">
     <div><div class="title">龙虎榜排名</div><div class="sub">股票上榜排名 + 营业部/游资席位 + 机构席位买卖明细</div></div>
-    <div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/research">选股研究</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="refreshBtn" onclick="loadLhb()">刷新</button></div>
+    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="refreshBtn" onclick="loadLhb()">刷新</button></div>
   </div>
   <div class="status" id="status">正在加载龙虎榜...</div>
   <section class="panel">
@@ -4157,7 +4157,7 @@ RPS_HTML = r"""<!doctype html>
 <main class="shell">
   <div class="top">
     <div><div class="title">RPS主线雷达</div><div class="sub">大盘资金动向、板块热度、相对强度排名、龙虎榜观察位</div></div>
-    <div class="actions"><a class="btn" href="/">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" onclick="loadRps()">刷新主线</button></div>
+    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" onclick="loadRps()">刷新主线</button></div>
   </div>
   <div class="cards">
     <div class="card"><span>扫描样本</span><b id="sample">--</b></div>
