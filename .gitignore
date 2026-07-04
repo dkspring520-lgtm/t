@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.log
+*.err
+*.bak
+.env
+
+_*.py
+_fix.*
+fix_*.py
+*_backup.py
+*_backup.txt
+*_orig.py
+*_full.txt
+
+node_modules/
+.DS_Store

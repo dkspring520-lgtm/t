@@ -1,0 +1,76 @@
+def run_batch_with_validation(self, stock_codes, strategy='zijin_special', amount_per_stock=100000, validation_runs=10):
+    import statistics
+    
+    validation_results = []
+    all_profit_rates = []
+    all_win_rates = []
+    
+    print(f"\n========== Starting {validation_runs} batch simulation validations ==========")
+    
+    for run in range(validation_runs):
+        print(f"\n--- Validation {run + 1}/{validation_runs} ---")
+        
+        batch_result = self.run_batch_simulation(stock_codes, strategy, amount_per_stock)
+        
+        if batch_result and batch_result['summary']:
+            summary = batch_result['summary']
+            validation_results.append({
+                'run': run + 1,
+                'total_profit': summary['total_profit'],
+                'avg_profit_rate': summary['avg_profit_rate'],
+                'stock_win_rate': summary['stock_win_rate'],
+                'trade_win_rate': summary['trade_win_rate'],
+                'total_trades': summary['total_trades'],
+                'success_stocks': summary['success_stocks']
+            })
+            
+            all_profit_rates.append(summary['avg_profit_rate'])
+            all_win_rates.append(summary['stock_win_rate'])
+            
+            print(f"  Avg Profit: {summary['avg_profit_rate']:.2f}%, Stock Win Rate: {summary['stock_win_rate']:.2f}%")
+        
+        time.sleep(0.2)
+    
+    if len(all_profit_rates) >= 2:
+        profit_std = statistics.stdev(all_profit_rates)
+        win_rate_std = statistics.stdev(all_win_rates)
+        profit_mean = statistics.mean(all_profit_rates)
+        win_rate_mean = statistics.mean(all_win_rates)
+    else:
+        profit_std = 0
+        win_rate_std = 0
+        profit_mean = all_profit_rates[0] if all_profit_rates else 0
+        win_rate_mean = all_win_rates[0] if all_win_rates else 0
+    
+    consistency_report = {
+        'runs_completed': len(validation_results),
+        'profit_rate_mean': round(profit_mean, 2),
+        'profit_rate_std': round(profit_std, 2),
+        'profit_rate_min': round(min(all_profit_rates), 2) if all_profit_rates else 0,
+        'profit_rate_max': round(max(all_profit_rates), 2) if all_profit_rates else 0,
+        'stock_win_rate_mean': round(win_rate_mean, 2),
+        'stock_win_rate_std': round(win_rate_std, 2),
+        'consistency_score': max(0, 100 - profit_std * 10)
+    }
+    
+    print(f"\n========== Validation Complete ==========")
+    print(f"Consistency Score: {consistency_report['consistency_score']:.1f}/100")
+    
+    final_summary = {
+        'total_stocks': len(stock_codes),
+        'validation_runs': len(validation_results),
+        'avg_profit_rate': round(profit_mean, 2),
+        'stock_win_rate': round(win_rate_mean, 2),
+        'consistency_score': round(consistency_report['consistency_score'], 1),
+        'total_trades': sum(r['total_trades'] for r in validation_results) // len(validation_results) if validation_results else 0
+    }
+    
+    last_result = self.run_batch_simulation(stock_codes, strategy, amount_per_stock)
+    
+    return {
+        'summary': final_summary,
+        'validation_results': validation_results,
+        'consistency_report': consistency_report,
+        'results': last_result['results'] if last_result else [],
+        'stock_codes': stock_codes
+    }

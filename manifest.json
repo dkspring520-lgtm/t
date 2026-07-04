@@ -1,0 +1,17 @@
+{
+  "name": "a_gu_zuo_t_monitor",
+  "description": "A股做T监控软件 - 自动监控买卖点并语音提醒",
+  "author": "User",
+  "version": "1.0.0",
+  "main": "launcher.py",
+  "scripts": {
+    "start": "python launcher.py",
+    "install": "pip install flask flask-socketio requests pyttsx3"
+  },
+  "dependencies": [
+    "flask",
+    "flask-socketio",
+    "requests",
+    "pyttsx3"
+  ]
+}

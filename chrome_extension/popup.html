@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A股做T监控助手</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #0d0d1a; color: #e0e0e0; width: 420px; min-height: 500px; overflow-x: hidden; }
+    .header { padding: 12px 16px; background: linear-gradient(135deg, #1a1a3e 0%, #0d0d2a 100%); border-bottom: 1px solid #2a2a4a; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 16px; font-weight: 600; background: linear-gradient(90deg, #ffd700, #ff8c00); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .market-status { font-size: 11px; padding: 4px 10px; border-radius: 12px; }
+    .market-status.open { background: rgba(0,212,106,0.15); color: #00d46a; }
+    .market-status.closed { background: rgba(255,165,2,0.15); color: #ffa502; }
+    .tabs { display: flex; background: #14142a; border-bottom: 1px solid #2a2a4a; }
+    .tab { flex: 1; padding: 10px 0; text-align: center; font-size: 13px; cursor: pointer; color: #888; border: none; background: none; transition: all 0.2s; border-bottom: 2px solid transparent; }
+    .tab:hover { color: #ccc; background: rgba(255,255,255,0.03); }
+    .tab.active { color: #ffd700; border-bottom-color: #ffd700; }
+    .tab-content { display: none; padding: 12px 16px; }
+    .tab-content.active { display: block; }
+    .stock-search { display: flex; gap: 8px; margin-bottom: 12px; }
+    .stock-search input { flex: 1; padding: 8px 12px; border: 1px solid #2a2a4a; border-radius: 6px; background: #1a1a2e; color: #e0e0e0; font-size: 14px; outline: none; }
+    .stock-search input:focus { border-color: #ffd700; }
+    .stock-search button, .holdings-form button, #saveSettings, #applyStrategy { padding: 8px 16px; border: none; border-radius: 6px; background: linear-gradient(135deg, #ffd700, #ff8c00); color: #1a1a2e; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+    .stock-search button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(255,215,0,0.3); }
+    .stock-search button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .stock-info { display: none; background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .stock-info .stock-name { font-size: 18px; font-weight: 600; color: #e0e0e0; }
+    .stock-info .stock-code { font-size: 12px; color: #666; margin-bottom: 8px; }
+    .price-row { display: flex; align-items: baseline; gap: 12px; }
+    .current-price { font-size: 28px; font-weight: 700; color: #fff; }
+    .price-change { font-size: 16px; font-weight: 600; }
+    .price-change.up { color: #00d46a; }
+    .price-change.down { color: #ff4757; }
+    .price-details { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: #888; }
+    .monitor-controls { display: flex; gap: 8px; margin-bottom: 12px; }
+    .btn-primary { flex: 1; padding: 10px; border: none; border-radius: 6px; background: linear-gradient(135deg, #00d46a, #00a854); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+    .btn-secondary { flex: 1; padding: 10px; border: 1px solid #ff4757; border-radius: 6px; background: transparent; color: #ff4757; font-weight: 600; font-size: 14px; cursor: pointer; }
+    .btn-primary:disabled, .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .log-area { background: #0d0d1a; border: 1px solid #2a2a4a; border-radius: 6px; padding: 8px; max-height: 180px; overflow-y: auto; font-size: 11px; line-height: 1.6; }
+    .log-item .log-buy { color: #00d46a; }
+    .log-item .log-sell { color: #ff4757; }
+    .log-item .log-error { color: #ff6b6b; }
+    .log-item .log-success { color: #4ecdc4; }
+    .log-item .log-warning { color: #ffa502; }
+    .log-time { color: #555; }
+    .holdings-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    .holdings-form input { padding: 8px 12px; border: 1px solid #2a2a4a; border-radius: 6px; background: #1a1a2e; color: #e0e0e0; font-size: 13px; outline: none; }
+    .holdings-form input:focus { border-color: #ffd700; }
+    .strategy-select { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .strategy-select select { padding: 8px; border: 1px solid #2a2a4a; border-radius: 6px; background: #1a1a2e; color: #e0e0e0; font-size: 13px; outline: none; }
+    .setting-item { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 13px; }
+    .setting-item input[type=checkbox] { width: 18px; height: 18px; accent-color: #ffd700; }
+    .setting-item input[type=number] { width: 60px; padding: 4px 8px; border: 1px solid #2a2a4a; border-radius: 4px; background: #1a1a2e; color: #e0e0e0; font-size: 13px; }
+    .signal-alert { display: none; position: fixed; bottom: 12px; left: 16px; right: 16px; background: #1a1a2e; border: 1px solid #ffd700; border-radius: 8px; padding: 12px; z-index: 100; }
+    .signal-alert.show { display: block; animation: slideUp 0.3s ease; }
+    @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .signal-title.buy { color: #00d46a; }
+    .signal-title.sell { color: #ff4757; }
+    .signal-close { float: right; cursor: pointer; color: #888; font-size: 18px; }
+    .signal-action { font-size: 16px; font-weight: 600; margin: 4px 0; }
+    .signal-price { font-size: 13px; color: #ccc; }
+    .signal-strength { font-size: 12px; color: #888; }
+    .signal-reason { font-size: 12px; color: #aaa; margin-top: 4px; }
+    .last-update { font-size: 11px; color: #555; text-align: center; margin-top: 8px; }
+    .hot-stocks { margin-top: 12px; }
+    .hot-stocks h3 { font-size: 13px; color: #888; margin-bottom: 8px; }
+    .hot-stocks-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+    .hot-stock-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; transition: background 0.15s; }
+    .hot-stock-item:hover { background: rgba(255,255,255,0.04); }
+    .hot-stock-rank { width: 20px; text-align: center; font-size: 12px; color: #666; font-weight: 600; }
+    .hot-stock-name { font-size: 13px; flex: 1; }
+    .hot-stock-code { font-size: 11px; color: #666; }
+    .hot-stock-source { font-size: 10px; color: #555; }
+    .result-card { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; margin-top: 8px; }
+    .result-value { font-size: 20px; font-weight: 700; }
+    .result-value.positive { color: #00d46a; }
+    .result-value.negative { color: #ff4757; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>A股做T监控</h1>
+    <div class="market-status" id="marketStatus">—</div>
+  </div>
+  <div class="tabs">
+    <button class="tab active" data-tab="monitor">监控</button>
+    <button class="tab" data-tab="holdings">持仓</button>
+    <button class="tab" data-tab="strategy">策略</button>
+    <button class="tab" data-tab="settings">设置</button>
+  </div>
+  <div class="tab-contents">
+    <!-- 监控 -->
+    <div id="monitorTab" class="tab-content active">
+      <div class="stock-search">
+        <input type="text" id="stockCode" placeholder="输入股票代码（如601899）" maxlength="6">
+        <button id="loadStock">查询</button>
+      </div>
+      <div id="stockInfo" class="stock-info">
+        <div class="stock-name" id="stockName">—</div>
+        <div class="stock-code" id="displayCode">—</div>
+        <div class="price-row">
+          <span class="current-price" id="currentPrice">--</span>
+          <span class="price-change" id="priceChange">--</span>
+        </div>
+        <div class="price-details">
+          <span>开 <span id="openPrice">--</span></span>
+          <span>高 <span id="highPrice">--</span></span>
+          <span>低 <span id="lowPrice">--</span></span>
+        </div>
+      </div>
+      <div class="monitor-controls">
+        <button class="btn-primary" id="startMonitor">开始监控</button>
+        <button class="btn-secondary" id="stopMonitor" disabled>停止监控</button>
+      </div>
+      <div class="last-update" id="lastUpdate"></div>
+      <div class="log-area" id="monitorLog"></div>
+    </div>
+    <!-- 持仓 -->
+    <div id="holdingsTab" class="tab-content">
+      <div class="holdings-form">
+        <input type="text" id="holdingName" placeholder="股票名称">
+        <input type="number" id="holdingQuantity" placeholder="持仓数量">
+        <input type="number" id="holdingAvgCost" placeholder="平均成本（元）" step="0.001">
+        <input type="number" id="maxPosition" placeholder="最大持仓金额" value="10000">
+        <button id="saveHoldings">保存持仓</button>
+      </div>
+    </div>
+    <!-- 策略 -->
+    <div id="strategyTab" class="tab-content">
+      <div class="strategy-select">
+        <label>策略：</label>
+        <select id="strategySelect">
+          <option value="meanReversion">乖离回归</option>
+          <option value="grid">网格交易</option>
+          <option value="breakout">突破策略</option>
+          <option value="momentum">动量策略</option>
+        </select>
+        <button id="applyStrategy">应用</button>
+      </div>
+    </div>
+    <!-- 设置 -->
+    <div id="settingsTab" class="tab-content">
+      <div class="setting-item"><label>语音提醒：</label><input type="checkbox" id="voiceAlert" checked></div>
+      <div class="setting-item"><label>通知提醒：</label><input type="checkbox" id="notificationAlert" checked></div>
+      <div class="setting-item"><label>监控间隔（秒）：</label><input type="number" id="monitorInterval" value="5" min="1" max="60"></div>
+      <button id="saveSettings">保存设置</button>
+    </div>
+  </div>
+  <div class="signal-alert" id="signalAlert">
+    <span class="signal-close" onclick="closeSignal()">&#10005;</span>
+    <div class="signal-title" id="signalTitle">信号</div>
+    <div id="signalContent"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

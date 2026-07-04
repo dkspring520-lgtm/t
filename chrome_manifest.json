@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "A股做T助手",
+  "version": "2.0.0",
+  "description": "自动监控A股买卖点，模拟测试策略胜率",
+  "permissions": [
+    "storage",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://push2.eastmoney.com/*",
+    "https://push2ex.eastmoney.com/*"
+  ],
+  "background": {
+    "service_worker": "chrome_background.js"
+  },
+  "action": {
+    "default_popup": "chrome_popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://push2.eastmoney.com https://push2ex.eastmoney.com"
+  }
+}
