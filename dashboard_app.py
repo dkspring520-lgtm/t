@@ -4256,6 +4256,157 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
 .actions button.primary{background:#ef4444;color:#fff;border-color:#ef4444}
 .hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
 @media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
+
+/* Final cockpit harmonization: bigger signals, clearer actions, valid side operations. */
+:root{
+  --cockpit-bg:#f4f7fb;
+  --cockpit-surface:#ffffff;
+  --cockpit-line:#e5ebf3;
+  --cockpit-ink:#101828;
+  --cockpit-muted:#667085;
+  --cockpit-accent:#4f46e5;
+  --cockpit-accent2:#0ea5e9;
+  --cockpit-warn:#f97316;
+  --cockpit-ok:#16a34a;
+}
+.shell{background:linear-gradient(180deg,var(--cockpit-bg),#eef2f7)}
+.panel{gap:12px}
+.panel,.settings-panel,.ai-panel{box-shadow:0 14px 34px rgba(15,23,42,.06)}
+.settings-panel{border-radius:18px}
+.side-menu button{height:40px;padding:0 14px;display:flex;align-items:center;color:#334155}
+.side-menu button.active{background:linear-gradient(135deg,#111827,#0f172a);border-color:transparent}
+.side-menu small{color:#64748b}
+.side-bottom{margin-top:auto}
+.side-bottom button{
+  height:34px;
+  border-radius:10px;
+  background:linear-gradient(135deg,#ffffff,#f8fafc);
+  color:#334155;
+  border:1px solid var(--cockpit-line);
+  box-shadow:none;
+}
+.side-bottom button:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,42,.06)}
+.side-user{display:flex;align-items:center;gap:10px;padding-top:4px}
+.side-avatar{
+  width:34px;
+  height:34px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  color:#fff;
+  font-weight:950;
+  background:linear-gradient(135deg,#4f46e5,#06b6d4);
+}
+.top-actions #settingsBtn,.actions button.primary,.side-bottom button.primary,
+.log-panel .log-actions button, .settings-actions button,
+.actions button.ai{
+  background:linear-gradient(135deg,var(--cockpit-accent),#7c3aed);
+  color:#fff;border-color:transparent;
+  box-shadow:0 8px 18px rgba(79,70,229,.22);
+}
+.top-actions #settingsBtn:hover,.actions button.primary:hover,.side-bottom button.primary:hover,
+.log-panel .log-actions button:hover,.settings-actions button:hover{filter:saturate(1.05)}
+.top-actions button,.actions .btn,.actions button{
+  border:1px solid var(--cockpit-line);
+  background:#fff;
+  color:#111827;
+  border-radius:10px;
+  box-shadow:none;
+}
+.workbench-card,.workbench-card.primary-card{
+  background:linear-gradient(180deg,#fff,#f8fafc);
+  border-color:#e5eaf3;
+  color:#111827;
+}
+.workbench-card.primary-card{
+  background:linear-gradient(135deg,var(--cockpit-accent),#7c3aed);
+  color:#fff;
+  border-color:#7c3aed;
+  border-radius:14px;
+}
+.workbench-card span,.workbench-card i,.workbench-card b{margin:0}
+.workbench-card span{display:block}
+.workbench-card i{display:none}
+.settings-head,.ai-head,.log-head{
+  height:58px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  border-bottom:1px solid #e5ebf3;
+  color:#0f172a;
+}
+.settings-actions button,.log-actions button{
+  height:36px;
+  border-radius:10px;
+}
+.settings-actions button:nth-child(2n){background:#fff;color:#111827;border:1px solid #e5ebf3}
+.tag{background:linear-gradient(135deg,#f8fafc,#eef2ff);color:#334155;border:1px solid #e5ebf3}
+.tag.active{background:linear-gradient(135deg,#111827,#334155);color:#fff;border-color:#111827}
+.op{display:flex;gap:8px;align-items:center}
+.op button{height:30px;border-radius:10px}
+.op button.ai{background:#f1f5f9;color:#334155;border-color:#e2e8f0}
+.signal-pill{padding:6px 10px;border-radius:999px;background:linear-gradient(135deg,#f8fafc,#eff6ff);color:#334155}
+.signal-pill.hot{background:linear-gradient(135deg,#dbeafe,#a78bfa);color:#312e81}
+.money-line{background:linear-gradient(180deg,#f8fafc,#fff5f5)}
+
+.live{padding:0 12px 12px}
+.monitor-table{min-width:0;display:grid;gap:12px}
+.monitor-head{display:none}
+.monitor-row{
+  display:grid;
+  grid-template-columns:240px minmax(260px,1fr) 300px 122px 198px 84px;
+  gap:14px;
+  min-height:238px;
+  padding:14px;
+  border:1px solid var(--cockpit-line);
+  border-radius:16px;
+  background:linear-gradient(180deg,#ffffff,#fbfcff);
+  box-shadow:0 14px 30px rgba(15,23,42,.06);
+  align-items:stretch;
+}
+.monitor-row:hover{background:linear-gradient(180deg,#fff,#f5f8ff)}
+.monitor-row.strong-signal{border-color:var(--cockpit-accent2);box-shadow:inset 4px 0 0 var(--cockpit-accent2),0 14px 30px rgba(14,165,233,.12)}
+.mon-stock,.mon-price,.mon-chart,.mon-kv,.mon-signal,.mon-agents{min-height:0}
+.mon-stock{display:flex;flex-direction:column;justify-content:flex-start}
+.mon-stock .live-name{font-size:17px;font-weight:950}
+.mon-stock .live-code{display:block;margin-top:2px}
+.mon-stock .kv{font-size:12px}
+.mon-kv{text-align:right;display:flex;flex-direction:column;justify-content:center;gap:4px}
+.live-price{font-size:28px;line-height:1}
+.mon-price{display:flex;flex-direction:column;justify-content:center;gap:8px}
+.live-chart{height:220px;background:linear-gradient(180deg,#fff,#fff8ed);border-radius:12px;border:1px solid #e7edf4}
+.chart-note{font-size:10px;color:var(--cockpit-muted)}
+.mon-signal,.mon-agents{display:flex;flex-direction:column;gap:6px}
+.mon-label{font-size:11px;letter-spacing:.02em;color:var(--cockpit-muted)}
+.signal-pill{font-size:13px}
+.money-line{max-height:none;display:block}
+.live-signal{font-size:12px;line-height:1.52}
+.signal-toasts{top:96px;right:20px;width:min(410px,calc(100vw - 40px))}
+
+.log-panel{
+  position:fixed;
+  right:20px;
+  top:20px;
+  width:min(430px,calc(100vw - 40px));
+  bottom:20px;
+  z-index:70;
+  background:#fff;
+  border:1px solid var(--cockpit-line);
+  border-radius:16px;
+  box-shadow:0 20px 50px rgba(15,23,42,.16);
+  display:block;
+  overflow:hidden;
+}
+.log-panel[hidden]{display:none!important}
+.log-text{margin:0;padding:12px;flex:1;background:#0b1020;color:#dbeafe;height:calc(100% - 92px);overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.7 "Consolas",monospace}
+.log-head{padding:0 12px}
+.log-actions{padding:10px 12px 12px;border-top:1px solid var(--cockpit-line);background:#fff}
+
+@media(max-width:1180px){
+  .monitor-row{grid-template-columns:220px minmax(200px,1fr) 260px 110px 170px 76px;min-height:210px}
+  .live-chart{height:190px}
+}
+
 </style>
 </head>
 <body>
@@ -4269,11 +4420,14 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
       <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
     </div>
     <div class="side-bottom">
-      <button onclick="toggleSettings(true)">系统设置</button>
-      <button onclick="toggleSettings(true)">API 管理</button>
-      <button onclick="location.href='/commercial'">策略配置</button>
-      <button onclick="clearAll()">日志中心</button>
-      <div class="side-user"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
+      <button onclick="openSettingsSection('account')">系统设置</button>
+      <button onclick="openSettingsSection('api')">AI 管理</button>
+      <button onclick="openSettingsSection('strategy')">策略配置</button>
+      <button onclick="openLogCenter()">日志中心</button>
+      <div class="side-user" id="sideUser" onclick="openAccountCenter()" title="个人中心">
+        <span class="side-avatar" id="sideAvatar">T</span>
+        <div><b id="sideUserName">交易员小T</b><span id="sideUserMeta">专业版 · 点击进入个人中心</span></div>
+      </div>
     </div>
   </aside>
   <div class="top">
@@ -4286,7 +4440,7 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
   </section>
   <div id="settingsPanel" class="settings-panel" hidden>
     <div class="settings-head"><span>系统设置</span><button onclick="toggleSettings(false)">关闭</button></div>
-    <div class="settings-group" style="border-top:0;margin-top:0;padding-top:0">
+      <div class="settings-group" id="settingsSectionAccount" style="border-top:0;margin-top:0;padding-top:0">
       <div class="settings-title">账号与商业</div>
       <div class="settings-actions">
         <button onclick="location.href='/account'">账号中心</button>
@@ -4295,7 +4449,7 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
         <button onclick="location.href='/landing'">商业首页</button>
       </div>
     </div>
-    <div class="settings-group">
+      <div class="settings-group" id="settingsSectionApi">
       <div class="settings-title">AI模型配置</div>
       <div class="ai-config-grid">
         <label>服务商<select id="aiProvider"><option value="ChatGPT">ChatGPT</option><option value="Gemini">Gemini</option><option value="Claude">Claude</option><option value="ThirdParty">第三方API</option></select></label>
@@ -4311,7 +4465,7 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
       </div>
       <div id="aiConfigStatus" class="settings-note">AI Key 和第三方中转地址只保存在本机配置，界面不会明文回显 Key。</div>
     </div>
-    <div class="settings-group">
+      <div class="settings-group" id="settingsSectionStrategy">
       <div class="settings-title">自定义做T策略</div>
       <div class="ai-config-grid">
         <label>策略模式<select id="strategyMode"><option>官方默认策略</option><option>自定义策略</option><option>AI复核优先</option></select></label>
@@ -4331,6 +4485,11 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
     <div class="ai-head"><span>Gemini盘中研判</span><button onclick="toggleAi(false)">关闭</button></div>
     <div id="aiBody" class="ai-body">点击股票行右侧“AI”，生成大方向和做T计划。</div>
   </div>
+  <section id="logPanel" class="log-panel" hidden>
+    <div class="log-head"><span>运行日志</span><button onclick="toggleLogPanel(false)">关闭</button></div>
+    <pre id="logText" class="log-text">已就绪。</pre>
+    <div class="log-actions"><button onclick="clearAll()">清空</button></div>
+  </section>
   <section><div class="actions">
     <div class="stock-manager">
       <span class="stock-manager-title">多股监控</span>
@@ -4355,8 +4514,73 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
 const $=id=>document.getElementById(id);
 const labels={signal:'多股信号',simulate:'随机股票当日做T模拟',simulate5:'随机股票近5轮缓存测试'};
 let tradeManual=false,audioCtx=null,lastAlertKeys=new Map(),toastKeys=new Map(),settingsTimer=null;
-window.addEventListener('DOMContentLoaded',async()=>{document.addEventListener('click',initAudio,{once:true});loadSettings();await loadWatchlist();loadPremarket();loadRealtime();setInterval(loadRealtime,3000);setInterval(loadPremarket,60000);});
-function toggleSettings(force){const el=$('settingsPanel');if(!el)return;const show=typeof force==='boolean'?force:el.hasAttribute('hidden');if(show)el.removeAttribute('hidden');else el.setAttribute('hidden','')}
+window.addEventListener('DOMContentLoaded', async () => {
+  document.addEventListener('click', initAudio, { once: true });
+  loadSettings();
+  await loadWatchlist();
+  loadPremarket();
+  loadRealtime();
+  loadAccountBadge();
+  const q = new URLSearchParams(location.search);
+  if (q.get('section')) openSettingsSection(q.get('section'));
+  if (q.get('openLog') === '1') openLogCenter();
+  setInterval(loadRealtime, 3000);
+  setInterval(loadPremarket, 60000);
+});
+function toggleSettings(force){
+  const el = $('settingsPanel');
+  if(!el) return;
+  const show = typeof force === 'boolean' ? force : el.hasAttribute('hidden');
+  if (show) el.removeAttribute('hidden');
+  else el.setAttribute('hidden', '');
+  if (show) {
+    const first = $('settingsSectionAccount');
+    if(first) first.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+}
+function openSettingsSection(section){
+  const key = String(section || 'account').toLowerCase();
+  toggleSettings(true);
+  const map = {
+    account: 'settingsSectionAccount',
+    api: 'settingsSectionApi',
+    strategy: 'settingsSectionStrategy'
+  };
+  const target = $(map[key] || 'settingsSectionApi');
+  if (target) target.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function toggleLogPanel(force){
+  const panel = $('logPanel');
+  if(!panel) return;
+  const show = typeof force === 'boolean' ? force : panel.hasAttribute('hidden');
+  if (show) panel.removeAttribute('hidden');
+  else panel.setAttribute('hidden', '');
+}
+function openLogCenter(){
+  toggleLogPanel(true);
+  const src = $('out');
+  const box = $('logText');
+  if (src && box) box.textContent = src.textContent;
+  if (box) box.scrollTop = box.scrollHeight;
+}
+function showLogInPanel(text){
+  const box=$('logText');
+  if(box){box.textContent=text;box.scrollTop=box.scrollHeight;}
+}
+function openAccountCenter(){location.href='/account'}
+function loadAccountBadge(){
+  fetch('/api/account',{cache:'no-store'})
+    .then(r=>r.json())
+    .then(data=>{
+      const account=(data && data.account) || {};
+      const nick=account.nickname || account.email || account.userId || '交易员';
+      const plan=(account.plan || (data.loggedIn ? '会员版' : '体验版'));
+      if($('sideUserName')) $('sideUserName').textContent=data.loggedIn ? nick : '未登录';
+      if($('sideUserMeta')) $('sideUserMeta').textContent=data.loggedIn ? `${plan} · 点击进入个人中心` : '未登录 · 点击登录';
+      if($('sideAvatar')) $('sideAvatar').textContent=String(nick).slice(0,1).toUpperCase();
+    })
+    .catch(()=>{});
+}
 function toggleAi(force){const el=$('aiPanel');if(!el)return;const show=typeof force==='boolean'?force:el.hasAttribute('hidden');if(show)el.removeAttribute('hidden');else el.setAttribute('hidden','')}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 let mainOptions={cash:100000,trade:20000,sample:10};
@@ -4391,7 +4615,54 @@ let realtimeBusy=false,realtimeLastOk=0;
 async function loadRealtime(){if(realtimeBusy)return;realtimeBusy=true;try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),2600);const data=await (await fetch('/api/realtime',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);realtimeLastOk=Date.now();renderRealtime(data.stocks||[])}catch(e){if(Date.now()-realtimeLastOk>15000)$('live').innerHTML='<div class="empty-live">实时监控暂不可用：'+escapeHtml(e.message||'请求超时')+'</div>'}finally{realtimeBusy=false}}
 async function loadPremarket(){try{const q=premarketTargetCode?'?code='+encodeURIComponent(premarketTargetCode):'';const data=await (await fetch('/api/premarket'+q,{cache:'no-store'})).json();renderPremarket(data)}catch(e){$('pmReason').textContent='外盘读取失败：'+e.message}}
 function renderPremarket(data){const z=data.target||data.zijin||{},rows=data.rows||[];const signal=z.signal||'观望';const cls=signal==='偏多'?'bull':signal==='偏空'?'bear':'';if($('pmTargetTitle'))$('pmTargetTitle').textContent=(z.name||'目标股')+'开盘前风向';document.querySelector('.pm-score').textContent=(z.score??'--')+'分';const pill=document.querySelector('.pm-signal');pill.textContent=signal+'｜'+(z.category||'综合')+'｜刷新 '+(data.updatedAt||'--');pill.className='pm-signal '+cls;$('pmList').innerHTML=rows.length?rows.map(r=>{const ch=Number(r.change||0),c=ch>=0?'live-pos':'live-neg';const price=Number(r.price||0);return `<div class="pm-item"><b>${escapeHtml(r.name)}</b><span class="${c}">${price>=100?price.toFixed(1):price.toFixed(2)} ${ch>=0?'+':''}${ch.toFixed(2)}%</span><div class="sub">${escapeHtml(r.time||'时间未知')}</div></div>`}).join(''):'<div class="muted">暂无外盘数据</div>';$('pmReason').innerHTML=`<b>${escapeHtml(z.action||'等待盘中确认')}</b><br>${(z.reasons||[]).map(escapeHtml).join('<br>')}<br><span class="sub">外盘为 Yahoo 5分钟快照，按当前主监控股票降权计算，只作为盘前方向。</span>`}
-function renderRealtime(rows){if(!rows.length){$('live').innerHTML='<div class="empty-live">暂无监控股票，请先添加代码。</div>';return}$('live').innerHTML=`<div class="monitor-table"><div class="monitor-head"><span>股票</span><span>现价</span><span>分时结构</span><span>涨跌</span><span>均价/偏离</span><span>买卖点</span><span>多角色结论</span><span>操作</span></div>${rows.map(r=>{maybeBeep(r);showSignalToast(r);const change=Number(r.change||0);const cls=change>=0?'live-pos':'live-neg';const tradable=/低吸|高抛|买入|卖出/.test(r.signal||'');const closed=r.marketStatus==='休市中';const signal=closed?'休市中':(r.signal||'观察');const dot=change>=0?'up':'down';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[(r.smartMoney&&r.smartMoney.text)||'主力行为：普通行情模式，仅供辅助参考']).map(escapeHtml).join('<br>');return `<div class="monitor-row ${tradable?'strong-signal':''}"><div><span class="rank-dot ${dot}"></span><span class="live-name">${escapeHtml(r.name)}</span><span class="live-code">${escapeHtml(r.code)}</span><div class="kv">更新时间 ${escapeHtml(r.time||'--:--')}</div></div><div class="live-price ${cls}">${Number(r.price||0).toFixed(2)}</div><div>${liveSpark(r)}</div><div class="${cls}" style="font-weight:950">${change.toFixed(2)}%</div><div class="kv"><b>${Number(r.avg||0).toFixed(2)}</b>偏离 ${Number(r.dev||0).toFixed(2)}%</div><div><span class="signal-pill ${tradable?'hot':''}">${escapeHtml(signal)}</span><div class="live-signal">${escapeHtml(r.reason||'暂无高质量买卖点')}</div></div><div class="money-line">${agents}</div><div class="op"><button class="ai" onclick="aiIntraday('${escapeHtml(r.code)}')">AI</button><button onclick="focusStock('${escapeHtml(r.code)}')">详情</button></div></div>`}).join('')}</div>`}
+function renderRealtime(rows){
+  if(!rows.length){$('live').innerHTML='<div class="empty-live">暂无监控股票，请先添加代码。</div>';return;}
+  $('live').innerHTML = `<div class="monitor-table">${
+    rows.map((r)=>{
+      maybeBeep(r);
+      showSignalToast(r);
+      const change = Number(r.change||0);
+      const cls = change>=0?'live-pos':'live-neg';
+      const tradable = /低吸|高抛|买入|卖出/.test(r.signal||'');
+      const closed = r.marketStatus==='休市中';
+      const signal = closed?'休市中':(r.signal||'观察');
+      const dot = change>=0?'up':'down';
+      const agents = (Array.isArray(r.agents)&&r.agents.length?r.agents:[(r.smartMoney&&r.smartMoney.text)||'主力行为：普通行情模式，仅供辅助参考']).map(escapeHtml).join('<br>');
+      return `<div class="monitor-row ${tradable?'strong-signal':''}">
+        <div class="mon-stock">
+          <div>
+            <span class="rank-dot ${dot}"></span>
+            <span class="live-name">${escapeHtml(r.name)}</span>
+            <span class="live-code">${escapeHtml(r.code)}</span>
+          </div>
+          <div class="kv">更新时间 ${escapeHtml(r.time||'--:--')}</div>
+        </div>
+        <div class="mon-price">
+          <div class="live-price ${cls}">${Number(r.price||0).toFixed(2)}</div>
+          <div class="kv">
+            <span class="${cls}">涨跌 ${change>=0?'+':''}${change.toFixed(2)}%</span><br/>
+            <span>黄线 ${Number(r.avg||0).toFixed(2)} ｜ 偏离 ${Number(r.dev||0).toFixed(2)}%</span>
+          </div>
+        </div>
+        <div class="mon-chart">${liveSpark(r)}</div>
+        <div class="mon-kv">
+          <b>买卖点</b>
+          <span class="signal-pill ${tradable?'hot':''}">${escapeHtml(signal)}</span>
+          <span class="live-signal">${escapeHtml(r.reason||'暂无高质量买卖点')}</span>
+        </div>
+        <div class="mon-agents">
+          <div class="mon-label">多角色结论</div>
+          <div class="money-line">${agents}</div>
+        </div>
+        <div class="mon-signal">
+          <div class="mon-label">操作</div>
+          <button class="ai" onclick="aiIntraday('${escapeHtml(r.code)}')">AI</button>
+          <button onclick="focusStock('${escapeHtml(r.code)}')">详情</button>
+        </div>
+      </div>`;
+    }).join('')
+  }</div>`;
+}
 function alertSide(sig){if(/低吸|买入/.test(sig||''))return 'buy';if(/高抛|卖出/.test(sig||''))return 'sell';return ''}
 function showSignalToast(r){const sig=r.signal||'',side=alertSide(sig);if(!side)return;const today=new Date().toISOString().slice(0,10);const dailyKey=`toast:${today}:${r.code}:${side}`;if(Number(localStorage.getItem(dailyKey)||0)>=Math.max(1,signalPrefs.maxSignalsPerDay||2))return;const key=[r.code,side].join(':');const now=Date.now();if(toastKeys.has(key)&&now-toastKeys.get(key)<Math.max(1,signalPrefs.signalCooldown||10)*60000)return;toastKeys.set(key,now);localStorage.setItem(dailyKey,String(Number(localStorage.getItem(dailyKey)||0)+1));const box=$('signalToasts');if(!box)return;const isBuy=side==='buy';const agents=(Array.isArray(r.agents)&&r.agents.length?r.agents:[]).slice(0,4).map(escapeHtml).join('<br>');const el=document.createElement('div');el.className='signal-toast '+(isBuy?'buy':'sell');el.innerHTML=`<div class="toast-top"><div><div class="toast-name">${escapeHtml(r.name)} ${escapeHtml(r.code)}</div><div class="toast-price">${escapeHtml(r.time||'--:--')}｜现价 ${Number(r.price||0).toFixed(2)}｜偏离 ${Number(r.dev||0).toFixed(2)}%</div></div><span class="toast-signal">${isBuy?'买入':'卖出'}｜${escapeHtml(sig)}</span><button title="关闭">×</button></div><div class="toast-reason">${escapeHtml(r.reason||'等待量价确认')}</div><div class="toast-agents">${agents||'多角色结论生成中'}</div>`;box.prepend(el);const close=()=>{el.classList.add('fade');setTimeout(()=>el.remove(),260)};el.querySelector('button').onclick=close;setTimeout(close,60000);[...box.children].slice(2).forEach(x=>x.remove())}
 function focusStock(code){location.href='/research?code='+encodeURIComponent(code)}
@@ -4403,8 +4674,26 @@ function initAudio(){try{audioCtx=new (window.AudioContext||window.webkitAudioCo
 function maybeBeep(r){const sig=r.signal||'',side=alertSide(sig);if(!side||sig.includes('休市')||sig.includes('异常'))return;const today=new Date().toISOString().slice(0,10);const dayKey=`alert:${today}:${r.code}:${side}`;const count=Number(localStorage.getItem(dayKey)||0);if(count>=1)return;const key=[r.code,side].join(':');const now=Date.now();if(lastAlertKeys.has(key)&&now-lastAlertKeys.get(key)<600000)return;lastAlertKeys.set(key,now);localStorage.setItem(dayKey,String(count+1));if(audioCtx)[760,1040,760].forEach((f,i)=>setTimeout(()=>tone(f,160),i*210));speakBrowser(`${r.name}，现价${Number(r.price||0).toFixed(2)}，${sig}，${r.reason||''}`)}
 function tone(freq,duration){try{const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();osc.frequency.value=freq;gain.gain.value=.075;osc.connect(gain);gain.connect(audioCtx.destination);osc.start();setTimeout(()=>osc.stop(),duration)}catch(e){}}
 function speakBrowser(text){try{if(!('speechSynthesis'in window))return;const u=new SpeechSynthesisUtterance(text);u.lang='zh-CN';u.rate=1.05;u.volume=.9;window.speechSynthesis.cancel();window.speechSynthesis.speak(u)}catch(e){}}
-function append(t){const o=$('out');o.textContent=(o.textContent==='已就绪。'?'':o.textContent+'\n\n')+t;o.scrollTop=o.scrollHeight}
-function clearAll(){$('out').textContent='已清空。';$('status').textContent='就绪'}
+function append(t){
+  const text = String(t);
+  const o=$('out');
+  if(o){
+    o.textContent=(o.textContent==='已就绪。'?'':o.textContent+'\n\n')+text;
+    o.scrollTop=o.scrollHeight;
+  }
+  const p=$('logText');
+  if(p){
+    p.textContent=(p.textContent==='已就绪。'?'':p.textContent+'\n\n')+text;
+    p.scrollTop=p.scrollHeight;
+  }
+}
+function clearAll(){
+  const o=$('out');
+  const p=$('logText');
+  if(o) o.textContent='已清空。';
+  if(p) p.textContent='已清空。';
+  $('status').textContent='就绪';
+}
 function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>
 </body>
@@ -4453,11 +4742,11 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
     </div>
     <div class="side-bottom">
-      <button onclick="location.href='/app'">系统设置</button>
-      <button onclick="location.href='/app'">API 管理</button>
-      <button onclick="location.href='/commercial'">策略配置</button>
-      <button onclick="loadHistory()">日志中心</button>
-      <div class="side-user"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
+      <button onclick="location.href='/app?section=account'">系统设置</button>
+      <button onclick="location.href='/app?section=api'">API 管理</button>
+      <button onclick="location.href='/app?section=strategy'">策略配置</button>
+      <button onclick="location.href='/app?openLog=1'">日志中心</button>
+      <div class="side-user" onclick="location.href='/account'"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
     </div>
   </aside>
 <div class="page">
@@ -4564,10 +4853,10 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button class="active" onclick="location.href='/research'"><small>◇</small>选股研究</button>
     </div>
     <div class="side-bottom">
-      <button onclick="location.href='/app'">系统设置</button>
-      <button onclick="location.href='/app'">API 管理</button>
-      <button onclick="location.href='/commercial'">策略配置</button>
-      <button onclick="loadData('review')">日志中心</button>
+      <button onclick="location.href='/app?section=account'">系统设置</button>
+      <button onclick="location.href='/app?section=api'">API 管理</button>
+      <button onclick="location.href='/app?section=strategy'">策略配置</button>
+      <button onclick="location.href='/app?openLog=1'">日志中心</button>
       <div class="side-user"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
     </div>
   </aside>
