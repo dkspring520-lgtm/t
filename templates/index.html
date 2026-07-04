@@ -1,259 +1,82 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A股做T监控系统 - 智能做T交易助手</title>
+    <title>A股做T监控 - 精简版</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="app-container">
-        <!-- 顶部导航 -->
         <nav class="top-nav">
             <div class="nav-brand">
-                <span class="logo">🎯</span>
+                <span class="logo">◉</span>
                 <span class="brand-text">A股做T监控</span>
             </div>
             <div class="nav-tabs">
-                <a href="#" class="nav-tab active" data-tab="overview">📊 总览</a>
-                <a href="#" class="nav-tab" data-tab="position">💰 持仓</a>
-                <a href="#" class="nav-tab" data-tab="monitor">👁️ 监控</a>
-                <a href="#" class="nav-tab" data-tab="research">🔎 选股研究</a>
-                <a href="#" class="nav-tab" data-tab="simulation">🚀 模拟测试</a>
-                <a href="#" class="nav-tab" data-tab="strategy">📋 策略</a>
-                <a href="#" class="nav-tab" data-tab="logs">📜 日志</a>
+                <a href="#" class="nav-tab active" data-tab="overview">总览</a>
+                <a href="#" class="nav-tab" data-tab="monitor">监控</a>
+                <a href="#" class="nav-tab" data-tab="position">持仓</a>
+                <a href="#" class="nav-tab" data-tab="research">研究</a>
+                <a href="#" class="nav-tab" data-tab="simulation">模拟</a>
             </div>
             <div class="status-indicators">
                 <span id="connection-status" class="status-dot disconnected" title="连接状态"></span>
-                <span id="market-status" class="market-badge">等待交易时间</span>
+                <span id="market-status" class="market-badge">交易时段</span>\r\n                <button id="compact-switch" class="btn-sm" type="button">精简模式</button>
             </div>
         </nav>
 
-        <!-- 总览页面 -->
         <main id="overview-tab" class="main-content tab-content active">
             <section class="stats-grid">
                 <div class="stat-card primary">
-                    <div class="stat-icon">💵</div>
+                    <div class="stat-icon">◎</div>
                     <div class="stat-label">总资产</div>
                     <div class="stat-value" id="total-assets">--</div>
-                    <div class="stat-sub">本金 <span id="principal">100,000</span></div>
+                    <div class="stat-sub">初始 <span id="principal">100,000</span> 元</div>
                 </div>
                 <div class="stat-card profit">
-                    <div class="stat-icon">📈</div>
-                    <div class="stat-label">总盈亏</div>
+                    <div class="stat-icon">↗</div>
+                    <div class="stat-label">今日盈亏</div>
                     <div class="stat-value" id="total-pnl">--</div>
                     <div class="stat-sub" id="pnl-percent">--</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-label">持仓浮盈</div>
+                    <div class="stat-icon">◈</div>
+                    <div class="stat-label">持仓盈亏</div>
                     <div class="stat-value" id="position-pnl">--</div>
                     <div class="stat-sub" id="position-percent">--</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon">⭐</div>
-                    <div class="stat-label">今日已实现</div>
-                    <div class="stat-value" id="today-realized">0</div>
-                    <div class="stat-sub">当日平仓收益</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🎯</div>
+                    <div class="stat-icon">✓</div>
                     <div class="stat-label">胜率</div>
                     <div class="stat-value" id="win-rate">--</div>
                     <div class="stat-sub" id="trade-count">0 笔</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-icon">📌</div>
-                    <div class="stat-label">持仓数</div>
-                    <div class="stat-value" id="position-count">0</div>
-                    <div class="stat-sub">每笔 <span id="per-trade">10,000</span> 元</div>
-                </div>
-            </section>
-
-            <section class="chart-section">
-                <div class="chart-header">
-                    <h3>📈 资金曲线（基准本金 + 已实现盈亏 + 当前浮盈）</h3>
-                </div>
-                <div class="chart-container">
-                    <canvas id="equityChart"></canvas>
-                </div>
             </section>
 
             <div class="dashboard-grid">
                 <section class="panel-card">
                     <div class="panel-header">
-                        <h3>👁️ 监控中的股票</h3>
+                        <h3>监控中的股票</h3>
                         <span class="badge" id="monitor-count">0</span>
-                    </div>
-                    <div class="input-section">
-                        <div class="input-group">
-                            <input type="text" id="stock-input" placeholder="输入股票代码 (如 600519)" maxlength="6">
-                            <button id="add-btn" class="btn-primary">添加监控</button>
-                        </div>
-                        <p class="hint">6位数字股票代码：6开头上海，0/3开头深市</p>
                     </div>
                     <div id="stock-list" class="stock-list">
                         <div class="empty-state">
-                            <div class="empty-icon">👁</div>
-                            <p>暂无监控中的股票</p>
-                            <p class="hint">在上方输入股票代码开始监控</p>
+                            <div class="empty-icon">—</div>
+                            <p>暂无监控股票</p>
                         </div>
                     </div>
                 </section>
-
                 <section class="panel-card">
                     <div class="panel-header">
-                        <h3>📢 买卖信号</h3>
+                        <h3>最近信号</h3>
                         <span class="badge" id="signal-count">0</span>
                     </div>
                     <div id="signals-list" class="signals-list">
                         <div class="empty-state">
-                            <div class="empty-icon">📢</div>
-                            <p>暂无买卖信号</p>
-                            <p class="hint">监控中的股票产生信号时将在此显示</p>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </main>
-
-        <!-- 持仓页面 -->
-        <main id="position-tab" class="main-content tab-content">
-            <div class="tab-header">
-                <h2>💰 持仓管理</h2>
-                <p class="tab-desc">管理您的持仓股票，系统会自动计算浮盈浮亏</p>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>➕ 添加持仓</h3>
-                </div>
-                <div class="input-section">
-                    <div class="input-row">
-                        <div class="input-col">
-                            <label>股票代码</label>
-                            <input type="text" id="position-code" placeholder="6位数字(如 600519)" maxlength="6">
-                        </div>
-                        <div class="input-col">
-                            <label>股票名称</label>
-                            <input type="text" id="position-name" placeholder="可选，空白自动获取">
-                        </div>
-                        <div class="input-col">
-                            <label>持股数量</label>
-                            <input type="number" id="position-quantity" placeholder="如 1000" min="1" step="100">
-                        </div>
-                        <div class="input-col">
-                            <label>成本价(元)</label>
-                            <input type="number" id="position-cost" placeholder="如 150.00" min="0.01" step="0.01">
-                        </div>
-                        <div class="input-col btn-col">
-                            <button id="add-position-btn" class="btn-primary">添加持仓</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>📋 当前持仓</h3>
-                    <span class="badge" id="user-position-count">0</span>
-                </div>
-                <div class="positions-table-container">
-                    <table class="positions-table">
-                        <thead>
-                            <tr>
-                                <th>股票代码</th>
-                                <th>股票名称</th>
-                                <th>持有数量</th>
-                                <th>成本价</th>
-                                <th>当前价</th>
-                                <th>市值</th>
-                                <th>浮盈/亏</th>
-                                <th>浮盈率</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="positions-tbody">
-                            <tr class="empty-row">
-                                <td colspan="9" class="empty-cell">
-                                    <div class="empty-state">
-                                        <div class="empty-icon">📋</div>
-                                        <p>暂无持仓</p>
-                                        <p class="hint">在上方添加您的持仓股票</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>💹 持仓汇总</h3>
-                </div>
-                <div class="positions-summary">
-                    <div class="summary-item">
-                        <span class="summary-label">总成本</span>
-                        <span class="summary-value" id="summary-cost">--</span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">总市值</span>
-                        <span class="summary-value" id="summary-market">--</span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">总浮盈</span>
-                        <span class="summary-value" id="summary-pnl">--</span>
-                    </div>
-                    <div class="summary-item">
-                        <span class="summary-label">总浮盈率</span>
-                        <span class="summary-value" id="summary-pnl-percent">--</span>
-                    </div>
-                </div>
-            </div>
-        </main>
-
-        <!-- 监控页面 -->
-        <main id="monitor-tab" class="main-content tab-content">
-            <div class="tab-header">
-                <h2>👁️ 实时监控</h2>
-                <p class="tab-desc">实时监控股票行情，自动检测买卖点并语音提醒</p>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>🎯 监控控制</h3>
-                </div>
-                <div class="monitor-controls">
-                    <button id="start-monitor-btn" class="btn-primary">🔊 开始监控</button>
-                    <button id="stop-monitor-btn" class="btn-secondary">🔇 停止监控</button>
-                    <div class="monitor-status" id="monitor-status-text">监控已停止</div>
-                </div>
-            </div>
-
-            <div class="dashboard-grid">
-                <section class="panel-card">
-                    <div class="panel-header">
-                        <h3>👁️ 监控列表</h3>
-                        <span class="badge" id="monitor-list-count">0</span>
-                    </div>
-                    <div id="monitor-stock-list" class="stock-list">
-                        <div class="empty-state">
-                            <div class="empty-icon">👁</div>
-                            <p>暂无监控中的股票</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="panel-card">
-                    <div class="panel-header">
-                        <h3>📢 最新信号</h3>
-                    </div>
-                    <div id="monitor-signals-list" class="signals-list">
-                        <div class="empty-state">
-                            <div class="empty-icon">📢</div>
+                            <div class="empty-icon">!</div>
                             <p>暂无信号</p>
                         </div>
                     </div>
@@ -261,11 +84,112 @@
             </div>
         </main>
 
-        <!-- 选股研究页面 -->
+        <main id="position-tab" class="main-content tab-content">
+            <div class="tab-header">
+                <h2>持仓管理</h2>
+                <p class="tab-desc">手动维护持仓，配合监控信号复盘。</p>
+            </div>
+
+            <div class="panel-card">
+                <div class="panel-header">
+                    <h3>新增持仓</h3>
+                </div>
+                <div class="input-section">
+                    <div class="input-row">
+                        <div class="input-col">
+                            <label>股票代码</label>
+                            <input type="text" id="position-code" placeholder="如：600519" maxlength="6">
+                        </div>
+                        <div class="input-col">
+                            <label>股票名称</label>
+                            <input type="text" id="position-name" placeholder="可手动填写">
+                        </div>
+                        <div class="input-col">
+                            <label>持仓数量</label>
+                            <input type="number" id="position-quantity" placeholder="1000" min="1" step="100">
+                        </div>
+                        <div class="input-col">
+                            <label>持仓成本</label>
+                            <input type="number" id="position-cost" placeholder="150.00" min="0.01" step="0.01">
+                        </div>
+                        <div class="input-col btn-col">
+                            <button id="add-position-btn" class="btn-primary">新增</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-card">
+                <div class="panel-header">
+                    <h3>当前持仓</h3>
+                </div>
+                <div class="positions-table-container">
+                    <table class="positions-table">
+                        <thead>
+                            <tr>
+                                <th>代码</th>
+                                <th>名称</th>
+                                <th>数量</th>
+                                <th>成本</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positions-tbody">
+                            <tr class="empty-row">
+                                <td colspan="5" class="empty-cell">
+                                    <div class="empty-state">
+                                        <p>暂无持仓</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+
+        <main id="monitor-tab" class="main-content tab-content">
+            <div class="tab-header">
+                <h2>监控中心</h2>
+                <p class="tab-desc">启动监控后会持续识别买卖点并推送。</p>
+            </div>
+
+            <div class="panel-card">
+                <div class="panel-header">
+                    <h3>监控控制</h3>
+                </div>
+                <div class="monitor-controls">
+                    <button id="start-monitor-btn" class="btn-primary">开始监控</button>
+                    <button id="stop-monitor-btn" class="btn-secondary">停止监控</button>
+                    <div class="monitor-status" id="monitor-status-text">监控已停止</div>
+                </div>
+            </div>
+
+            <div class="dashboard-grid">
+                <section class="panel-card">
+                    <div class="panel-header">
+                        <h3>监控列表</h3>
+                        <span class="badge" id="monitor-list-count">0</span>
+                    </div>
+                    <div id="monitor-stock-list" class="stock-list">
+                        <div class="empty-state"><p>暂无监控标的</p></div>
+                    </div>
+                </section>
+                <section class="panel-card">
+                    <div class="panel-header">
+                        <h3>实时信号</h3>
+                    </div>
+                    <div id="monitor-signals-list" class="signals-list">
+                        <div class="empty-state"><p>暂无信号</p></div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
         <main id="research-tab" class="main-content tab-content">
             <div class="tab-header">
-                <h2>🔎 选股研究</h2>
-                <p class="tab-desc">把龙虎榜、成交活跃和热股池集中到这里，作为做T前的候选池</p>
+                <h2>研究</h2>
+                <p class="tab-desc">龙虎榜与热门池联合展示，选出可做T的备选标的。</p>
             </div>
 
             <div class="dashboard-grid">
@@ -275,45 +199,39 @@
                         <button id="refresh-longhubang-btn" class="btn-sm">刷新</button>
                     </div>
                     <div id="longhubang-list" class="longhubang-list">
-                        <div class="empty-state">
-                            <p>正在加载龙虎榜数据...</p>
-                        </div>
+                        <div class="empty-state">正在加载...</div>
                     </div>
                 </section>
-
                 <section class="panel-card" id="research-hot-stocks-panel">
                     <div class="panel-header">
-                        <h3>热股候选</h3>
+                        <h3>热门池</h3>
                         <button id="refresh-research-hot-btn" class="btn-sm">刷新</button>
                     </div>
                     <div id="research-hot-stocks-list" class="longhubang-list">
-                        <div class="empty-state">
-                            <p>正在加载热股数据...</p>
-                        </div>
+                        <div class="empty-state">正在加载...</div>
                     </div>
                 </section>
             </div>
         </main>
 
-        <!-- 模拟测试页面 -->
         <main id="simulation-tab" class="main-content tab-content">
             <div class="tab-header">
-                <h2>🚀 模拟测试</h2>
-                <p class="tab-desc">输入股票代码和模拟金额，测试当天做T胜率</p>
+                <h2>模拟测试</h2>
+                <p class="tab-desc">支持单股测试与随机热股回测，快速判断策略可行性。</p>
             </div>
 
             <div class="panel-card">
                 <div class="panel-header">
-                    <h3>🔬 单股模拟测试</h3>
+                    <h3>单股模拟</h3>
                 </div>
                 <div class="simulation-form">
                     <div class="input-row">
                         <div class="input-col">
                             <label>股票代码</label>
-                            <input type="text" id="sim-stock-code" placeholder="6位数字(如 600519)" maxlength="6">
+                            <input type="text" id="sim-stock-code" placeholder="如：600519" maxlength="6">
                         </div>
                         <div class="input-col">
-                            <label>模拟金额 (元)</label>
+                            <label>模拟金额（元）</label>
                             <input type="number" id="sim-amount" placeholder="100000" value="100000" min="10000" step="10000">
                         </div>
                         <div class="input-col">
@@ -326,36 +244,20 @@
                             </select>
                         </div>
                         <div class="input-col btn-col">
-                            <button id="run-simulation-btn" class="btn-primary btn-large">🚀 开始测试</button>
+                            <button id="run-simulation-btn" class="btn-primary">开始模拟</button>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>📊 测试结果</h3>
-                </div>
-                <div id="simulation-result" class="simulation-result">
-                    <div class="empty-state">
-                        <div class="empty-icon">🔬</div>
-                        <p>暂无测试结果</p>
-                        <p class="hint">请在上方输入股票代码开始测试</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 一键自动抓取热股测试 - NEW FEATURE -->
             <div class="panel-card highlight-card">
                 <div class="panel-header">
-                    <h3>⚡ 一键自动抓取热股 + 多次验算</h3>
-                    <span class="badge badge-hot">NEW</span>
+                    <h3>快速验证（热门池）</h3>
+                    <span class="badge badge-hot">推荐</span>
                 </div>
                 <div class="auto-hot-stocks-form">
                     <div class="hot-stocks-preview" id="hot-stocks-preview">
-                        <div class="preview-placeholder">
-                            <span>点击按钮自动获取市场热门股票并进行多次模拟验算</span>
-                        </div>
+                        <div class="preview-placeholder">点击下方按钮拉取热门池并自动执行验证</div>
                     </div>
                     <div class="input-row">
                         <div class="input-col">
@@ -368,200 +270,32 @@
                             </select>
                         </div>
                         <div class="input-col">
-                            <label>每股金额 (元)</label>
+                            <label>验证金额（元）</label>
                             <input type="number" id="auto-amount" value="100000" min="10000" step="10000">
                         </div>
                         <div class="input-col">
-                            <label>验算次数</label>
+                            <label>执行次数</label>
                             <select id="validation-runs">
-                                <option value="5">5次验算</option>
-                                <option value="10" selected>10次验算 (推荐)</option>
-                                <option value="20">20次验算</option>
+                                <option value="5">5 次</option>
+                                <option value="10" selected>10 次</option>
+                                <option value="20">20 次</option>
                             </select>
                         </div>
                         <div class="input-col btn-col">
-                            <button id="auto-hot-stocks-btn" class="btn-primary btn-large btn-gradient">🚀 自动抓取热股测试</button>
+                            <button id="auto-hot-stocks-btn" class="btn-primary btn-gradient">开始验证</button>
                         </div>
                     </div>
                     <div class="validation-progress" id="validation-progress" style="display: none;">
                         <div class="progress-bar">
                             <div class="progress-fill" id="progress-fill"></div>
                         </div>
-                        <div class="progress-text" id="progress-text">正在验算 0/10...</div>
+                        <div class="progress-text" id="progress-text">验证中 0/10</div>
                     </div>
-                    <!-- 验算结果展示区 -->
-                    <div id="validation-results-panel" style="display: none; margin-top: 20px;">
-                        <h4>📊 验算结果汇总</h4>
+                    <div id="validation-results-panel" style="display: none; margin-top: 16px;">
+                        <h4>验证结果</h4>
                         <div class="validation-summary" id="validation-summary"></div>
                         <div class="validation-details" id="validation-details"></div>
                     </div>
-                </div>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>🔍 批量模拟测试</h3>
-                </div>
-                <div class="batch-simulation-form">
-                    <div class="input-row">
-                        <div class="input-col">
-                            <label>策略选择</label>
-                            <select id="batch-strategy">
-                                <option value="zijin_special">紫金矿业专用策略</option>
-                                <option value="simple_bias">简单偏离率策略</option>
-                                <option value="advanced_bias">进阶偏离率策略</option>
-                                <option value="zijin_high_profit">紫金高利润策略</option>
-                            </select>
-                        </div>
-                        <div class="input-col">
-                            <label>每股金额 (元)</label>
-                            <input type="number" id="batch-amount" placeholder="100000" value="100000" min="10000" step="10000">
-                        </div>
-                        <div class="input-col">
-                            <label>测试股票数</label>
-                            <select id="batch-count">
-                                <option value="5">5只热门股</option>
-                                <option value="10" selected>10只热门股</option>
-                                <option value="20">20只热门股</option>
-                            </select>
-                        </div>
-                        <div class="input-col btn-col">
-                            <button id="run-batch-simulation-btn" class="btn-primary btn-large">📊 批量测试</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="panel-card" id="batch-result-panel" style="display: none;">
-                <div class="panel-header">
-                    <h3>📊 批量测试结果</h3>
-                    <button class="btn-close" id="close-batch-result">×</button>
-                </div>
-                <div id="batch-test-summary" class="batch-summary"></div>
-                <div id="batch-test-results" class="batch-results"></div>
-            </div>
-        </main>
-
-        <!-- 策略页面 -->
-        <main id="strategy-tab" class="main-content tab-content">
-            <div class="tab-header">
-                <h2>📋 策略说明</h2>
-                <p class="tab-desc">做T交易策略详解</p>
-            </div>
-
-            <div class="strategy-grid">
-                <div class="strategy-card">
-                    <div class="strategy-header">
-                        <h3>🌟 紫金矿业专用策略</h3>
-                        <span class="win-rate">胜率: 75-82%</span>
-                    </div>
-                    <div class="strategy-content">
-                        <h4>核心原则</h4>
-                        <ul>
-                            <li>一天只捕捉1-2次买卖点，宁可不做，不可乱做</li>
-                            <li>时间窗口控制：09:51-10:15早盘，13:01-14:00下午</li>
-                            <li>偏离率筛选：买入偏离 ≤ -0.8%，卖出偏离 ≥ +0.8%</li>
-                        </ul>
-                        <h4>买入条件</h4>
-                        <ul>
-                            <li>条件A（最稳）：偏离 ≤ -1.2%，量比 ≥ 3.0</li>
-                            <li>条件B（常用）：偏离 -0.8%~-1.0%，量比 ≥ 2.5</li>
-                            <li>条件C（保守）：偏离 -0.5%~-0.8%，量比 2.0~2.4</li>
-                        </ul>
-                        <h4>卖出条件</h4>
-                        <ul>
-                            <li>按买入类型对应目标价位止盈</li>
-                            <li>绝对止损：-0.6%</li>
-                            <li>14:30未卖出则强制平仓</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <div class="strategy-card">
-                    <div class="strategy-header">
-                        <h3>📈 简单偏离率策略</h3>
-                        <span class="win-rate">胜率: 65-70%</span>
-                    </div>
-                    <div class="strategy-content">
-                        <h4>原理</h4>
-                        <p>基于价格与均线的偏离程度，逆向操作</p>
-                        <ul>
-                            <li>偏离 < -1.5% → 买入信号</li>
-                            <li>偏离 > +1.5% → 卖出信号</li>
-                            <li>适合波动较大的股票</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <div class="strategy-card">
-                    <div class="strategy-header">
-                        <h3>🚀 进阶偏离率策略</h3>
-                        <span class="win-rate">胜率: 70-75%</span>
-                    </div>
-                    <div class="strategy-content">
-                        <h4>原理</h4>
-                        <p>加入波动率调节，动态调整阈值</p>
-                        <ul>
-                            <li>短期均线 + 长期均线双重检测</li>
-                            <li>根据历史波动率调整买卖阈值</li>
-                            <li>适合有一定趋势的股票</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <div class="strategy-card">
-                    <div class="strategy-header">
-                        <h3>🚚 紫金高利润策略</h3>
-                        <span class="win-rate">胜率: 60-70%</span>
-                    </div>
-                    <div class="strategy-content">
-                        <h4>原理</h4>
-                        <p>更激进的做T策略，追求更高收益</p>
-                        <ul>
-                            <li>更多买入信号（强买 + 普通买）</li>
-                            <li>更大仓位比例，50%现金做T</li>
-                            <li>更激进的止盈目标</li>
-                            <li>风险收益比更高</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </main>
-
-        <!-- 日志页面 -->
-        <main id="logs-tab" class="main-content tab-content">
-            <div class="tab-header">
-                <h2>📜 交易日志</h2>
-                <p class="tab-desc">查看历史交易记录和信号日志</p>
-            </div>
-
-            <div class="panel-card">
-                <div class="panel-header">
-                    <h3>📋 交易记录</h3>
-                </div>
-                <div class="logs-container">
-                    <table class="logs-table">
-                        <thead>
-                            <tr>
-                                <th>时间</th>
-                                <th>股票</th>
-                                <th>类型</th>
-                                <th>价格</th>
-                                <th>数量</th>
-                                <th>盈亏</th>
-                            </tr>
-                        </thead>
-                        <tbody id="logs-tbody">
-                            <tr class="empty-row">
-                                <td colspan="6" class="empty-cell">
-                                    <div class="empty-state">
-                                        <div class="empty-icon">📜</div>
-                                        <p>暂无交易记录</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
             </div>
         </main>
@@ -570,3 +304,4 @@
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
+

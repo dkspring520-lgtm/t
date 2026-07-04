@@ -308,3 +308,37 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshHotBtn.addEventListener('click', loadResearchHotStocks);
     }
 });
+
+(function setupCompactMode() {
+    const KEY = 'ui_compact_mode_v1';
+    const switchBtn = document.getElementById('compact-switch');
+
+    function applyCompactMode(enabled) {
+        document.body.classList.toggle('compact-mode', enabled);
+        if (switchBtn) {
+            switchBtn.textContent = enabled ? '精简模式' : '标准模式';
+            switchBtn.title = enabled ? '恢复标准显示' : '开启精简显示';
+        }
+    }
+
+    function loadCompactMode() {
+        return localStorage.getItem(KEY) === '1';
+    }
+
+    function saveCompactMode(enabled) {
+        localStorage.setItem(KEY, enabled ? '1' : '0');
+    }
+
+    let enabled = loadCompactMode();
+    applyCompactMode(enabled);
+
+    if (!switchBtn) {
+        return;
+    }
+
+    switchBtn.addEventListener('click', () => {
+        enabled = !enabled;
+        saveCompactMode(enabled);
+        applyCompactMode(enabled);
+    });
+})();
