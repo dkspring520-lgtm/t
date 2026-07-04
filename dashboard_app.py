@@ -4513,6 +4513,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
   <section class="grid"><aside class="panel"><div class="head">分类池 <span class="badge" id="count">0只</span></div><div class="body" id="categories"></div></aside><section class="panel"><div class="head">候选股票</div><div style="overflow:auto;max-height:62vh"><table><thead><tr><th>股票</th><th>分类</th><th>层级</th><th>3个月预测</th><th>中期分</th><th>价格</th><th>涨跌</th><th>龙虎榜</th><th>多Agent结论</th></tr></thead><tbody id="rows"><tr><td colspan="9" class="empty">加载中...</td></tr></tbody></table></div></section></section>
   <section class="panel detail" id="detail" style="display:none"></section>
 </main>
+</div>
 <script>
 const $=id=>document.getElementById(id);let allRows=[],activeCategory='全部';
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
