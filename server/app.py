@@ -12,6 +12,16 @@ import json
 import re
 from datetime import datetime, timedelta
 import os
+import sys
+from pathlib import Path
+
+root_dir = Path(__file__).resolve().parents[1]
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
+from env_bootstrap import apply_local_env
+
+apply_local_env()
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求

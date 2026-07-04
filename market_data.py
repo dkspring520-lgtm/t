@@ -4,6 +4,13 @@ import re
 import time
 from datetime import datetime, timedelta
 
+
+def __getattr__(name):
+    if name == 'MarketDataFetcher':
+        return MarketData
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 class MarketData:
     def __init__(self):
         self.session = requests.Session()

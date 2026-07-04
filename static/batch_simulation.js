@@ -28,7 +28,7 @@ async function runBatchSimulation() {
         
         if (result.success) {
             displayBatchSimulationResult(result.data);
-            showToast(`批量模拟测试完成！平均胜率: ${result.data.summary.avg_win_rate}%`, 'success');
+            showToast(`批量模拟测试完成！平均胜率: ${result.data.summary.stock_win_rate}%`, 'success');
         } else {
             showToast(result.error || '批量模拟测试失败', 'error');
         }

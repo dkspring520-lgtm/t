@@ -11,6 +11,10 @@ from datetime import datetime
 import json
 import random
 
+from env_bootstrap import apply_local_env
+
+apply_local_env()
+
 # 导入自定义模块
 from market_data import MarketData
 from signal_detector import SignalDetector

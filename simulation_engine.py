@@ -601,6 +601,34 @@ class SimulationEngine:
             return 0.01
 
 
+def run_batch_simulation(stock_codes, initial_amount=100000, strategy='zijin_special'):
+    """Compatibility wrapper used by older batch-test scripts."""
+    normalized_codes = []
+    for stock in stock_codes:
+        if isinstance(stock, dict):
+            code = stock.get('code') or stock.get('stock_code')
+        else:
+            code = stock
+        if code:
+            normalized_codes.append(str(code))
+
+    engine = SimulationEngine()
+    batch = engine.run_batch_simulation(
+        normalized_codes,
+        strategy=strategy,
+        amount_per_stock=initial_amount,
+    )
+
+    legacy_results = []
+    for result in batch.get('results', []):
+        legacy_results.append({
+            **result,
+            'win_rate': result.get('profit_rate', 0),
+            'total_profit': result.get('profit', 0),
+        })
+    return legacy_results
+
+
 if __name__ == '__main__':
     engine = SimulationEngine()
     # 测试批量验算

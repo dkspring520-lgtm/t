@@ -6,6 +6,9 @@ import schedule
 import requests
 import logging
 from datetime import datetime, timedelta
+from env_bootstrap import apply_local_env
+
+apply_local_env()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fetcher.tonghuashun import tonghuashun_fetcher
