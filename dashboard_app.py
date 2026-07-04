@@ -1705,12 +1705,14 @@ def rps_payload(limit: int = 10) -> dict:
 
     rows.sort(key=lambda item: (-item["rps"], -item["themeHeat"], -item["amountWan"], item["code"]))
     selected = diversify_rps_rows(rows, limit=limit)
+    yearly_paths = yearly_mainline_paths(themes, rows)
     return {
         "ok": True,
         "message": f"RPS主线扫描完成：从{len(rows)}只样本中选出{len(selected)}只。",
         "updatedAt": datetime.now().strftime("%m-%d %H:%M"),
         "rows": selected,
         "themes": themes[:8],
+        "paths": yearly_paths,
         "market": {
             "sample": len(rows),
             "up": sum(1 for row in rows if float(row.get("change") or 0) > 0),
@@ -1720,6 +1722,64 @@ def rps_payload(limit: int = 10) -> dict:
             "leaderHeat": themes[0]["heat"] if themes else 0,
         },
     }
+
+
+def yearly_mainline_paths(themes: list[dict], rows: list[dict]) -> list[dict]:
+    """Infer this year's mainline rotation map from local theme tags.
+
+    The free quote source currently provides live snapshots, not full-year
+    daily money-flow history. This returns an explainable mainline map using
+    A-share seasonal anchors plus today's RPS/turnover heat; it can be replaced
+    by true monthly RPS curves once a daily-history vendor is connected.
+    """
+    now = datetime.now()
+    theme_heat = {str(item.get("name") or ""): float(item.get("heat") or 0) for item in themes}
+    theme_counts: dict[str, int] = {}
+    theme_amounts: dict[str, float] = {}
+    for row in rows:
+        cat = str(row.get("category") or "综合观察")
+        theme_counts[cat] = theme_counts.get(cat, 0) + 1
+        theme_amounts[cat] = theme_amounts.get(cat, 0.0) + float(row.get("amountWan") or 0)
+
+    anchors = [
+        ("AI科技", "AI科技/算力通信", "1-3月", "算力投资、通信链、AI应用扩散", "看成交持续、订单兑现和板块内多股共振"),
+        ("资源周期", "黄金铜油/资源周期", "2-6月", "美元、金铜油价格、地缘扰动、矿业并购", "紫金矿业重点看金价、铜价、美元和成交量"),
+        ("新能源", "新能源/电力设备", "3-7月", "价格企稳、装机需求、政策预期和出口链", "先看超跌修复，再看业绩和放量突破"),
+        ("高端制造", "机器人/高端制造", "4-8月", "设备更新、机器人、军工制造、国产替代", "适合找趋势回踩，不追单日脉冲"),
+        ("消费医药", "消费医药/创新药", "5-9月", "估值修复、业绩兑现、创新药和医疗需求", "更看确定性和政策风险，少追高波动"),
+        ("金融地产", "金融地产/高股息", "全年防守", "分红、防守资金、政策托底和指数稳定器", "用来判断大盘风险偏好，不一定适合高频做T"),
+    ]
+    current_month = max(1, min(12, now.month))
+    month_names = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"][:current_month]
+    paths = []
+    for idx, (key, name, months, drivers, watch) in enumerate(anchors):
+        heat = theme_heat.get(key, 0.0)
+        amount = theme_amounts.get(key, 0.0)
+        coverage = theme_counts.get(key, 0)
+        anchor_bonus = max(0, 22 - abs(current_month - min(12, idx + 2)) * 3)
+        score = round(max(0, min(100, heat * 0.62 + min(amount / 600000, 1) * 18 + coverage * 2 + anchor_bonus)), 1)
+        if score >= 72:
+            stage = "主升跟踪"
+        elif score >= 55:
+            stage = "轮动观察"
+        elif score >= 38:
+            stage = "低位潜伏"
+        else:
+            stage = "等待资金"
+        paths.append({
+            "name": name,
+            "key": key,
+            "months": months,
+            "yearMonths": month_names,
+            "score": score,
+            "stage": stage,
+            "heat": round(heat, 1),
+            "amountText": format_amount_wan(amount),
+            "drivers": drivers,
+            "watch": watch,
+        })
+    paths.sort(key=lambda item: (-item["score"], item["name"]))
+    return paths
 
 
 def diversify_rps_rows(rows: list[dict], limit: int = 10) -> list[dict]:
@@ -3771,7 +3831,7 @@ RPS_HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>RPS主线雷达</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#17202a;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#17202a;text-decoration:none;padding:0 15px;font-weight:900;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}.primary{background:#17202a!important;color:#fff!important;border-color:#17202a!important}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:24px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#71808c}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.card,.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06);overflow:hidden}.card{padding:14px}.card span{display:block;color:#71808c;font-size:12px;font-weight:900}.card b{display:block;font-size:24px;margin-top:3px}.up{color:#ec5f6b}.down{color:#35b978}.grid{display:grid;grid-template-columns:380px 1fr;gap:14px;min-height:0}.head{height:46px;border-bottom:1px solid #e9eef1;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.theme{display:grid;grid-template-columns:1fr 72px;gap:8px;align-items:center;border-bottom:1px solid #f0f2f4;padding:10px 2px}.theme:last-child{border-bottom:0}.bar{height:8px;border-radius:99px;background:#eef2f4;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#35b978,#f0bd3c,#ec5f6b)}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#71808c}.stock{font-weight:950}.code{color:#71808c;margin-left:7px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850}.rps{font-size:20px;font-weight:950;color:#d99a1b}.agents{line-height:1.75;color:#303942}.empty{text-align:center;padding:36px;color:#71808c;font-weight:850}.note{background:#f8fbfb;border:1px solid #eef2f4;border-radius:14px;padding:12px;color:#52616f;line-height:1.75}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}th,td{padding:10px 8px;font-size:12px}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#17202a;background:radial-gradient(circle at 88% 0,#7cefed,transparent 34%),linear-gradient(135deg,#78939b,#f2fbfb 42%,#f7fbfb)}button,a.btn{height:36px;border:1px solid #e9eef1;border-radius:11px;background:#fff;color:#17202a;text-decoration:none;padding:0 15px;font-weight:900;cursor:pointer;box-shadow:0 8px 18px rgba(31,46,56,.06);display:inline-flex;align-items:center}.primary{background:#17202a!important;color:#fff!important;border-color:#17202a!important}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:24px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(25,45,50,.18);display:grid;grid-template-rows:auto auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#71808c}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.card,.panel{background:#fff;border:1px solid #e9eef1;border-radius:16px;box-shadow:0 10px 30px rgba(31,46,56,.06);overflow:hidden}.card{padding:14px}.card span{display:block;color:#71808c;font-size:12px;font-weight:900}.card b{display:block;font-size:24px;margin-top:3px}.up{color:#ec5f6b}.down{color:#35b978}.grid{display:grid;grid-template-columns:430px 1fr;gap:14px;min-height:0}.head{height:46px;border-bottom:1px solid #e9eef1;padding:0 16px;display:flex;align-items:center;justify-content:space-between;font-weight:950}.body{padding:12px;overflow:auto}.theme{display:grid;grid-template-columns:1fr 72px;gap:8px;align-items:center;border-bottom:1px solid #f0f2f4;padding:10px 2px}.theme:last-child{border-bottom:0}.bar{height:8px;border-radius:99px;background:#eef2f4;overflow:hidden;margin-top:7px}.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#35b978,#f0bd3c,#ec5f6b)}.path{border-bottom:1px solid #f0f2f4;padding:12px 2px}.path:last-child{border-bottom:0}.path-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.path b{font-size:14px}.stage{border-radius:999px;background:#eef7ff;color:#2563eb;padding:3px 8px;font-size:12px;font-weight:950;white-space:nowrap}.path-meta{margin-top:6px;color:#52616f;line-height:1.65}.path-score{height:7px;background:#eef2f4;border-radius:99px;overflow:hidden;margin-top:8px}.path-score i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2563eb,#35b978,#ec5f6b)}table{width:100%;border-collapse:collapse}th,td{padding:12px 14px;border-bottom:1px solid #edf0f2;text-align:left;vertical-align:top}th{font-size:12px;color:#71808c}.stock{font-weight:950}.code{color:#71808c;margin-left:7px}.tag{display:inline-flex;border-radius:999px;background:#f0f4f5;padding:4px 8px;color:#58636d;font-size:12px;font-weight:850}.rps{font-size:20px;font-weight:950;color:#d99a1b}.agents{line-height:1.75;color:#303942}.empty{text-align:center;padding:36px;color:#71808c;font-weight:850}.note{background:#f8fbfb;border:1px solid #eef2f4;border-radius:14px;padding:12px;color:#52616f;line-height:1.75}@media(max-width:1000px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}th,td{padding:10px 8px;font-size:12px}}
 </style>
 </head>
 <body>
@@ -3791,6 +3851,8 @@ RPS_HTML = r"""<!doctype html>
     <aside class="panel">
       <div class="head">板块资金动向 <span id="updated" class="muted">--</span></div>
       <div class="body" id="themes"><div class="empty">正在读取板块热度...</div></div>
+      <div class="head">今年主线轨迹 <span class="muted">路径推断</span></div>
+      <div class="body" id="paths"><div class="empty">正在生成年度主线...</div></div>
       <div class="body"><div class="note"><b>龙虎榜观察</b><br>当前为席位观察位：优先标记RPS高、成交活跃、主线热度高的股票。接入东方财富/同花顺/L2后，可升级为真实龙虎榜净买入、机构席位、游资席位跟踪。</div></div>
     </aside>
     <section class="panel">
@@ -3810,12 +3872,16 @@ async function loadRps(){
     if(!data.ok)throw new Error(data.message||'RPS读取失败');
     const m=data.market||{};
     $('sample').textContent=m.sample??'--';$('up').textContent=m.up??'--';$('down').textContent=m.down??'--';$('leader').textContent=m.leader||'--';$('heat').textContent=(m.leaderHeat??'--')+'分';$('updated').textContent=data.updatedAt||'';
-    renderThemes(data.themes||[]);renderRows(data.rows||[]);
+    renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
   }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
 }
 function renderThemes(themes){
   if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
   $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
+}
+function renderPaths(paths){
+  if(!paths.length){$('paths').innerHTML='<div class="empty">暂无年度主线。</div>';return}
+  $('paths').innerHTML=paths.map(p=>`<div class="path"><div class="path-top"><b>${esc(p.name)}</b><span class="stage">${esc(p.stage)} ${esc(p.score)}分</span></div><div class="path-meta">活跃阶段：${esc(p.months)}｜当前热度 ${esc(p.heat)}｜成交 ${esc(p.amountText||'--')}</div><div class="path-meta">驱动：${esc(p.drivers)}</div><div class="path-meta">验证：${esc(p.watch)}</div><div class="path-score"><i style="width:${Math.max(3,Math.min(100,Number(p.score)||0))}%"></i></div></div>`).join('');
 }
 function renderRows(rows){
   if(!rows.length){$('rows').innerHTML='<tr><td colspan="7" class="empty">暂无强势候选。</td></tr>';return}
