@@ -1,6 +1,10 @@
 // 导出函数供HTML调用
-window.removePosition = removePosition;
-window.removeStock = removeStock;
+if (typeof removePosition === 'function') {
+    window.removePosition = removePosition;
+}
+if (typeof removeStock === 'function') {
+    window.removeStock = removeStock;
+}
 
 // ========== 一键自动抓取热股 + 多次验算功能 ==========
 async function runAutoHotStocksTest() {
@@ -183,10 +187,124 @@ function escapeHtml(value) {
     }[char]));
 }
 
+async function loadLonghubangCandidates() {
+    const list = document.getElementById('longhubang-list');
+    if (!list) {
+        return;
+    }
+
+    list.innerHTML = '<div class="empty-state"><p>正在加载龙虎榜数据...</p></div>';
+
+    try {
+        const response = await fetch('/api/longhubang?limit=12&days=5');
+        const result = await response.json();
+        if (!result.success) {
+            throw new Error(result.error || '龙虎榜数据加载失败');
+        }
+        list.innerHTML = renderCandidateList(result.data || [], '暂无龙虎榜候选');
+    } catch (error) {
+        console.error('龙虎榜加载失败:', error);
+        list.innerHTML = '<div class="empty-state"><p>龙虎榜数据加载失败，请稍后刷新</p></div>';
+    }
+}
+
+async function loadResearchHotStocks() {
+    const list = document.getElementById('research-hot-stocks-list');
+    if (!list) {
+        return;
+    }
+
+    list.innerHTML = '<div class="empty-state"><p>正在加载热股数据...</p></div>';
+
+    try {
+        const response = await fetch('/api/hot_stocks?limit=12');
+        const result = await response.json();
+        if (!result.success) {
+            throw new Error(result.error || '热股数据加载失败');
+        }
+        list.innerHTML = renderCandidateList(result.data || [], '暂无热股候选');
+    } catch (error) {
+        console.error('热股加载失败:', error);
+        list.innerHTML = '<div class="empty-state"><p>热股数据加载失败，请稍后刷新</p></div>';
+    }
+}
+
+function renderCandidateList(stocks, emptyText) {
+    if (!stocks.length) {
+        return `<div class="empty-state"><p>${escapeHtml(emptyText)}</p></div>`;
+    }
+    return `<div class="selected-stocks-grid">${stocks.map(renderCandidateCard).join('')}</div>`;
+}
+
+function renderCandidateCard(stock) {
+    const isLhb = Boolean(stock.is_longhubang);
+    const netBuy = formatAmount(stock.lhb_net_buy || 0);
+    const score = stock.lhb_score || 0;
+    const reason = stock.lhb_reason || (stock.type === 'volume' ? '成交活跃' : '热股池候选');
+    const change = Number(stock.change_percent || 0);
+    const changeText = change ? `${change > 0 ? '+' : ''}${change.toFixed(2)}%` : '--';
+    const meta = isLhb
+        ? `<span class="lhb-chip">龙虎榜 ${score}</span><span>净买入 ${netBuy}</span>`
+        : '<span class="stock-source">热股池</span>';
+
+    return `
+        <div class="selected-stock ${isLhb ? 'is-lhb' : ''}">
+            <div class="selected-stock-main">
+                <strong>${escapeHtml(stock.name || stock.code)}</strong>
+                <span>${escapeHtml(stock.code)}</span>
+            </div>
+            <div class="selected-stock-meta">
+                ${meta}
+                <span>涨跌 ${escapeHtml(changeText)}</span>
+            </div>
+            <div class="selected-stock-reason">${escapeHtml(reason)}</div>
+        </div>
+    `;
+}
+
+function initTabs() {
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        tab.addEventListener('click', event => {
+            event.preventDefault();
+            const tabName = tab.dataset.tab;
+
+            document.querySelectorAll('.nav-tab').forEach(item => item.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            tab.classList.add('active');
+            const panel = document.getElementById(`${tabName}-tab`);
+            if (panel) {
+                panel.classList.add('active');
+            }
+
+            if (tabName === 'research') {
+                loadLonghubangCandidates();
+                loadResearchHotStocks();
+            }
+        });
+    });
+}
+
+function showToast(message, type = 'info') {
+    console.log(`[${type}] ${message}`);
+}
+
 // 初始化一键自动抓取热股功能
 document.addEventListener('DOMContentLoaded', () => {
+    initTabs();
+
     const autoBtn = document.getElementById('auto-hot-stocks-btn');
     if (autoBtn) {
         autoBtn.addEventListener('click', runAutoHotStocksTest);
+    }
+
+    const refreshLonghubangBtn = document.getElementById('refresh-longhubang-btn');
+    if (refreshLonghubangBtn) {
+        refreshLonghubangBtn.addEventListener('click', loadLonghubangCandidates);
+    }
+
+    const refreshHotBtn = document.getElementById('refresh-research-hot-btn');
+    if (refreshHotBtn) {
+        refreshHotBtn.addEventListener('click', loadResearchHotStocks);
     }
 });

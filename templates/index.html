@@ -20,6 +20,7 @@
                 <a href="#" class="nav-tab active" data-tab="overview">📊 总览</a>
                 <a href="#" class="nav-tab" data-tab="position">💰 持仓</a>
                 <a href="#" class="nav-tab" data-tab="monitor">👁️ 监控</a>
+                <a href="#" class="nav-tab" data-tab="research">🔎 选股研究</a>
                 <a href="#" class="nav-tab" data-tab="simulation">🚀 模拟测试</a>
                 <a href="#" class="nav-tab" data-tab="strategy">📋 策略</a>
                 <a href="#" class="nav-tab" data-tab="logs">📜 日志</a>
@@ -254,6 +255,40 @@
                         <div class="empty-state">
                             <div class="empty-icon">📢</div>
                             <p>暂无信号</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- 选股研究页面 -->
+        <main id="research-tab" class="main-content tab-content">
+            <div class="tab-header">
+                <h2>🔎 选股研究</h2>
+                <p class="tab-desc">把龙虎榜、成交活跃和热股池集中到这里，作为做T前的候选池</p>
+            </div>
+
+            <div class="dashboard-grid">
+                <section class="panel-card" id="longhubang-panel">
+                    <div class="panel-header">
+                        <h3>龙虎榜候选</h3>
+                        <button id="refresh-longhubang-btn" class="btn-sm">刷新</button>
+                    </div>
+                    <div id="longhubang-list" class="longhubang-list">
+                        <div class="empty-state">
+                            <p>正在加载龙虎榜数据...</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-card" id="research-hot-stocks-panel">
+                    <div class="panel-header">
+                        <h3>热股候选</h3>
+                        <button id="refresh-research-hot-btn" class="btn-sm">刷新</button>
+                    </div>
+                    <div id="research-hot-stocks-list" class="longhubang-list">
+                        <div class="empty-state">
+                            <p>正在加载热股数据...</p>
                         </div>
                     </div>
                 </section>
