@@ -183,6 +183,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(admin_users_payload())
             return
+        if path == "/api/admin/activation_codes":
+            if not is_admin_email(email):
+                self._send_json({"ok": False, "message": "没有管理员权限。"}, status=403)
+                return
+            self._send_json(admin_activation_codes_payload())
+            return
         if path == "/api/simulation_history":
             self._send_json({"ok": True, "history": aggregate_sim_history(email), "runs": recent_sim_history(12, email), "latest": latest_sim_result(email)})
             return
@@ -220,6 +226,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/redeem":
             self._send_json(redeem_activation_payload(email, self._read_json()))
+            return
+        if path == "/api/admin/activation_codes":
+            if not is_admin_email(email):
+                self._send_json({"ok": False, "message": "没有管理员权限。"}, status=403)
+                return
+            self._send_json(create_activation_codes_payload(email, self._read_json()))
             return
         self.send_error(404)
 
@@ -523,6 +535,20 @@ def save_activation_codes(data: dict) -> None:
     ACTIVATION_CODES_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def activation_code_text(plan: str) -> str:
+    prefix = "T99" if "永久" in str(plan) else "T9"
+    middle = secrets.token_hex(3).upper()
+    tail = secrets.token_hex(2).upper()
+    return f"{prefix}-{middle}-{tail}"
+
+
+def plan_definition(plan: str) -> dict:
+    text = str(plan or "").strip().lower()
+    if text in {"life", "permanent", "forever", "99", "lifetime"} or "永久" in text:
+        return {"plan": "永久版", "days": 36500, "watchLimit": 200, "aiReviewLimit": 500}
+    return {"plan": "月卡", "days": 31, "watchLimit": 20, "aiReviewLimit": 80}
+
+
 def activation_definition(code: str, store: dict) -> dict | None:
     code = normalize_activation_code(code)
     custom = (store.get("codes") or {}).get(code)
@@ -533,6 +559,48 @@ def activation_definition(code: str, store: dict) -> dict | None:
 
 def normalize_activation_code(code: str) -> str:
     return re.sub(r"\s+", "", str(code or "")).upper()
+
+
+def admin_activation_codes_payload() -> dict:
+    store = load_activation_codes()
+    codes = store.setdefault("codes", {})
+    used = store.setdefault("used", {})
+    rows = []
+    for code, info in sorted(codes.items(), key=lambda item: str(item[1].get("createdAt") or ""), reverse=True):
+        used_info = used.get(code) or {}
+        rows.append({
+            "code": code,
+            "plan": info.get("plan", "月卡"),
+            "days": info.get("days", 31),
+            "createdAt": info.get("createdAt", ""),
+            "createdBy": info.get("createdBy", ""),
+            "status": "已使用" if used_info else "未使用",
+            "redeemedBy": used_info.get("email", ""),
+            "redeemedAt": used_info.get("redeemedAt", ""),
+        })
+    return {"ok": True, "codes": rows, "count": len(rows), "unused": sum(1 for row in rows if row["status"] == "未使用")}
+
+
+def create_activation_codes_payload(email: str, data: dict) -> dict:
+    plan = str(data.get("plan") or "月卡")
+    count = clamp_int(data.get("count"), 1, 1, 50)
+    definition = plan_definition(plan)
+    store = load_activation_codes()
+    codes = store.setdefault("codes", {})
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    created = []
+    for _ in range(count):
+        code = activation_code_text(definition["plan"])
+        while code in codes or code in BUILTIN_ACTIVATION_CODES:
+            code = activation_code_text(definition["plan"])
+        codes[code] = {
+            **definition,
+            "createdAt": now,
+            "createdBy": email,
+        }
+        created.append(code)
+    save_activation_codes(store)
+    return {"ok": True, "message": f"已生成 {len(created)} 个{definition['plan']}激活码。", "created": created, **admin_activation_codes_payload()}
 
 
 def redeem_activation_payload(email: str, data: dict) -> dict:
@@ -4032,20 +4100,49 @@ ADMIN_HTML = r"""<!doctype html>
 <style>
 :root{--ink:#2b170f;--muted:#8a6b52;--line:#f0dfc7;--red:#e83324;--gold:#d69a38}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:var(--ink);background:radial-gradient(circle at 88% 0,#ffe2aa,transparent 34%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4)}
-a,button{font:inherit;text-decoration:none;color:inherit}button{height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 14px;font-weight:950;cursor:pointer;box-shadow:0 8px 20px rgba(151,79,18,.08)}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.shell{width:min(1180px,calc(100vw - 28px));margin:18px auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px;font-size:24px;font-weight:950}.brand img{width:118px}.sub{color:var(--muted)}.actions{display:flex;gap:9px;flex-wrap:wrap}.panel{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.9);border-radius:18px;box-shadow:0 28px 80px rgba(151,79,18,.18);padding:18px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.card span{display:block;color:var(--muted);font-size:12px;font-weight:900}.card b{display:block;font-size:26px;margin-top:4px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{padding:12px 14px;border-bottom:1px solid #f3e7d8;text-align:left}th{font-size:12px;color:var(--muted)}.tag{display:inline-flex;border-radius:999px;background:#fff1dc;color:#a65b18;padding:4px 9px;font-weight:900}.on{background:#eafff1;color:#24935d}.empty{text-align:center;padding:44px;color:var(--muted)}@media(max-width:850px){.top{display:block}.actions{margin-top:10px}.cards{grid-template-columns:1fr}th,td{font-size:12px;padding:10px 8px}}
+a,button,input,select{font:inherit}a{text-decoration:none;color:inherit}button{height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 14px;font-weight:950;cursor:pointer;box-shadow:0 8px 20px rgba(151,79,18,.08)}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}input,select{height:38px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 12px;font-weight:850}.shell{width:min(1180px,calc(100vw - 28px));margin:18px auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px;font-size:24px;font-weight:950}.brand img{width:118px}.sub{color:var(--muted)}.actions{display:flex;gap:9px;flex-wrap:wrap}.panel{background:rgba(255,255,255,.94);border:1px solid rgba(255,255,255,.9);border-radius:18px;box-shadow:0 28px 80px rgba(151,79,18,.18);padding:18px;margin-bottom:14px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}.card span{display:block;color:var(--muted);font-size:12px;font-weight:900}.card b{display:block;font-size:26px;margin-top:4px}.code-bar{display:grid;grid-template-columns:180px 120px auto 1fr;gap:10px;align-items:center;margin-bottom:12px}.generated{min-height:40px;border:1px dashed var(--line);border-radius:14px;background:#fff8ee;padding:9px 12px;color:#6b5543;line-height:1.7}.copy-code{cursor:pointer;color:#b86b18;font-weight:950}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{padding:12px 14px;border-bottom:1px solid #f3e7d8;text-align:left}th{font-size:12px;color:var(--muted)}.tag{display:inline-flex;border-radius:999px;background:#fff1dc;color:#a65b18;padding:4px 9px;font-weight:900}.on{background:#eafff1;color:#24935d}.used{background:#f1f5f9;color:#64748b}.empty{text-align:center;padding:44px;color:var(--muted)}@media(max-width:850px){.top{display:block}.actions{margin-top:10px}.cards,.code-bar{grid-template-columns:1fr}th,td{font-size:12px;padding:10px 8px}}
 </style>
 </head>
 <body>
 <main class="shell">
   <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">本机内测后台：查看注册用户、套餐和当前登录状态。</div></div><div class="actions"><a href="/app"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
   <section class="panel">
-    <div class="cards"><div class="card"><span>注册用户</span><b id="userCount">--</b></div><div class="card"><span>在线会话</span><b id="onlineCount">--</b></div><div class="card"><span>数据文件</span><b>本机JSON</b></div></div>
+    <div class="cards"><div class="card"><span>注册用户</span><b id="userCount">--</b></div><div class="card"><span>在线会话</span><b id="onlineCount">--</b></div><div class="card"><span>未使用激活码</span><b id="unusedCount">--</b></div><div class="card"><span>数据文件</span><b>本机JSON</b></div></div>
+    <div class="code-bar">
+      <select id="codePlan"><option value="month">月卡 9.9</option><option value="life">永久版 99</option></select>
+      <input id="codeCount" type="number" min="1" max="50" value="1">
+      <button class="primary" onclick="createCodes()">生成激活码</button>
+      <div id="generatedCodes" class="generated">管理员生成后，把激活码发给用户，用户到“激活码充值”页兑换。</div>
+    </div>
+    <div style="overflow:auto;margin-bottom:14px"><table><thead><tr><th>激活码</th><th>套餐</th><th>状态</th><th>生成时间</th><th>兑换账号</th><th>兑换时间</th></tr></thead><tbody id="codeRows"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody></table></div>
     <div style="overflow:auto"><table><thead><tr><th>邮箱</th><th>昵称</th><th>套餐</th><th>注册时间</th><th>监控额度</th><th>AI额度</th><th>状态</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody></table></div>
   </section>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
+function copyCode(code){navigator.clipboard?.writeText(code);$('generatedCodes').innerHTML='已复制：<b>'+esc(code)+'</b>'}
+function renderCodes(rows){
+  $('unusedCount').textContent=rows.filter(x=>x.status==='未使用').length;
+  $('codeRows').innerHTML=rows.length?rows.map(c=>`<tr><td><span class="copy-code" onclick="copyCode('${esc(c.code)}')" title="点击复制">${esc(c.code)}</span></td><td><span class="tag">${esc(c.plan)}</span></td><td><span class="tag ${c.status==='已使用'?'used':'on'}">${esc(c.status)}</span></td><td>${esc(c.createdAt||'--')}</td><td>${esc(c.redeemedBy||'--')}</td><td>${esc(c.redeemedAt||'--')}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">暂无激活码。</td></tr>';
+}
+async function loadCodes(){
+  try{
+    const data=await (await fetch('/api/admin/activation_codes',{cache:'no-store'})).json();
+    if(!data.ok)throw new Error(data.message||'读取激活码失败');
+    renderCodes(data.codes||[]);
+  }catch(e){$('codeRows').innerHTML=`<tr><td colspan="6" class="empty">${esc(e.message||e)}</td></tr>`}
+}
+async function createCodes(){
+  $('generatedCodes').textContent='正在生成...';
+  try{
+    const payload={plan:$('codePlan').value,count:$('codeCount').value};
+    const data=await (await fetch('/api/admin/activation_codes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+    if(!data.ok)throw new Error(data.message||'生成失败');
+    $('generatedCodes').innerHTML=(data.created||[]).map(c=>`<span class="copy-code" onclick="copyCode('${esc(c)}')">${esc(c)}</span>`).join('　');
+    renderCodes(data.codes||[]);
+  }catch(e){$('generatedCodes').textContent=e.message||e}
+}
 async function loadUsers(){
   try{
     const data=await (await fetch('/api/admin/users',{cache:'no-store'})).json();
@@ -4056,7 +4153,7 @@ async function loadUsers(){
     $('rows').innerHTML=rows.length?rows.map(u=>`<tr><td>${esc(u.email)}</td><td>${esc(u.nickname)}</td><td><span class="tag">${esc(u.plan||'体验版')}</span></td><td>${esc(u.createdAt||'--')}</td><td>${esc(u.watchLimit||1)}只</td><td>${esc(u.aiReviewLimit||5)}次/日</td><td><span class="tag ${u.loggedIn?'on':''}">${u.loggedIn?'已登录':'离线'}</span></td></tr>`).join(''):'<tr><td colspan="7" class="empty">暂无注册用户。</td></tr>';
   }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
 }
-loadUsers();
+loadUsers();loadCodes();
 </script>
 </body>
 </html>"""
@@ -4423,7 +4520,7 @@ body{background:#f3f6fb;color:#111827}
 .panel{
   width:min(1780px,calc(100vw - 28px));
   height:calc(100vh - 28px);
-  grid-template-rows:54px 56px 116px minmax(0,1fr) 44px;
+  grid-template-rows:54px 50px 116px minmax(0,1fr);
   gap:10px;
   padding:14px;
   background:#f7f9fc;
@@ -4445,37 +4542,7 @@ body{background:#f3f6fb;color:#111827}
 .top-actions button{height:38px;border-radius:10px;background:#fff;color:#111827;border:1px solid #e3e8ef}
 .top-actions #settingsBtn{background:#4f46e5;color:#fff;border-color:#4f46e5;box-shadow:0 10px 24px rgba(79,70,229,.20)}
 .top-actions #status{height:34px;min-width:68px;background:#f8fafc;color:#16a34a;border-radius:999px}
-.workbench-links{
-  max-width:none;
-  height:56px;
-  display:flex;
-  align-items:center;
-  gap:10px;
-  padding:8px 10px;
-  background:#fff;
-  border:1px solid #e6ebf2;
-  border-radius:14px;
-  box-shadow:0 10px 30px rgba(17,24,39,.04);
-}
-.workbench-card{
-  flex:0 0 142px;
-  min-height:40px;
-  height:40px;
-  padding:0 14px;
-  border-radius:10px;
-  background:#fff;
-  border:1px solid #e3e8ef;
-  box-shadow:none;
-  justify-content:flex-start;
-}
-.workbench-card.primary-card{
-  background:#4f46e5;
-  border-color:#4f46e5;
-  color:#fff;
-  box-shadow:0 10px 24px rgba(79,70,229,.18);
-}
-.workbench-card b{font-size:14px}
-.workbench-card span,.workbench-card i{display:none}
+.workbench-links{display:none!important}
 .premarket{
   grid-template-columns:280px minmax(0,1fr) 340px;
   gap:10px;
@@ -4505,69 +4572,69 @@ body{background:#f3f6fb;color:#111827}
   box-shadow:0 16px 44px rgba(17,24,39,.05);
 }
 .monitor-table{
-  display:grid;
-  gap:12px;
+  display:block;
   min-width:0;
-  padding:12px;
+  padding:0;
 }
 .monitor-row{
   display:grid;
-  grid-template-columns:220px minmax(680px,1fr) 280px 130px;
-  grid-template-areas:
-    "stock chart signal ops"
-    "price chart agents ops";
+  grid-template-columns:180px 118px minmax(420px,1fr) 170px minmax(300px,.88fr) 86px;
+  grid-template-areas:"stock price chart signal agents ops";
   gap:14px;
-  min-height:300px;
-  padding:16px;
-  border:1px solid #edf1f6;
-  border-radius:14px;
+  min-height:132px;
+  padding:13px 16px;
+  border:0;
+  border-bottom:1px solid #edf1f6;
+  border-radius:0;
   background:#fff;
   box-shadow:none;
-  align-items:stretch;
+  align-items:center;
 }
 .monitor-row:hover{background:#fbfcfe}
 .monitor-row.strong-signal{border-color:#93c5fd;box-shadow:inset 4px 0 0 #3b82f6}
-.mon-stock{grid-area:stock;justify-content:flex-end;padding-bottom:10px}
-.mon-price{grid-area:price;justify-content:flex-start;padding-top:4px}
+.mon-stock{grid-area:stock;justify-content:center;padding:0}
+.mon-price{grid-area:price;justify-content:center;padding:0}
 .mon-chart{grid-area:chart;min-width:0}
-.mon-kv{grid-area:signal;text-align:left;justify-content:center;background:#f8fafc;border:1px solid #e6ebf2;border-radius:12px;padding:14px}
-.mon-agents{grid-area:agents}
+.mon-kv{grid-area:signal;text-align:left;justify-content:center;background:#f8fafc;border:1px solid #e6ebf2;border-radius:12px;padding:10px 12px}
+.mon-agents{grid-area:agents;min-width:0}
 .mon-signal{grid-area:ops;justify-content:center}
-.mon-stock .live-name{font-size:20px;color:#111827}
-.mon-stock .live-code{display:block;margin:4px 0 0 18px;color:#7b8494}
-.live-price{font-size:42px;line-height:1;font-weight:950}
+.mon-stock .live-name{font-size:17px;color:#111827}
+.mon-stock .live-code{display:block;margin:3px 0 0 18px;color:#7b8494}
+.live-price{font-size:28px;line-height:1;font-weight:950}
 .mon-price .kv{font-size:13px;color:#7b8494}
 .live-chart{
   width:100%;
-  height:252px;
-  border-radius:14px;
+  height:108px;
+  border-radius:10px;
   background:linear-gradient(180deg,#ffffff,#fffaf2);
   border:1px solid #e6ebf2;
   box-shadow:none;
 }
-.chart-note{margin-top:7px;color:#667085;font-size:11px}
+.chart-note{display:none}
 .signal-pill{
   width:100%;
   justify-content:center;
-  min-height:42px;
-  border-radius:12px;
+  min-height:32px;
+  border-radius:10px;
   background:#eef2ff;
   color:#312e81;
-  font-size:16px;
+  font-size:13px;
 }
 .signal-pill.hot{background:#dbeafe;color:#1d4ed8}
-.live-signal{font-size:13px;line-height:1.65;color:#475467}
+.live-signal{font-size:12px;line-height:1.45;color:#475467}
 .money-line{
-  max-height:116px;
+  max-height:92px;
   background:#fff7ed;
   border:1px solid #fed7aa;
-  border-radius:12px;
+  border-radius:10px;
   color:#9a3412;
-  line-height:1.6;
+  line-height:1.5;
+  overflow:auto;
 }
-.mon-signal button{width:100%;height:40px;border-radius:10px}
+.mon-signal button{width:100%;height:32px;border-radius:9px}
 .mon-signal button.ai{background:#111827;border-color:#111827;color:#fff}
 .stock-manager{
+  grid-area:workbench;
   height:44px;
   min-height:44px;
   padding:6px 10px;
@@ -4575,6 +4642,17 @@ body{background:#f3f6fb;color:#111827}
   background:#fff;
   border:1px solid #e6ebf2;
   box-shadow:none;
+}
+.actions-strip{
+  grid-area:workbench;
+  min-width:0;
+}
+.actions-strip .actions{
+  height:100%;
+  align-items:stretch;
+}
+.actions-strip .stock-manager{
+  width:100%;
 }
 .tag{border-radius:9px;background:#eef2f7;border:1px solid #dde5ef;color:#334155}
 .tag.active{background:#334155;border-color:#334155;color:#fff}
@@ -4725,45 +4803,12 @@ body{background:#f3f6fb;color:#111827}
   border-color:#2563eb;
 }
 
-/* Make the intraday chart the primary object in each monitor card. */
-.monitor-row{
-  grid-template-columns:170px minmax(860px,1fr) 220px 104px;
-  grid-template-areas:
-    "stock chart signal ops"
-    "price chart agents ops";
-  min-height:430px;
-  gap:16px;
-}
-.mon-stock{justify-content:flex-end;padding-bottom:18px}
-.mon-price{justify-content:flex-start;padding-top:10px}
-.live-price{font-size:36px}
-.mon-chart{display:flex;flex-direction:column;justify-content:center}
-.live-chart{
-  height:354px;
-  border-radius:16px;
-}
-.chart-note{
-  justify-content:center;
-  gap:14px;
-  font-size:12px;
-}
-.mon-kv{
-  align-self:center;
-  min-height:150px;
-}
-.mon-agents{
-  justify-content:flex-start;
-}
-.money-line{
-  max-height:156px;
-}
 @media(max-width:1180px){
   .panel{height:auto;min-height:100vh;grid-template-rows:auto}
-  .workbench-links{height:auto;flex-wrap:wrap}
   .premarket{grid-template-columns:1fr}
-  .monitor-table{min-width:1320px}
-  .monitor-row{grid-template-columns:160px 760px 220px 96px;min-height:390px}
-  .live-chart{height:320px}
+  .monitor-table{min-width:1060px}
+  .monitor-row{grid-template-columns:160px 100px 360px 160px 240px 70px;min-height:126px}
+  .live-chart{height:102px}
 }
 
 </style>
@@ -4852,7 +4897,7 @@ body{background:#f3f6fb;color:#111827}
     <pre id="logText" class="log-text">已就绪。</pre>
     <div class="log-actions"><button onclick="clearAll()">清空</button></div>
   </section>
-  <section><div class="actions">
+  <section class="actions-strip"><div class="actions">
     <div class="stock-manager">
       <span class="stock-manager-title">多股监控</span>
       <div id="watchTags" class="watch-tags"></div>
