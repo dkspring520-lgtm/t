@@ -895,7 +895,9 @@ def account_watch_limit(email: str | None) -> int:
     email = str(email or "").strip().lower()
     user = load_users().get("users", {}).get(email) if email else None
     if not user:
-        return 1
+        return 20
+    if str(user.get("plan") or "") == "体验版" and int(user.get("watchLimit") or 1) <= 1:
+        return 20
     return clamp_int(user.get("watchLimit"), 1, 1, 500)
 
 
@@ -911,13 +913,14 @@ def admin_users_payload() -> dict:
     return {"ok": True, "users": rows, "count": len(rows)}
 
 def public_user(user: dict) -> dict:
+    email = str(user.get("email") or "").strip().lower()
     return {
         "email": user.get("email"),
         "nickname": user.get("nickname"),
         "plan": user.get("plan", "体验版"),
         "planExpireAt": user.get("planExpireAt", ""),
         "createdAt": user.get("createdAt"),
-        "watchLimit": user.get("watchLimit", 1),
+        "watchLimit": account_watch_limit(email),
         "aiReviewLimit": user.get("aiReviewLimit", 5),
         "role": user.get("role", ""),
     }
@@ -4823,6 +4826,12 @@ body{background:#f3f6fb;color:#111827}
 }
 
 /* Reference dashboard template: left nav, top action bar, big chart, right decision rail. */
+body{
+  font-family:"Microsoft YaHei UI","PingFang SC","Segoe UI",Arial,sans-serif;
+  font-size:14px;
+  line-height:1.5;
+  letter-spacing:0;
+}
 .shell{padding:0;background:#edf2f8}
 .panel{
   width:min(1820px,calc(100vw - 18px));
@@ -4927,7 +4936,7 @@ body{background:#f3f6fb;color:#111827}
   background:transparent;
   border:0;
   display:grid;
-  grid-template-columns:auto minmax(180px,1fr) 230px 74px;
+  grid-template-columns:auto minmax(0,1fr) 230px 74px;
   gap:10px;
   align-items:center;
 }
@@ -4971,7 +4980,7 @@ body{background:#f3f6fb;color:#111827}
   grid-area:premarket;
   padding:18px 18px 10px 28px;
   display:grid;
-  grid-template-columns:290px minmax(0,1fr) 290px;
+  grid-template-columns:310px minmax(0,1fr) 360px;
   gap:14px;
   background:#f7f9fc;
 }
@@ -4980,10 +4989,42 @@ body{background:#f3f6fb;color:#111827}
   border:1px solid #e8edf5;
   background:#fff;
   box-shadow:0 10px 24px rgba(15,23,42,.035);
+  overflow:auto;
 }
 .pm-list{grid-template-columns:repeat(6,minmax(104px,1fr));gap:10px}
 .pm-item{border-radius:12px;background:#f8fafc;border:1px solid #edf2f7}
 .pm-score{font-size:42px}
+.pm-reasons{font-size:12px;line-height:1.72;max-height:122px;overflow:auto}
+.actions-strip .watch-tags{display:none}
+.actions-strip .stock-manager-title{min-width:96px}
+.side-user{
+  min-height:58px;
+  padding:8px 6px;
+  border-radius:12px;
+  overflow:hidden;
+}
+.side-user>div{min-width:0}
+.side-user b{
+  max-width:150px;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  line-height:1.25;
+}
+.side-user span{
+  max-width:150px;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  line-height:1.25;
+}
+.side-avatar{
+  flex:0 0 34px;
+  display:grid;
+  place-items:center;
+  color:#fff;
+  font-weight:950;
+}
 .live{
   grid-area:live;
   margin:0;
@@ -5367,10 +5408,10 @@ async function clearAiKey(){const msg=$('aiConfigStatus');if(msg)msg.textContent
 async function checkAiFromSettings(){await saveAiSettings();const msg=$('aiConfigStatus');if(msg)msg.textContent='正在检测AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),10000);const data=await (await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(msg)msg.textContent=(data.ok?'检测通过：':'检测失败：')+(data.message||'无返回');append((data.ok?'AI检测通过：':'AI检测失败：')+(data.message||''))}catch(e){if(msg)msg.textContent='检测超时或网络不可达。'}}
 let watchStocks=[],premarketTargetCode='';
 async function loadWatchlist(){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text||'';renderWatchTags()}}catch(e){}}
-async function saveWatchlist(){const text=watchStocks.map(s=>s.symbol).join(',');try{const data=await (await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text;renderWatchTags();append('已保存监控股票：'+watchStocks.map(s=>s.name+s.code).join('、'));loadPremarket();loadRealtime()}else append('保存失败：'+(data.error||'未知原因'))}catch(e){append('保存失败：'+e.message)}}
+async function saveWatchlist(){const text=watchStocks.map(s=>s.symbol).join(',');try{const data=await (await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text;renderWatchTags();setStatus('已添加：'+watchStocks.map(s=>s.name+s.code).join('、'));append('已保存监控股票：'+watchStocks.map(s=>s.name+s.code).join('、'));loadPremarket();loadRealtime()}else{setStatus(data.error||'添加失败');append('保存失败：'+(data.error||'未知原因'))}}catch(e){setStatus('添加失败：'+e.message);append('保存失败：'+e.message)}}
 function renderWatchTags(){const el=$('watchTags');if(!el)return;if(!premarketTargetCode&&watchStocks[0])premarketTargetCode=watchStocks[0].code;el.innerHTML=(watchStocks||[]).map((s,i)=>`<span class="tag ${premarketTargetCode===s.code?'active':''}" onclick="selectPremarket('${escapeHtml(s.code)}')" title="点击切换盘前风向">${escapeHtml(s.name)} ${escapeHtml(s.code)}<button onclick="event.stopPropagation();removeWatchStock(${i})" title="移除">×</button></span>`).join('')||'<span class="sub">请添加要监控的股票</span>'}
 function selectPremarket(code){premarketTargetCode=code;renderWatchTags();loadPremarket()}
-function addWatchStock(){const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw);if(!token){append('请输入股票代码，例如 601899。');return}const exists=watchStocks.some(s=>s.symbol===token);if(!exists){watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist()}if($('stockCodeInput'))$('stockCodeInput').value=''}
+function addWatchStock(){const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw);if(!token){setStatus('请输入股票代码，例如 601899。');append('请输入股票代码，例如 601899。');return}const exists=watchStocks.some(s=>s.symbol===token);if(exists){setStatus('已在监控中：'+stockName(token)+token.slice(2));if($('stockCodeInput'))$('stockCodeInput').value='';return}watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist();if($('stockCodeInput'))$('stockCodeInput').value=''}
 function removeWatchStock(index){watchStocks.splice(index,1);saveWatchlist()}
 function normalizeStockToken(raw){let v=String(raw||'').trim().toLowerCase();const m=v.match(/(sh|sz)?(\d{6})/);if(!m)return '';const code=m[2];const prefix=(m[1]||(code.startsWith('6')||code.startsWith('5')?'sh':'sz'));return prefix+code}
 function stockName(symbol){const code=symbol.slice(2);return ({'601899':'紫金矿业','601012':'隆基绿能','000063':'中兴通讯','600519':'贵州茅台','300502':'新易盛','002050':'三花智控','600580':'卧龙电驱'})[code]||code}
@@ -5380,7 +5421,7 @@ function updateStats(s,persist=true){if(!Object.keys(s).length)return;if($('cash
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});append('已恢复最近一次模拟：'+(latest.time||''))}}catch(e){}}
 function renderReview(review,history){const parts=[];if(review.headline)parts.push(`<b>本轮复盘</b><div>${escapeHtml(review.headline)}</div>`);if((review.suggestions||[]).length)parts.push('<b>下一轮优化</b><ul>'+review.suggestions.map(x=>`<li>${escapeHtml(x)}</li>`).join('')+'</ul>');if(history&&history.runs){const fails=(history.failures||[]).map(x=>`${escapeHtml(x.type)} ${x.count}次`).join('；')||'暂无高频问题';parts.push(`<b>累计统计</b><div>${history.runs} 次模拟，${history.trades} 笔交易，总胜率 ${history.winRate}，总盈亏 ${history.pnl}。问题：${fails}</div>`)}$('review').innerHTML=parts.join('')||'<b>策略复盘</b>模拟后自动显示失败原因和下一轮优化方向。'}
 let realtimeBusy=false,realtimeLastOk=0;
-async function loadRealtime(){if(realtimeBusy)return;realtimeBusy=true;try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),2600);const data=await (await fetch('/api/realtime',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);realtimeLastOk=Date.now();renderRealtime(data.stocks||[])}catch(e){if(Date.now()-realtimeLastOk>15000)$('live').innerHTML='<div class="empty-live">实时监控暂不可用：'+escapeHtml(e.message||'请求超时')+'</div>'}finally{realtimeBusy=false}}
+async function loadRealtime(){if(realtimeBusy)return;realtimeBusy=true;try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),6500);const data=await (await fetch('/api/realtime',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);realtimeLastOk=Date.now();renderRealtime(data.stocks||[])}catch(e){if(Date.now()-realtimeLastOk>15000){const msg=e.name==='AbortError'?'行情读取较慢，正在等待下一次刷新。':(e.message||'请求超时');$('live').innerHTML='<div class="empty-live">实时监控暂不可用：'+escapeHtml(msg)+'</div>';setStatus('行情刷新较慢')}}finally{realtimeBusy=false}}
 async function loadPremarket(){try{const q=premarketTargetCode?'?code='+encodeURIComponent(premarketTargetCode):'';const data=await (await fetch('/api/premarket'+q,{cache:'no-store'})).json();renderPremarket(data)}catch(e){$('pmReason').textContent='外盘读取失败：'+e.message}}
 function renderPremarket(data){const z=data.target||data.zijin||{},rows=data.rows||[];const signal=z.signal||'观望';const cls=signal==='偏多'?'bull':signal==='偏空'?'bear':'';if($('pmTargetTitle'))$('pmTargetTitle').textContent=(z.name||'目标股')+'开盘前风向';document.querySelector('.pm-score').textContent=(z.score??'--')+'分';const pill=document.querySelector('.pm-signal');pill.textContent=signal+'｜'+(z.category||'综合')+'｜刷新 '+(data.updatedAt||'--');pill.className='pm-signal '+cls;$('pmList').innerHTML=rows.length?rows.map(r=>{const ch=Number(r.change||0),c=ch>=0?'live-pos':'live-neg';const price=Number(r.price||0);return `<div class="pm-item"><b>${escapeHtml(r.name)}</b><span class="${c}">${price>=100?price.toFixed(1):price.toFixed(2)} ${ch>=0?'+':''}${ch.toFixed(2)}%</span><div class="sub">${escapeHtml(r.time||'时间未知')}</div></div>`}).join(''):'<div class="muted">暂无外盘数据</div>';$('pmReason').innerHTML=`<b>${escapeHtml(z.action||'等待盘中确认')}</b><br>${(z.reasons||[]).map(escapeHtml).join('<br>')}<br><span class="sub">外盘为 Yahoo 5分钟快照，按当前主监控股票降权计算，只作为盘前方向。</span>`}
 function renderRealtime(rows){
@@ -5491,8 +5532,8 @@ function liveSparkBig(row){
   const sig=String(row.signal||'');
   const last=xy[xy.length-1];
   const liveBadge=/低吸|买入/.test(sig)?badge(last.time,'买入信号','#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,'卖出信号','#ef4444',true):'');
-  const times=`<text x="${L}" y="268" fill="#475569" font-size="12">09:30</text><text x="${L+(W-L-R)*.33}" y="268" fill="#475569" font-size="12">10:30</text><text x="${L+(W-L-R)*.55}" y="268" fill="#475569" font-size="12">11:30/13:00</text><text x="${W-R-26}" y="268" fill="#475569" font-size="12">15:00</text>`;
-  const volumeText=`<text x="${L+8}" y="${VTop-8}" fill="#334155" font-size="13" font-weight="950">成交量</text>`;
+  const times=`<text x="${L}" y="264" fill="#475569" font-size="12">09:30</text><text x="${L+(W-L-R)*.33}" y="264" fill="#475569" font-size="12">10:30</text><text x="${L+(W-L-R)*.55}" y="264" fill="#475569" font-size="12">11:30/13:00</text><text x="${W-R-26}" y="264" fill="#475569" font-size="12">15:00</text>`;
+  const volumeText=`<text x="${L+8}" y="${VTop+14}" fill="#334155" font-size="13" font-weight="950">成交量</text>`;
   return `<svg class="live-chart" viewBox="0 0 ${W} ${H}">
     <defs><linearGradient id="lineFade${row.code||''}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${lineColor}" stop-opacity=".16"/><stop offset="1" stop-color="${lineColor}" stop-opacity="0"/></linearGradient></defs>
     <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
@@ -5520,6 +5561,10 @@ function append(t){
     p.textContent=(p.textContent==='已就绪。'?'':p.textContent+'\n\n')+text;
     p.scrollTop=p.scrollHeight;
   }
+}
+function setStatus(text){
+  const el=$('status');
+  if(el) el.textContent=String(text||'就绪');
 }
 function clearAll(){
   const o=$('out');
