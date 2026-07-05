@@ -6633,12 +6633,16 @@ body{font-size:12px}
 .single-bar select{width:140px;height:32px}
 .single-bar button{height:32px;padding:0 13px}
 .single-bar .muted{display:none}
-.grid{gap:8px}
+.grid{gap:8px;grid-template-rows:auto minmax(0,1fr)}
 .panel{border-radius:12px;box-shadow:none}
+.grid>aside.panel{height:78px;min-height:78px;display:grid;grid-template-rows:34px 44px;align-self:start}
+.grid>aside.panel .body{height:44px;align-items:center;overflow:auto hidden}
+.grid>section.panel{min-height:0}
 .head{height:34px;padding:0 12px}
 .body{padding:7px 10px;gap:6px}
 .cat{height:28px;padding:0 10px;border-radius:8px}
-.grid .panel:nth-child(2)>div[style]{max-height:calc(100vh - 210px)!important}
+.grid .panel:nth-child(2){display:grid;grid-template-rows:34px minmax(0,1fr)}
+.grid .panel:nth-child(2)>div[style]{height:100%;max-height:none!important;overflow:auto!important}
 table{min-width:1120px}
 th{
   height:34px;
