@@ -4662,6 +4662,58 @@ body{background:#f3f6fb;color:#111827}
   border:1px solid #e6ebf2;
   font-size:11px;
 }
+
+/* Softer buttons: remove heavy dark blocks from active controls only. */
+.side-menu button{
+  color:#475467;
+  background:transparent;
+}
+.side-menu button:hover{
+  background:#f5f9ff;
+  color:#2563eb;
+}
+.side-menu button.active{
+  background:linear-gradient(135deg,#eff6ff,#eef2ff);
+  color:#1d4ed8;
+  border:1px solid #dbeafe;
+  box-shadow:none;
+}
+.side-menu button.active small{
+  background:#fff;
+  border-color:#bfdbfe;
+  color:#2563eb;
+}
+.side-bottom button{
+  background:#fbfdff;
+  border:1px solid #edf2f7;
+  color:#475467;
+}
+.side-bottom button:hover{
+  background:#f5f9ff;
+  border-color:#dbeafe;
+  color:#2563eb;
+  box-shadow:none;
+}
+.workbench-card.primary-card{
+  background:linear-gradient(135deg,#60a5fa,#7c3aed);
+  border-color:#93c5fd;
+  color:#fff;
+  box-shadow:0 10px 22px rgba(96,165,250,.18);
+}
+.top-actions #settingsBtn{
+  background:linear-gradient(135deg,#60a5fa,#7c3aed);
+  border-color:#93c5fd;
+  box-shadow:0 10px 22px rgba(96,165,250,.18);
+}
+.tag.active{
+  background:#e0f2fe;
+  border-color:#bae6fd;
+  color:#075985;
+}
+.mon-signal button.ai{
+  background:#2563eb;
+  border-color:#2563eb;
+}
 @media(max-width:1180px){
   .panel{height:auto;min-height:100vh;grid-template-rows:auto}
   .workbench-links{height:auto;flex-wrap:wrap}
