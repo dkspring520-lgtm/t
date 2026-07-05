@@ -5909,7 +5909,7 @@ html,body{overflow:hidden;background:#eef3f9}
     </div>
   </aside>
   <div class="top">
-    <div class="app-brand"><button class="nav-toggle" title="菜单">☰</button><img class="app-logo" src="/assets/app-icon.svg" alt="做T神器"><div><div class="title-row"><div class="title">多股监控</div><span id="activeStockPill" class="active-stock-pill">紫金矿业 601899</span></div><div class="sub">多股票实时监控</div></div></div>
+    <div class="app-brand"><button class="nav-toggle" title="菜单">☰</button><img class="app-logo" src="/assets/app-icon.svg" alt="做T神器"><div><div class="title-row"><div class="title">多股监控</div></div><div class="sub">多股票实时监控</div></div></div>
     <div class="top-actions"><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
   </div>
   <section class="workbench-links" aria-label="工作台入口">
