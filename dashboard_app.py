@@ -915,12 +915,32 @@ def admin_users_payload() -> dict:
         rows.append(row)
     return {"ok": True, "users": rows, "count": len(rows)}
 
+def repair_mojibake_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "?" in text:
+        return text
+    try:
+        fixed = text.encode("gbk").decode("utf-8")
+        if fixed and fixed != text:
+            return fixed
+    except Exception:
+        pass
+    return text
+
 def public_user(user: dict) -> dict:
     email = str(user.get("email") or "").strip().lower()
+    nickname = repair_mojibake_text(user.get("nickname")) or email.split("@")[0]
+    if "?" in nickname:
+        nickname = email.split("@")[0] or "用户"
+    plan = repair_mojibake_text(user.get("plan")) or "体验版"
+    if "浣撻獙" in plan or "?" in plan:
+        plan = "体验版"
     return {
         "email": user.get("email"),
-        "nickname": user.get("nickname"),
-        "plan": user.get("plan", "体验版"),
+        "nickname": nickname,
+        "plan": plan,
         "planExpireAt": user.get("planExpireAt", ""),
         "createdAt": user.get("createdAt"),
         "watchLimit": account_watch_limit(email),
@@ -2038,8 +2058,6 @@ def rps_payload(limit: int = 10) -> dict:
     rows.sort(key=lambda item: (-item["rps"], -item["themeHeat"], -item["amountWan"], item["code"]))
     selected = diversify_rps_rows(rows, limit=limit)
     yearly_paths = yearly_mainline_paths(themes, rows, external)
-    fund_flow = market_fund_flow_payload(themes, rows)
-    rank_matrix = rps_rank_matrix_payload(yearly_paths, themes, external)
     return {
         "ok": True,
         "message": f"RPS主线扫描完成：从{len(rows)}只样本中选出{len(selected)}只。",
@@ -2047,8 +2065,6 @@ def rps_payload(limit: int = 10) -> dict:
         "rows": selected,
         "themes": themes[:8],
         "paths": yearly_paths,
-        "fundFlow": fund_flow,
-        "rankMatrix": rank_matrix,
         "externalFactors": external,
         "market": {
             "sample": len(rows),
@@ -4929,14 +4945,7 @@ body{
 }
 .active-stock-pill:after{content:"★";color:#4957c8;font-size:13px}
 .top-actions{gap:12px}
-.top-actions:before{
-  content:"☾";
-  display:grid;
-  place-items:center;
-  width:32px;
-  height:32px;
-  color:#1e293b;
-}
+.top-actions:before{content:none!important;display:none!important}
 .top-actions button{
   height:38px;
   padding:0 14px;
@@ -5494,7 +5503,7 @@ html,body{overflow:hidden;background:#eef3f9}
   padding:0 12px;
 }
 .top-actions{gap:8px;min-width:0}
-.top-actions:before{width:26px;height:26px;font-size:13px}
+.top-actions:before{content:none!important;display:none!important}
 .top-actions button{
   height:34px;
   padding:0 13px;
@@ -5818,15 +5827,21 @@ html,body{overflow:hidden;background:#eef3f9}
 /* Desktop density pass: make 100% browser feel close to the old 67% zoom. */
 @media(min-width:1181px){
   .panel{
-    grid-template-columns:64px minmax(0,1fr);
+    grid-template-columns:220px minmax(0,1fr);
     grid-template-rows:48px 36px 104px minmax(0,1fr);
   }
-  .side-nav{padding:10px 6px;gap:10px}
-  .side-brand img{width:36px;height:36px}
-  .side-menu button{width:42px;height:42px;border-radius:12px}
-  .side-menu small{width:20px;height:20px}
-  .side-bottom button{width:42px;height:32px}
-  .side-avatar{width:30px;height:30px}
+  .side-nav{padding:18px 16px;gap:18px;align-items:stretch}
+  .side-brand{justify-content:flex-start}
+  .side-brand img{width:34px;height:34px}
+  .side-brand div,.side-user div{display:block}
+  .side-menu{width:100%;gap:10px}
+  .side-menu button{width:100%;height:44px;padding:0 14px;display:flex;align-items:center;justify-content:flex-start;border-radius:10px;font-size:14px;text-align:left}
+  .side-menu small{width:22px;height:22px;margin:0 9px 0 0;font-size:11px}
+  .side-bottom{width:100%;gap:10px}
+  .side-bottom button{width:100%;height:34px;padding:0 14px;display:flex;align-items:center;justify-content:flex-start;border-radius:10px;font-size:13px}
+  .side-bottom button:before{content:none!important}
+  .side-user{justify-content:flex-start;min-height:40px}
+  .side-avatar{width:34px;height:34px}
   .top{height:48px;min-height:48px;padding:0 14px}
   .title{font-size:20px}
   .active-stock-pill{height:28px;min-width:140px;font-size:12px}
@@ -5889,13 +5904,13 @@ html,body{overflow:hidden;background:#eef3f9}
       <button onclick="openLogCenter()">日志中心</button>
       <div class="side-user" id="sideUser" onclick="openAccountCenter()" title="个人中心">
         <span class="side-avatar" id="sideAvatar">T</span>
-        <div><b id="sideUserName">交易员小T</b><span id="sideUserMeta">专业版 · 点击进入个人中心</span></div>
+        <div><b id="sideUserName">读取中</b><span id="sideUserMeta">正在同步账号昵称</span></div>
       </div>
     </div>
   </aside>
   <div class="top">
     <div class="app-brand"><button class="nav-toggle" title="菜单">☰</button><img class="app-logo" src="/assets/app-icon.svg" alt="做T神器"><div><div class="title-row"><div class="title">多股监控</div><span id="activeStockPill" class="active-stock-pill">紫金矿业 601899</span></div><div class="sub">多股票实时监控</div></div></div>
-    <div class="top-actions"><button onclick="location.href='/recharge'">会员码</button><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
+    <div class="top-actions"><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
   </div>
   <section class="workbench-links" aria-label="工作台入口">
     <button class="workbench-card primary-card" onclick="location.href='/simulation'"><span><b>模拟测试</b><span>胜率、买卖点、复盘</span></span><i>测</i></button>
@@ -6391,7 +6406,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button onclick="location.href='/app?section=api'">API 管理</button>
       <button onclick="location.href='/app?section=strategy'">策略配置</button>
       <button onclick="location.href='/app?openLog=1'">日志中心</button>
-      <div class="side-user" onclick="location.href='/account'"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
+      <div class="side-user" onclick="location.href='/account'"><span class="side-avatar" id="sideAvatar">T</span><div><b id="sideUserName">读取中</b><span id="sideUserMeta">正在同步账号昵称</span></div></div>
     </div>
   </aside>
 <div class="page">
@@ -6438,7 +6453,8 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 </div>
 <script>
 const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false,settingsTimer=null;
-window.addEventListener('DOMContentLoaded',async()=>{await loadSettings();await syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
+async function loadAccountBadge(){try{const res=await fetch('/api/account',{cache:'no-store'});const data=await res.json();const account=data.account||{};const nick=account.nickname||account.email||account.userId||'用户';const plan=account.plan||'体验版';if($('sideUserName'))$('sideUserName').textContent=data.loggedIn?nick:'未登录';if($('sideUserMeta'))$('sideUserMeta').textContent=data.loggedIn?`${plan} · 点击进入个人中心`:'未登录 · 点击登录';if($('sideAvatar'))$('sideAvatar').textContent=String(nick).slice(0,1).toUpperCase()}catch(e){if($('sideUserName'))$('sideUserName').textContent='用户';if($('sideUserMeta'))$('sideUserMeta').textContent='点击进入个人中心'}}
+window.addEventListener('DOMContentLoaded',async()=>{loadAccountBadge();await loadSettings();await syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
 function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
@@ -6539,7 +6555,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 /* Research density pass: readable at 100% browser zoom. */
 body{font-size:12px}
 .research-shell{
-  grid-template-columns:72px minmax(0,1fr);
+  grid-template-columns:220px minmax(0,1fr);
   gap:0;
   padding:0;
 }
@@ -6548,39 +6564,39 @@ body{font-size:12px}
   border:0;
   border-right:1px solid #e7ebf2;
   box-shadow:none;
-  padding:14px 8px;
-  align-items:center;
+  padding:18px 16px;
+  align-items:stretch;
 }
-.side-brand{justify-content:center}
-.side-brand img{width:42px;height:42px;border-radius:13px}
-.side-brand div,.side-user div{display:none}
-.side-menu{width:100%;gap:8px}
+.side-brand{justify-content:flex-start}
+.side-brand img{width:34px;height:34px;border-radius:10px}
+.side-brand div,.side-user div{display:block}
+.side-menu{width:100%;gap:10px}
 .side-menu button{
-  width:48px;
-  height:48px;
-  padding:0;
-  display:grid;
-  place-items:center;
-  font-size:0;
-  border-radius:14px;
+  width:100%;
+  height:44px;
+  padding:0 14px;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
+  font-size:14px;
+  border-radius:10px;
+  text-align:left;
 }
-.side-menu small{width:24px;height:24px;margin:0}
-.side-bottom{width:100%;gap:8px;padding-top:12px}
+.side-menu small{width:22px;height:22px;margin:0 9px 0 0}
+.side-bottom{width:100%;gap:10px;padding-top:12px}
 .side-bottom button{
-  width:48px;
-  height:38px;
-  padding:0;
-  display:grid;
-  place-items:center;
+  width:100%;
+  height:34px;
+  padding:0 14px;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
   border:1px solid #e6edf5;
-  border-radius:13px;
+  border-radius:10px;
   background:#f8fafc;
-  font-size:0;
+  font-size:13px;
 }
-.side-bottom button:nth-child(1)::before{content:"设";font-size:13px;font-weight:950}
-.side-bottom button:nth-child(2)::before{content:"AI";font-size:12px;font-weight:950}
-.side-bottom button:nth-child(3)::before{content:"策";font-size:13px;font-weight:950}
-.side-bottom button:nth-child(4)::before{content:"志";font-size:13px;font-weight:950}
+.side-bottom button:before{content:none!important}
 .side-avatar{width:34px;height:34px}
 .shell{
   grid-template-rows:50px 26px 46px minmax(0,1fr) auto;
@@ -6645,6 +6661,15 @@ td{
   overflow:auto;
   font-size:12px;
 }
+@media(min-width:1181px){
+  .research-shell{height:100vh;overflow:hidden}
+  .research-shell>.shell{
+    width:calc(149.253731vw - 328.358209px);
+    height:149.253731vh;
+    transform:scale(.67);
+    transform-origin:top left;
+  }
+}
 @media(max-width:1180px){body{overflow:auto}.research-shell{height:auto;grid-template-columns:1fr}.side-nav{display:none}.shell{height:auto}.top{display:block}.actions{margin-top:10px;justify-content:flex-start}.single-bar{height:auto;display:grid;grid-template-columns:1fr 160px auto}.single-bar b{grid-column:1/-1}.grid .panel:nth-child(2)>div[style]{max-height:none!important}}
 </style>
 </head>
@@ -6664,7 +6689,7 @@ td{
       <button onclick="location.href='/app?section=api'">API 管理</button>
       <button onclick="location.href='/app?section=strategy'">策略配置</button>
       <button onclick="location.href='/app?openLog=1'">日志中心</button>
-      <div class="side-user"><span class="side-avatar"></span><div><b>交易员小T</b><span>专业版</span></div></div>
+      <div class="side-user" onclick="location.href='/account'"><span class="side-avatar" id="sideAvatar">T</span><div><b id="sideUserName">读取中</b><span id="sideUserMeta">正在同步账号昵称</span></div></div>
     </div>
   </aside>
 <main class="shell">
@@ -6683,6 +6708,7 @@ td{
 </div>
 <script>
 const $=id=>document.getElementById(id);let allRows=[],activeCategory='全部';
+async function loadAccountBadge(){try{const res=await fetch('/api/account',{cache:'no-store'});const data=await res.json();const account=data.account||{};const nick=account.nickname||account.email||account.userId||'用户';const plan=account.plan||'体验版';if($('sideUserName'))$('sideUserName').textContent=data.loggedIn?nick:'未登录';if($('sideUserMeta'))$('sideUserMeta').textContent=data.loggedIn?`${plan} · 点击进入个人中心`:'未登录 · 点击登录';if($('sideAvatar'))$('sideAvatar').textContent=String(nick).slice(0,1).toUpperCase()}catch(e){if($('sideUserName'))$('sideUserName').textContent='用户';if($('sideUserMeta'))$('sideUserMeta').textContent='点击进入个人中心'}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]))}
 function setBusy(on){['reviewBtn','geminiBtn','checkBtn','singleBtn'].forEach(id=>{const el=$(id);if(el)el.disabled=on})}
 function normalizeList(data){if(Array.isArray(data))return data;if(Array.isArray(data.stocks))return data.stocks;if(Array.isArray(data.rows))return data.rows;return[]}
@@ -6695,7 +6721,7 @@ function renderSingleDetail(r){const agents=Array.isArray(r.agents)?r.agents:[];
 async function researchSingle(){const code=($('singleInput').value||'').trim();if(!code){$('status').textContent='请输入股票代码，例如 600580。';return}setBusy(true);$('status').textContent='正在进行单股多因子研究...';try{const mode=$('singleMode').value||'local';const res=await fetch('/api/single_research?code='+encodeURIComponent(code)+'&mode='+encodeURIComponent(mode),{cache:'no-store'});const data=await res.json();if(!data.ok)throw new Error(data.message||'单股研究失败');$('status').textContent=(data.message||'单股研究完成')+(data.updatedAt?'｜更新时间 '+esc(data.updatedAt):'');renderSingleDetail(data.stock)}catch(e){$('status').textContent='单股研究失败：'+(e.message||e)}finally{setBusy(false)}}
 async function loadData(mode){setBusy(true);const loadingText=mode==='gemini'?'正在请求 AI 选股，超时会自动切回评审选股...':'正在让TradingAgents、UZI评审、Kronos路径因子共同选股...';$('status').textContent=loadingText;$('rows').innerHTML='<tr><td colspan="9" class="empty">加载中...</td></tr>';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),mode==='gemini'?8500:9000);const res=await fetch('/api/screener?mode='+encodeURIComponent(mode),{cache:'no-store',signal:ctrl.signal});clearTimeout(timer);const data=await res.json();allRows=normalizeList(data);activeCategory='全部';const stamp=data.updatedAt?`｜更新时间 ${esc(data.updatedAt)}`:'';$('status').textContent=(data.aiMessage||data.message||(mode==='gemini'?'AI选股已完成。':'评审团选股已完成。'))+stamp;renderCategories();renderRows()}catch(e){$('status').textContent=mode==='gemini'?'AI 暂时无响应，已切换本地选股。':'本地选股请求失败，请刷新页面。';if(mode==='gemini')return loadData('review');$('rows').innerHTML=`<tr><td colspan="9" class="empty">${esc(e.message||e)}</td></tr>`}finally{setBusy(false)}}
 async function checkAi(){setBusy(true);$('status').textContent='正在检测 AI...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),7000);const data=await(await fetch('/api/gemini_status',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);$('status').textContent=(data.ok?'AI 可用：':'AI 异常：')+(data.message||'无返回')}catch(e){$('status').textContent='AI 检测超时或网络不可达，本地选股仍可使用。'}finally{setBusy(false)}}
-document.addEventListener('DOMContentLoaded',()=>{const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('review')}});
+document.addEventListener('DOMContentLoaded',()=>{loadAccountBadge();const code=new URLSearchParams(location.search).get('code');if(code){$('singleInput').value=code;researchSingle()}else{loadData('review')}});
 </script>
 </body>
 </html>"""
@@ -6711,6 +6737,7 @@ LONGHUBANG_HTML = r"""<!doctype html>
 
 /* Unified cockpit shell for extension pages. */
 body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap,.matrix-wrap{max-height:calc(100vh - 170px)!important}
+@media(min-width:1181px){.shell{width:calc(149.253731vw - 376.119403px);height:149.253731vh;transform:scale(.67);transform-origin:top left}}
 @media(max-width:1180px){body{overflow:auto}.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}}</style>
 </head>
 <body>
@@ -6772,23 +6799,41 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
 </aside>
 <main class="shell">
 <style>
-/* RPS functional zoning: summary, flow, matrix, candidates are separated. */
+/* RPS workstation: one-screen research terminal, fewer competing panels. */
 body{font-size:12px}
-.suite-side{left:0;top:0;bottom:0;width:72px;border-radius:0;border:0;border-right:1px solid #e7ebf2;box-shadow:none;padding:14px 8px;align-items:center}
-.suite-brand{justify-content:center;margin-bottom:14px}.suite-brand img{width:42px;height:42px;border-radius:13px}.suite-brand div{display:none}
-.suite-side button{width:48px;height:48px;padding:0;display:grid;place-items:center;border-radius:14px;font-size:0}.suite-side button small{width:24px;height:24px;margin:0}
-.shell{height:100vh;min-height:0;margin:0 0 0 72px;padding:10px 14px 12px;border-radius:0;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(430px,.95fr);grid-template-rows:50px 74px minmax(260px,.55fr) minmax(0,1fr);grid-template-areas:"top top" "cards cards" "flow matrix" "bottom bottom";gap:10px}
-.top{grid-area:top}.title{font-size:21px;line-height:1.15}.top .sub{display:none}.actions{gap:6px}.actions .btn,.actions button,button,a.btn{height:32px;padding:0 12px;border-radius:9px;font-size:12px}
-.cards{grid-area:cards;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.card{padding:10px 12px;border-radius:12px}.card span{font-size:11px}.card b{font-size:20px;line-height:1.1}
-.shell>section.panel:nth-of-type(1){grid-area:flow}.shell>section.panel:nth-of-type(2){grid-area:matrix}.shell>.grid{grid-area:bottom}
-.panel{border-radius:12px;box-shadow:none;min-height:0}.head{height:36px;padding:0 12px;font-size:13px}.body{padding:10px;min-height:0}
-.flow-grid{grid-template-columns:minmax(0,1fr) 300px;gap:10px}.flow-chart{height:210px}.note{padding:10px;border-radius:11px;line-height:1.55}.flow-row{grid-template-columns:84px 1fr 58px;gap:7px}
-.matrix-wrap{max-height:none!important}.matrix th,.matrix td{padding:5px 7px;font-size:11px}.sector-cell{min-width:78px}
-.grid{grid-template-columns:360px minmax(0,1fr);gap:10px}.grid>aside.panel,.grid>section.panel{min-height:0}.grid>aside.panel{display:grid;grid-template-rows:36px minmax(0,.62fr) 36px minmax(0,.38fr);overflow:hidden}.grid>aside.panel>.body:last-child{display:none}
-.theme{padding:7px 0;grid-template-columns:1fr 54px}.theme .muted{font-size:11px}.rps{font-size:17px}.path{padding:8px 0}.path-meta{line-height:1.45;font-size:11px}
-.grid>section.panel>div[style]{max-height:100%!important;height:calc(100% - 36px);overflow:auto!important}
-th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:12px;line-height:1.42}.stock{font-size:13px}.code{display:block;margin:1px 0 0}.agents{line-height:1.42;max-height:60px;overflow:hidden}.tag{padding:3px 7px;font-size:11px}
-@media(max-width:1180px){.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0;display:grid;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "cards" "flow" "matrix" "bottom"}.cards{grid-template-columns:repeat(2,1fr)}.grid,.flow-grid{grid-template-columns:1fr}.grid>aside.panel{display:block}.grid>aside.panel>.body:last-child{display:block}.shell>section.panel:nth-of-type(1),.shell>section.panel:nth-of-type(2),.shell>.grid{grid-area:auto}}
+.suite-side{left:0;top:0;bottom:0;width:220px;border-radius:0;border:0;border-right:1px solid #e7ebf2;box-shadow:none;padding:18px 16px;align-items:stretch}
+.suite-brand{justify-content:flex-start;margin-bottom:14px}.suite-brand img{width:34px;height:34px;border-radius:10px}.suite-brand div{display:block}
+.suite-side button{width:100%;height:44px;padding:0 14px;display:flex;align-items:center;justify-content:flex-start;border-radius:10px;font-size:14px;text-align:left}.suite-side button small{width:22px;height:22px;margin:0 9px 0 0}
+.shell{
+  height:100vh;min-height:0;margin:0 0 0 220px;padding:10px 14px 12px;border-radius:0;
+  display:grid;grid-template-columns:minmax(0,1fr);
+  grid-template-rows:46px 58px minmax(0,1fr);
+  grid-template-areas:"top" "cards" "content";
+  gap:9px;background:#f4f6fa;overflow:hidden;
+}
+.top{grid-area:top;min-height:0}.title{font-size:21px;line-height:1.15}.top .sub{display:none}.actions{gap:6px}.actions .btn,.actions button,button,a.btn{height:31px;padding:0 12px;border-radius:9px;font-size:12px}
+.cards{grid-area:cards;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.card{padding:8px 12px;border-radius:12px}.card span{font-size:11px}.card b{font-size:18px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shell>.grid{grid-area:content;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:230px minmax(0,1fr);grid-template-areas:"themes paths" "rows rows";gap:9px;min-height:0}
+.themes-panel{grid-area:themes}.paths-panel{grid-area:paths}.candidates-panel{grid-area:rows;display:grid;grid-template-rows:34px minmax(0,1fr)}
+.panel{border-radius:12px;box-shadow:none;min-height:0;overflow:hidden}.head{height:34px;padding:0 12px;font-size:13px}.body{padding:9px 10px;min-height:0}
+.note{padding:8px 10px;border-radius:10px;line-height:1.45;max-height:72px;overflow:hidden}
+.matrix-wrap{height:auto!important;max-height:none!important;overflow:auto}.matrix th,.matrix td{padding:5px 7px;font-size:11px}.sector-cell{min-width:78px}
+.themes-panel,.paths-panel{display:grid;grid-template-rows:34px minmax(0,1fr);overflow:hidden}
+.theme{padding:7px 0;grid-template-columns:1fr 54px}.theme .muted{font-size:11px;line-height:1.35}.rps{font-size:17px}.path{padding:8px 0}.path-meta{line-height:1.42;font-size:11px}
+.candidates-panel>div[style]{max-height:none!important;height:auto!important;overflow:auto!important}
+table{min-width:960px}th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:12px;line-height:1.42}.stock{font-size:13px}.code{display:block;margin:1px 0 0}.agents{line-height:1.42;max-height:54px;overflow:hidden}.tag{padding:3px 7px;font-size:11px}
+@media(min-width:1181px){
+  .suite-side{transform:none}
+  .shell{transform:scale(.67);transform-origin:top left}
+  .suite-side{width:220px;padding:18px 16px}.suite-side button{width:100%;height:44px}.suite-side button small{width:22px;height:22px;font-size:11px}.suite-brand img{width:34px;height:34px}
+  .shell{width:calc(149.253731vw - 328.358209px);height:149.253731vh;margin-left:220px;padding:12px 16px 14px;grid-template-columns:minmax(0,1fr);grid-template-rows:42px 50px minmax(0,1fr);gap:9px}
+  .title{font-size:24px}.actions .btn,.actions button,button,a.btn{height:34px;padding:0 13px;font-size:13px}.card{padding:9px 13px}.card span{font-size:12px}.card b{font-size:21px}.head{height:38px;padding:0 14px;font-size:15px}.body{padding:10px 12px}
+  .shell>.grid{grid-template-rows:210px minmax(0,1fr);gap:9px}
+  .themes-panel,.paths-panel{grid-template-rows:38px minmax(0,1fr)}
+  .note{max-height:54px;font-size:12px}
+  .theme .muted,.path-meta{font-size:12px}.rps{font-size:18px}.path b,.stock{font-size:14px}.stage,.tag,th,td{font-size:12px}.agents{max-height:58px}.sector-cell{min-width:86px}
+}
+@media(max-width:1180px){.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0;display:grid;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "cards" "content"}.cards{grid-template-columns:repeat(2,1fr)}.shell>.grid{display:grid;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"themes" "paths" "rows"}.themes-panel,.paths-panel,.candidates-panel{grid-area:auto;display:block}.candidates-panel>div[style],.matrix-wrap{height:auto!important;max-height:none!important}.shell>.grid{grid-area:auto}}
 </style>
   <div class="top">
     <div><div class="title">RPS主线雷达</div><div class="sub">大盘资金动向、板块热度、相对强度排名、龙虎榜观察位</div></div>
@@ -6801,29 +6846,16 @@ th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:1
     <div class="card"><span>最强主线</span><b id="leader">--</b></div>
     <div class="card"><span>主线热度</span><b id="heat">--</b></div>
   </div>
-  <section class="panel">
-    <div class="head">大盘/板块资金走势 <span id="flowMode" class="muted">本地估算</span></div>
-    <div class="body flow-grid">
-      <div id="flowChart"><div class="empty">正在生成资金曲线...</div></div>
-      <div>
-        <div id="flowSummary" class="note">等待资金动向...</div>
-        <div id="flowBars" class="flow-bars" style="margin-top:10px"></div>
-      </div>
-    </div>
-  </section>
-  <section class="panel">
-    <div class="head">强势主线矩阵 <span id="matrixMode" class="muted">最近交易日排名</span></div>
-    <div class="body matrix-wrap" id="rankMatrix"><div class="empty">正在生成RPS矩阵...</div></div>
-  </section>
   <section class="grid">
-    <aside class="panel">
+    <section class="panel themes-panel">
       <div class="head">板块资金动向 <span id="updated" class="muted">--</span></div>
       <div class="body" id="themes"><div class="empty">正在读取板块热度...</div></div>
+    </section>
+    <section class="panel paths-panel">
       <div class="head">今年主线轨迹 <span class="muted">路径推断</span></div>
       <div class="body" id="paths"><div class="empty">正在生成年度主线...</div></div>
-      <div class="body"><div class="note"><b>龙虎榜观察</b><br>当前为席位观察位：优先标记RPS高、成交活跃、主线热度高的股票。接入东方财富/同花顺/L2后，可升级为真实龙虎榜净买入、机构席位、游资席位跟踪。</div></div>
-    </aside>
-    <section class="panel">
+    </section>
+    <section class="panel candidates-panel">
       <div class="head">RPS强势候选 <span class="muted">只负责找主线，不直接等于买点</span></div>
       <div style="overflow:auto;max-height:68vh"><table><thead><tr><th>股票</th><th>主线</th><th>RPS</th><th>价格</th><th>涨跌</th><th>成交</th><th>资金/多Agent结论</th></tr></thead><tbody id="rows"><tr><td colspan="7" class="empty">加载中...</td></tr></tbody></table></div>
     </section>
@@ -6841,7 +6873,7 @@ async function loadRps(){
     if(!data.ok)throw new Error(data.message||'RPS读取失败');
     const m=data.market||{};
     $('sample').textContent=m.sample??'--';$('up').textContent=m.up??'--';$('down').textContent=m.down??'--';$('leader').textContent=m.leader||'--';$('heat').textContent=(m.leaderHeat??'--')+'分';$('updated').textContent=data.updatedAt||'';
-    renderFundFlow(data.fundFlow||{});renderRankMatrix(data.rankMatrix||{});renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
+    renderThemes(data.themes||[]);renderPaths(data.paths||[]);renderRows(data.rows||[]);
   }catch(e){$('rows').innerHTML=`<tr><td colspan="7" class="empty">${esc(e.message||e)}</td></tr>`}
   finally{if(btn){btn.disabled=false;btn.textContent='刷新主线'}}
 }
@@ -6849,40 +6881,6 @@ function renderThemes(themes){
   if(!themes.length){$('themes').innerHTML='<div class="empty">暂无板块热度。</div>';return}
   $('themes').innerHTML=themes.map(t=>`<div class="theme"><div><b>${esc(t.name)}</b><div class="muted">上涨 ${esc(t.positive)}/${esc(t.count)}｜均涨 ${esc(t.avgChange)}%｜成交 ${esc(t.amountText||'--')}</div><div class="muted">${esc(t.externalReason||'实时样本强弱')}</div><div class="bar"><i style="width:${Math.max(3,Math.min(100,Number(t.heat)||0))}%"></i></div></div><div class="rps">${esc(t.heat)}</div></div>`).join('');
 }
-function renderFundFlow(flow){
-  const series=flow.series||[],bars=flow.bars||[];
-  $('flowMode').textContent=flow.mode||'本地估算';
-  $('flowSummary').textContent=flow.summary||'暂无资金走势。';
-  if(!series.length){$('flowChart').innerHTML='<div class="empty">暂无资金曲线。</div>';$('flowBars').innerHTML='';return}
-  const values=series.flatMap(s=>(s.points||[]).map(p=>Number(p.value)||0));
-  const min=Math.min(...values,0),max=Math.max(...values,0),span=Math.max(max-min,1);
-  const W=980,H=310,L=58,R=34,T=22,B=42;
-  const x=(i,n)=>L+(i/Math.max(1,n-1))*(W-L-R);
-  const y=v=>T+(max-v)/span*(H-T-B);
-  const grid=[0,.25,.5,.75,1].map(t=>{const yy=T+t*(H-T-B);return `<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#edf1f3"/><text x="10" y="${yy+4}" fill="#94a3af" font-size="11">${fmtFlow(max-(span*t))}</text>`}).join('');
-  const zero=`<line x1="${L}" y1="${y(0)}" x2="${W-R}" y2="${y(0)}" stroke="#9aa5ae" stroke-dasharray="4 5"/>`;
-  const lines=series.map(s=>{const pts=(s.points||[]).map((p,i)=>`${x(i,s.points.length).toFixed(1)},${y(Number(p.value)||0).toFixed(1)}`).join(' ');const last=s.points?.[s.points.length-1]||{};return `<polyline points="${pts}" fill="none" stroke="${esc(s.color||'#2563eb')}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><text x="${W-R-4}" y="${y(Number(last.value)||0)-4}" text-anchor="end" fill="${esc(s.color||'#2563eb')}" font-size="11" font-weight="900">${esc(s.name)} ${esc(s.netText)}</text>`}).join('');
-  const labels=(series[0]?.points||[]).map((p,i)=>`<text x="${x(i,series[0].points.length)}" y="${H-14}" text-anchor="middle" fill="#94a3af" font-size="10">${esc(p.time)}</text>`).join('');
-  $('flowChart').innerHTML=`<svg class="flow-chart" viewBox="0 0 ${W} ${H}">${grid}${zero}${labels}${lines}</svg>`;
-  const maxAbs=Math.max(...bars.map(b=>Math.abs(Number(b.netWan)||0)),1);
-  $('flowBars').innerHTML=bars.map(b=>{const pos=Number(b.netWan)>=0;return `<div class="flow-row"><b>${esc(b.name)}</b><div class="flow-track"><i style="width:${Math.max(3,Math.min(100,Math.abs(Number(b.netWan)||0)/maxAbs*100))}%;background:${pos?'#ec5f6b':'#35b978'}"></i></div><span class="${pos?'up':'down'}">${esc(b.netText)}</span></div>`}).join('');
-}
-function fmtFlow(v){const n=Number(v)||0;if(Math.abs(n)>=10000)return (n/10000).toFixed(1)+'亿';return n.toFixed(0)+'万'}
-function renderRankMatrix(matrix){
-  const cols=matrix.columns||[],rankCount=Number(matrix.rankCount||0);
-  $('matrixMode').textContent=matrix.mode||'最近交易日排名';
-  if(!cols.length||!rankCount){$('rankMatrix').innerHTML='<div class="empty">暂无RPS矩阵。</div>';return}
-  const colors=['#dff4ff','#e8f5e9','#fff3cd','#fde2e2','#ede7f6','#e0f2f1','#ffe8cc','#f3e8ff'];
-  let html='<table class="matrix"><thead><tr><th class="rank-col">排名</th>'+cols.map(c=>`<th>${esc(c.date)}</th>`).join('')+'</tr></thead><tbody>';
-  for(let r=0;r<rankCount;r++){
-    html+=`<tr><td class="rank-col">${r+1}</td>`;
-    cols.forEach(c=>{const name=(c.items||[])[r]||'--';const color=colors[Math.abs(hashText(name))%colors.length];html+=`<td><div class="sector-cell" style="background:${color}">${esc(name)}</div></td>`});
-    html+='</tr>';
-  }
-  html+='</tbody></table>';
-  $('rankMatrix').innerHTML=html;
-}
-function hashText(s){let h=0;for(let i=0;i<String(s).length;i++)h=(h*31+String(s).charCodeAt(i))|0;return h}
 function renderPaths(paths){
   if(!paths.length){$('paths').innerHTML='<div class="empty">暂无年度主线。</div>';return}
   $('paths').innerHTML=paths.map(p=>`<div class="path"><div class="path-top"><b>${esc(p.name)}</b><span class="stage">${esc(p.stage)} ${esc(p.score)}分</span></div><div class="path-meta">活跃阶段：${esc(p.months)}｜当前热度 ${esc(p.heat)}｜成交 ${esc(p.amountText||'--')}</div><div class="path-meta">驱动：${esc(p.drivers)}</div><div class="path-meta">验证：${esc(p.watch)}</div><div class="path-score"><i style="width:${Math.max(3,Math.min(100,Number(p.score)||0))}%"></i></div></div>`).join('');
