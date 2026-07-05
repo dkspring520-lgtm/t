@@ -4572,45 +4572,49 @@ body{background:#f3f6fb;color:#111827}
   box-shadow:0 16px 44px rgba(17,24,39,.05);
 }
 .monitor-table{
-  display:block;
+  display:grid;
+  grid-template-columns:1fr;
+  gap:14px;
   min-width:0;
-  padding:0;
+  padding:14px;
 }
 .monitor-row{
   display:grid;
-  grid-template-columns:180px 118px minmax(420px,1fr) 170px minmax(300px,.88fr) 86px;
-  grid-template-areas:"stock price chart signal agents ops";
-  gap:14px;
-  min-height:132px;
-  padding:13px 16px;
-  border:0;
-  border-bottom:1px solid #edf1f6;
-  border-radius:0;
-  background:#fff;
-  box-shadow:none;
-  align-items:center;
+  grid-template-columns:minmax(210px,.78fr) minmax(230px,.9fr) minmax(260px,1fr) 96px;
+  grid-template-areas:
+    "stock price signal ops"
+    "chart chart chart chart"
+    "agents agents agents agents";
+  gap:12px 16px;
+  min-height:460px;
+  padding:18px 20px;
+  border:1px solid #e6ebf2;
+  border-radius:18px;
+  background:linear-gradient(180deg,#fff,#fbfcff);
+  box-shadow:0 18px 48px rgba(17,24,39,.06);
+  align-items:start;
 }
-.monitor-row:hover{background:#fbfcfe}
-.monitor-row.strong-signal{border-color:#93c5fd;box-shadow:inset 4px 0 0 #3b82f6}
-.mon-stock{grid-area:stock;justify-content:center;padding:0}
-.mon-price{grid-area:price;justify-content:center;padding:0}
-.mon-chart{grid-area:chart;min-width:0}
-.mon-kv{grid-area:signal;text-align:left;justify-content:center;background:#f8fafc;border:1px solid #e6ebf2;border-radius:12px;padding:10px 12px}
-.mon-agents{grid-area:agents;min-width:0}
-.mon-signal{grid-area:ops;justify-content:center}
-.mon-stock .live-name{font-size:17px;color:#111827}
+.monitor-row:hover{background:linear-gradient(180deg,#fff,#f8fbff)}
+.monitor-row.strong-signal{border-color:#93c5fd;box-shadow:inset 4px 0 0 #3b82f6,0 18px 48px rgba(59,130,246,.10)}
+.monitor-row .mon-stock{grid-area:stock!important;justify-content:center;padding:2px 0 0}
+.monitor-row .mon-price{grid-area:price!important;justify-content:center;padding:0}
+.monitor-row .mon-chart{grid-area:chart!important;min-width:0}
+.monitor-row .mon-kv{grid-area:signal!important;text-align:left;justify-content:center;background:#f8fafc;border:1px solid #e6ebf2;border-radius:14px;padding:12px 14px;min-height:92px}
+.monitor-row .mon-agents{grid-area:agents!important;min-width:0}
+.monitor-row .mon-signal{grid-area:ops!important;justify-content:center}
+.mon-stock .live-name{font-size:22px;color:#111827}
 .mon-stock .live-code{display:block;margin:3px 0 0 18px;color:#7b8494}
-.live-price{font-size:28px;line-height:1;font-weight:950}
+.live-price{font-size:42px;line-height:1;font-weight:950}
 .mon-price .kv{font-size:13px;color:#7b8494}
 .live-chart{
   width:100%;
-  height:108px;
-  border-radius:10px;
-  background:linear-gradient(180deg,#ffffff,#fffaf2);
+  height:312px;
+  border-radius:16px;
+  background:linear-gradient(180deg,#ffffff 0%,#ffffff 72%,#fffaf2 100%);
   border:1px solid #e6ebf2;
   box-shadow:none;
 }
-.chart-note{display:none}
+.chart-note{display:flex;gap:14px;align-items:center;margin-top:7px;color:#64748b;font-size:12px;font-weight:850}
 .signal-pill{
   width:100%;
   justify-content:center;
@@ -4623,7 +4627,7 @@ body{background:#f3f6fb;color:#111827}
 .signal-pill.hot{background:#dbeafe;color:#1d4ed8}
 .live-signal{font-size:12px;line-height:1.45;color:#475467}
 .money-line{
-  max-height:92px;
+  max-height:84px;
   background:#fff7ed;
   border:1px solid #fed7aa;
   border-radius:10px;
@@ -4683,6 +4687,13 @@ body{background:#f3f6fb;color:#111827}
 .settings-panel[data-section="api"] #settingsSectionApi,
 .settings-panel[data-section="strategy"] #settingsSectionStrategy{display:block}
 .settings-panel .settings-title{font-size:16px;color:#111827;margin:0 0 14px}
+.settings-panel .settings-card{margin:0 0 12px;padding:14px;border:1px solid #e6ebf2;border-radius:14px;background:linear-gradient(180deg,#fff,#fbfcfe)}
+.settings-panel .settings-card b{display:block;font-size:15px;color:#111827;margin-bottom:4px}
+.settings-panel .settings-card span{display:block;color:#667085;font-size:12px;line-height:1.65}
+.settings-panel .settings-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.settings-panel .settings-mini{padding:12px;border:1px solid #e6ebf2;border-radius:13px;background:#fbfcfe}
+.settings-panel .settings-mini span{display:block;color:#667085;font-size:11px;font-weight:900}
+.settings-panel .settings-mini b{display:block;margin-top:4px;color:#111827;font-size:16px}
 .settings-panel .settings-actions{grid-template-columns:1fr 1fr;gap:10px}
 .settings-panel .settings-actions button{height:38px;border-radius:10px;background:#111827;color:#fff;border:1px solid #111827}
 .settings-panel .settings-actions button:nth-child(2n){background:#fff;color:#111827;border-color:#e6ebf2}
@@ -4807,8 +4818,8 @@ body{background:#f3f6fb;color:#111827}
   .panel{height:auto;min-height:100vh;grid-template-rows:auto}
   .premarket{grid-template-columns:1fr}
   .monitor-table{min-width:1060px}
-  .monitor-row{grid-template-columns:160px 100px 360px 160px 240px 70px;min-height:126px}
-  .live-chart{height:102px}
+  .monitor-row{grid-template-columns:170px 170px 260px 82px;min-height:390px}
+  .live-chart{height:260px}
 }
 
 </style>
@@ -4851,10 +4862,19 @@ body{background:#f3f6fb;color:#111827}
     </div>
       <div class="settings-group" id="settingsSectionAccount" style="border-top:0;margin-top:0;padding-top:0">
       <div class="settings-title">账号设置</div>
+      <div class="settings-card">
+        <b id="settingsAccountName">账户状态读取中</b>
+        <span id="settingsAccountMeta">当前账号、会员套餐和使用额度会显示在这里。</span>
+      </div>
+      <div class="settings-mini-grid">
+        <div class="settings-mini"><span>监控额度</span><b id="settingsWatchLimit">--</b></div>
+        <div class="settings-mini"><span>AI额度</span><b id="settingsAiLimit">--</b></div>
+      </div>
       <div class="settings-actions">
         <button onclick="location.href='/account'">账号中心</button>
         <button onclick="location.href='/commercial'">功能中心</button>
       </div>
+      <div class="settings-note" style="padding:12px 0 0">系统设置只放账号、套餐和入口；AI 与策略已拆到上方独立页签，避免混在一起。</div>
     </div>
       <div class="settings-group" id="settingsSectionApi">
       <div class="settings-title">AI模型配置</div>
@@ -4988,6 +5008,10 @@ function loadAccountBadge(){
       if($('sideUserName')) $('sideUserName').textContent=data.loggedIn ? nick : '未登录';
       if($('sideUserMeta')) $('sideUserMeta').textContent=data.loggedIn ? `${plan} · 点击进入个人中心` : '未登录 · 点击登录';
       if($('sideAvatar')) $('sideAvatar').textContent=String(nick).slice(0,1).toUpperCase();
+      if($('settingsAccountName')) $('settingsAccountName').textContent=data.loggedIn ? `${nick}｜${plan}` : '未登录';
+      if($('settingsAccountMeta')) $('settingsAccountMeta').textContent=data.loggedIn ? `到期：${account.planExpireAt||'体验权限'}｜登录状态已保存约30天。` : '请先登录后进入控制台。';
+      if($('settingsWatchLimit')) $('settingsWatchLimit').textContent=(account.watchLimit||'--')+'只';
+      if($('settingsAiLimit')) $('settingsAiLimit').textContent=(account.aiReviewLimit||'--')+'次/日';
     })
     .catch(()=>{});
 }
@@ -5054,7 +5078,7 @@ function renderRealtime(rows){
             <span>黄线 ${Number(r.avg||0).toFixed(2)} ｜ 偏离 ${Number(r.dev||0).toFixed(2)}%</span>
           </div>
         </div>
-        <div class="mon-chart">${liveSpark(r)}</div>
+        <div class="mon-chart">${liveSparkBig(r)}</div>
         <div class="mon-kv">
           <b>买卖点</b>
           <span class="signal-pill ${tradable?'hot':''}">${escapeHtml(signal)}</span>
@@ -5080,6 +5104,61 @@ async function aiIntraday(code){toggleAi(true);const body=$('aiBody');body.inner
 function formatPathForecast(v){if(!v)return '证据不足，暂按震荡处理';if(typeof v==='string')return v;const map={mostLikely:'主路径',alternative:'备选路径',bullish:'偏多路径',bearish:'偏空路径',neutral:'震荡路径'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
 function formatKeyPrices(v){if(!v)return '等待确认';if(typeof v==='string')return v;const map={support:'支撑位',resistance:'压力位',vwap:'黄线均价',buyLow:'低吸区',sellHigh:'高抛区',stopLoss:'止损位',takeProfit:'止盈位'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
 function liveSpark(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0);const c=Number(row.change)>=0?'#ec5f6b':'#35b978';if(series.length<2)return '<svg class="live-chart" viewBox="0 0 420 132"><line x1="14" y1="62" x2="406" y2="62" stroke="#d7dde2" stroke-width="2"/><text x="210" y="72" text-anchor="middle" fill="#94a3af" font-size="12" font-weight="900">等待分时数据</text></svg>';const step=Math.max(1,Math.floor(series.length/120));const points=series.filter((_,i)=>i%step===0);const values=points.map(x=>Number(x.price));const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);const pad=rawSpan*.16;const min=rawMin-pad,max=rawMax+pad,span=Math.max(max-min,.01);const yOf=v=>94-((Number(v)-min)/span)*82;const xy=points.map((p,i)=>({x:18+(i/(points.length-1))*384,y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const avg=Number(row.avg||0);const avgLine=avg>0?`<line x1="18" y1="${yOf(avg).toFixed(1)}" x2="402" y2="${yOf(avg).toFixed(1)}" stroke="#f3c545" stroke-width="1.5" stroke-dasharray="5 4"/><text x="22" y="${Math.max(13,yOf(avg)-4).toFixed(1)}" fill="#c18a00" font-size="10" font-weight="900">黄线 ${avg.toFixed(2)}</text>`:'';const b2=rawMin+rawSpan*.10,b1=rawMin+rawSpan*.24,s1=rawMax-rawSpan*.24,s2=rawMax-rawSpan*.10;const level=(v,label,color)=>`<line x1="18" y1="${yOf(v).toFixed(1)}" x2="402" y2="${yOf(v).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="3 4" opacity=".75"/><text x="404" y="${Math.max(12,Math.min(94,yOf(v)+3)).toFixed(1)}" fill="${color}" font-size="10" font-weight="950">${label}</text>`;const volSrc=xy.map((p,i)=>p.vol||Math.abs((p.price-(xy[i-1]?.price||p.price)))*1000+.1);const maxVol=Math.max(...volSrc,.1);const bars=xy.map((p,i)=>{const h=Math.max(2,(volSrc[i]/maxVol)*22);const color=i&&p.price>=xy[i-1].price?'#ec5f6b':'#35b978';return `<rect x="${(p.x-1).toFixed(1)}" y="${(124-h).toFixed(1)}" width="2" height="${h.toFixed(1)}" fill="${color}" opacity=".42"/>`}).join('');const norm=t=>String(t||'').replace(':','');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],ty=Math.max(10,Math.min(98,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5.5" fill="${color}" stroke="#fff" stroke-width="2"/><text x="${p.x.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="${color}">${label}</text>`};const sig=String(row.signal||'');const last=xy[xy.length-1];const liveMark=/低吸|买入/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#2563eb" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#2563eb">买</text></g>`:(/高抛|卖出/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#ec5f6b" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#ec5f6b">卖</text></g>`:'');return `<svg class="live-chart" viewBox="0 0 420 132"><rect x="0" y="0" width="420" height="132" fill="transparent"/><line x1="18" y1="94" x2="402" y2="94" stroke="#edf1f3"/><line x1="18" y1="12" x2="402" y2="12" stroke="#edf1f3"/><line x1="18" y1="124" x2="402" y2="124" stroke="#edf1f3"/>${level(s2,'卖2','#ec5f6b')}${level(s1,'卖1','#f59e0b')}${avgLine}${level(b1,'买1','#2563eb')}${level(b2,'买2','#0ea5e9')}<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${bars}${mark(row.buyTime,'买','#2563eb',-9)}${mark(row.sellTime,'卖','#ec5f6b',15)}${liveMark}</svg><div class="chart-note"><span>蓝=低吸买点</span><span>红=高抛卖点</span><span>黄=分时均价</span><span>底部=量能</span></div>`}
+function liveSparkBig(row){
+  const series=(row.prices||[]).filter(x=>Number(x.price)>0);
+  if(series.length<2){
+    return '<svg class="live-chart" viewBox="0 0 920 360"><rect x="0" y="0" width="920" height="360" fill="transparent"/><text x="460" y="185" text-anchor="middle" fill="#94a3af" font-size="18" font-weight="900">等待分时数据</text></svg>';
+  }
+  const step=Math.max(1,Math.floor(series.length/170));
+  const points=series.filter((_,i)=>i%step===0);
+  const values=points.map(x=>Number(x.price));
+  const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);
+  const pad=rawSpan*.22;
+  const min=rawMin-pad,max=rawMax+pad,span=Math.max(max-min,.01);
+  const W=920,H=360,L=54,R=132,T=26,CH=232,VTop=280,VH=56;
+  const xOf=i=>L+(i/(points.length-1))*(W-L-R);
+  const yOf=v=>T+((max-Number(v))/span)*CH;
+  const xy=points.map((p,i)=>({x:xOf(i),y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));
+  const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const change=Number(row.change||0),lineColor=change>=0?'#ef4444':'#10b981';
+  const prev=Number(row.prevClose||row.lastClose||row.close||0);
+  const avg=Number(row.avg||0);
+  const b2=rawMin+rawSpan*.08,b1=rawMin+rawSpan*.22,s1=rawMax-rawSpan*.22,s2=rawMax-rawSpan*.08;
+  const priceText=v=>Number(v||0).toFixed(2);
+  const level=(v,label,color,fill='transparent')=>{
+    const y=yOf(v),tx=W-R+12,ty=Math.max(T+13,Math.min(T+CH-6,y+5));
+    return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.4" stroke-dasharray="6 6" opacity=".72"/><rect x="${tx}" y="${(ty-14).toFixed(1)}" width="92" height="24" rx="7" fill="${fill}" stroke="${color}" opacity=".96"/><text x="${tx+10}" y="${(ty+3).toFixed(1)}" fill="${color}" font-size="12" font-weight="950">${label} ${priceText(v)}</text>`;
+  };
+  const yTicks=[max,rawMax,(rawMin+rawMax)/2,rawMin,min].map(v=>`<text x="12" y="${(yOf(v)+4).toFixed(1)}" fill="#64748b" font-size="12" font-weight="800">${priceText(v)}</text><line x1="${L}" y1="${yOf(v).toFixed(1)}" x2="${W-R}" y2="${yOf(v).toFixed(1)}" stroke="#eef2f7"/>`).join('');
+  const avgLine=avg>0?`<polyline points="${xy.map(p=>`${p.x.toFixed(1)},${yOf(avg).toFixed(1)}`).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="2" opacity=".88"/><text x="${L+8}" y="${Math.max(T+14,yOf(avg)-8).toFixed(1)}" fill="#b77900" font-size="12" font-weight="950">黄线 ${priceText(avg)}</text>`:'';
+  const prevLine=prev>0?`<line x1="${L}" y1="${yOf(prev).toFixed(1)}" x2="${W-R}" y2="${yOf(prev).toFixed(1)}" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 6"/><text x="${L-6}" y="${(yOf(prev)+4).toFixed(1)}" text-anchor="end" fill="#475569" font-size="12" font-weight="900">昨收</text>`:'';
+  const vols=xy.map((p,i)=>p.vol||Math.abs((p.price-(xy[i-1]?.price||p.price)))*1200+.1);
+  const maxVol=Math.max(...vols,.1);
+  const barW=Math.max(2,(W-L-R)/xy.length*.72);
+  const bars=xy.map((p,i)=>{const h=Math.max(2,(vols[i]/maxVol)*VH);const c=i&&p.price>=xy[i-1].price?'#ef4444':'#10b981';return `<rect x="${(p.x-barW/2).toFixed(1)}" y="${(VTop+VH-h).toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}" opacity=".58"/>`}).join('');
+  const norm=t=>String(t||'').replace(':','');
+  const badge=(time,label,color,above=true)=>{
+    if(!time||time==='--:--')return '';
+    const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;
+    const p=xy[idx],boxY=above?Math.max(T+6,p.y-48):Math.min(T+CH-34,p.y+20);
+    return `<g><line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${p.x.toFixed(1)}" y2="${(boxY+(above?30:0)).toFixed(1)}" stroke="${color}" stroke-width="1.4"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="7" fill="${color}" stroke="#fff" stroke-width="3"/><rect x="${(p.x-38).toFixed(1)}" y="${boxY.toFixed(1)}" width="76" height="28" rx="7" fill="#fff" stroke="${color}"/><text x="${p.x.toFixed(1)}" y="${(boxY+19).toFixed(1)}" text-anchor="middle" fill="${color}" font-size="13" font-weight="950">${label}</text></g>`;
+  };
+  const sig=String(row.signal||'');
+  const last=xy[xy.length-1];
+  const liveBadge=/低吸|买入/.test(sig)?badge(last.time,'买入信号','#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,'卖出信号','#ef4444',true):'');
+  const times=`<text x="${L}" y="268" fill="#475569" font-size="12">09:30</text><text x="${L+(W-L-R)*.33}" y="268" fill="#475569" font-size="12">10:30</text><text x="${L+(W-L-R)*.55}" y="268" fill="#475569" font-size="12">11:30/13:00</text><text x="${W-R-26}" y="268" fill="#475569" font-size="12">15:00</text>`;
+  const volumeText=`<text x="${L+8}" y="${VTop-8}" fill="#334155" font-size="13" font-weight="950">成交量</text>`;
+  return `<svg class="live-chart" viewBox="0 0 ${W} ${H}">
+    <defs><linearGradient id="lineFade${row.code||''}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${lineColor}" stop-opacity=".16"/><stop offset="1" stop-color="${lineColor}" stop-opacity="0"/></linearGradient></defs>
+    <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
+    ${yTicks}
+    <path d="M ${pts.replaceAll(' ', ' L ')} L ${W-R} ${T+CH} L ${L} ${T+CH} Z" fill="url(#lineFade${row.code||''})"/>
+    ${prevLine}${level(s2,'压力位','#ef4444','#fff5f5')}${level(s1,'卖点位','#ef4444','#fff5f5')}${avgLine}${level(b1,'支撑位','#10b981','#f0fdf4')}${level(b2,'买点位','#10b981','#f0fdf4')}
+    <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${badge(row.buyTime,'买入信号','#10b981',false)}${badge(row.sellTime,'卖出信号','#ef4444',true)}${liveBadge}
+    ${times}<line x1="${L}" y1="${VTop+VH}" x2="${W-R}" y2="${VTop+VH}" stroke="#e5e7eb"/>${volumeText}${bars}
+  </svg><div class="chart-note"><span>红线=价格走势</span><span>黄线=分时均价</span><span>绿色=支撑/买点</span><span>红色=压力/卖点</span><span>底部=量能</span></div>`;
+}
 function initAudio(){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}
 function maybeBeep(r){const sig=r.signal||'',side=alertSide(sig);if(!side||sig.includes('休市')||sig.includes('异常'))return;const today=new Date().toISOString().slice(0,10);const dayKey=`alert:${today}:${r.code}:${side}`;const count=Number(localStorage.getItem(dayKey)||0);if(count>=1)return;const key=[r.code,side].join(':');const now=Date.now();if(lastAlertKeys.has(key)&&now-lastAlertKeys.get(key)<600000)return;lastAlertKeys.set(key,now);localStorage.setItem(dayKey,String(count+1));if(audioCtx)[760,1040,760].forEach((f,i)=>setTimeout(()=>tone(f,160),i*210));speakBrowser(`${r.name}，现价${Number(r.price||0).toFixed(2)}，${sig}，${r.reason||''}`)}
 function tone(freq,duration){try{const osc=audioCtx.createOscillator(),gain=audioCtx.createGain();osc.frequency.value=freq;gain.gain.value=.075;osc.connect(gain);gain.connect(audioCtx.destination);osc.start();setTimeout(()=>osc.stop(),duration)}catch(e){}}
