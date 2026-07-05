@@ -888,7 +888,7 @@ def quote_age_seconds(quote) -> float | None:
 def realtime_payload(email: str | None = None) -> dict:
     try:
         import stock_t_signal as signal_mod
-        from stock_t_signal import analyze_observation, fetch_minutes, fetch_quote, _format_time, _vwap
+        from stock_t_signal import analyze, analyze_observation, fetch_minutes, fetch_quote, _format_time, _vwap
     except Exception as exc:
         return {"ok": False, "stocks": [], "error": str(exc)}
 
@@ -900,9 +900,11 @@ def realtime_payload(email: str | None = None) -> dict:
             quote = fetch_quote(stock.symbol)
             minutes = fetch_minutes(stock.symbol)
             avg = _vwap(quote, minutes) if quote else None
-            signals = analyze_observation(stock)
+            strict_signals = analyze(stock)
+            signals = strict_signals or analyze_observation(stock)
             dev = (quote.price - avg) / avg * 100.0 if quote and avg else 0.0
             signal = signals[0] if signals else None
+            strict_signal = bool(strict_signals)
             age_seconds = quote_age_seconds(quote) if quote else None
             quote_stale = bool(market_is_open() and age_seconds is not None and age_seconds > 90)
             if quote_stale:
@@ -930,6 +932,7 @@ def realtime_payload(email: str | None = None) -> dict:
                     "dev": dev,
                     "signal": display_signal,
                     "reason": display_reason,
+                    "strictSignal": strict_signal,
                     "marketStatus": "交易中" if is_open else "休市中",
                     "quoteAgeSeconds": age_seconds,
                     "quoteStale": quote_stale,
@@ -3285,6 +3288,13 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         if json_file:
             cmd.extend(["--json-file", json_file])
         stocks = str(options.get("stocks") or "").strip()
+        if name == "simulate5" and not stocks:
+            email = REQUEST_EMAIL.get("")
+            watch_codes = [stock.code for stock in dashboard_watchlist(email)[: account_watch_limit(email)]]
+            if watch_codes:
+                stocks = ",".join(watch_codes)
+                sample = len(watch_codes)
+                cmd[2] = str(sample)
         if stocks:
             cmd.extend(["--stocks", stocks])
         if name == "simulate5":
@@ -5105,7 +5115,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     </div>
   </aside>
 <div class="page">
-  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控同步、日内曲线、买卖点、历史缓存压力测试</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
+  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控股票、日内曲线、买卖点、历史复盘</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
   <div class="controls">
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
@@ -5116,7 +5126,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
     <button class="primary" onclick="runSim('simulate')">当日模拟</button>
-    <button onclick="runSim('simulate5')">近5轮缓存测试</button>
+    <button onclick="runSim('simulate5',{watchlist:true})">监控股近5天测试</button>
     <button onclick="loadHistory()">刷新历史</button>
     <button onclick="clearView()">清空</button>
     <div id="status" class="sub">就绪</div>
@@ -5149,8 +5159,8 @@ window.addEventListener('DOMContentLoaded',async()=>{await loadSettings();await 
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
 function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
-async function runSim(name){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();try{if(!$('stocksInput').value.trim())await syncWatchlistStocks(false);const payload=options();saveSettings();const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
-async function syncWatchlistStocks(force){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();const stocks=(data.stocks||[]).map(s=>s.code||String(s.symbol||'').slice(2)).filter(Boolean);if(!stocks.length)return;if(force||(!$('stocksInput').value.trim()&&!stocksManual)){$('stocksInput').value=stocks.join(',');$('sampleInput').value=Math.min(Math.max(stocks.length,1),30);stocksManual=false;syncCards();$('status').textContent='已同步监控股票：'+stocks.join('、')}}catch(e){if(force)$('status').textContent='同步监控股票失败：'+(e.message||e)}}
+async function runSim(name,opts={}){setBusy(true);$('status').textContent='运行中';$('loading').classList.add('on');startProgress();try{if(opts.watchlist){const stocks=await syncWatchlistStocks(true);if(!stocks.length)throw new Error('没有读取到监控股票，请先在监控页添加股票。')}else if(!$('stocksInput').value.trim()){await syncWatchlistStocks(false)}const payload=options();if(name==='simulate5')payload.days=5;saveSettings();const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});markProgress(3);const data=await res.json();markProgress(4);updateStats(data.stats||{});renderRows(data.stocks||[]);renderReview((data.stats||{}).review||{},(data.stats||{}).history||{});$('status').textContent=data.summary||'完成';await loadHistory(false);finishProgress()}catch(e){$('status').textContent='失败：'+e.message;stopProgress()}$('loading').classList.remove('on');setBusy(false)}
+async function syncWatchlistStocks(force){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();const stocks=(data.stocks||[]).map(s=>s.code||String(s.symbol||'').slice(2)).filter(Boolean);if(!stocks.length)return [];if(force||(!$('stocksInput').value.trim()&&!stocksManual)){$('stocksInput').value=stocks.join(',');$('sampleInput').value=Math.min(Math.max(stocks.length,1),30);stocksManual=false;syncCards();$('status').textContent='已同步监控股票：'+stocks.join('、')}return stocks}catch(e){if(force)$('status').textContent='同步监控股票失败：'+(e.message||e);return []}}
 let progressTimer=null,progressStep=0;
 function startProgress(){progressStep=0;$('progress').classList.add('on');markProgress(0);clearInterval(progressTimer);progressTimer=setInterval(()=>{progressStep=Math.min(progressStep+1,3);markProgress(progressStep)},1800)}
 function markProgress(step){progressStep=Math.max(progressStep,step);document.querySelectorAll('#progress .step').forEach((el,i)=>{el.classList.toggle('done',i<progressStep);el.classList.toggle('active',i===progressStep)})}

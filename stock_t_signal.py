@@ -440,18 +440,22 @@ def _analyze(config: StockConfig, include_watch: bool = False) -> List[Signal]:
     opening_sell = _opening_sell_ready(strategy, hm, prices, quote.price, avg, dev, vol_ratio, momentum_3)
     if opening_buy and path_view["buy_ok"] and buy_score >= 5 and buy_score >= sell_score:
         reason = f"{path_view['text']}；开盘急跌后回收，低点承接明显，现价较均价{dev:+.2f}%；{_price_plan('buy', quote.price)}"
-        return [Signal(config.name, config.code, hm, quote.price, "开盘低吸观察", reason, max(buy_score, 7))]
+        action = "开盘低位机会" if include_watch else "开盘低吸观察"
+        return [Signal(config.name, config.code, hm, quote.price, action, reason, max(buy_score, 7))]
     if opening_sell and path_view["sell_ok"] and sell_score >= 5 and sell_score >= buy_score:
         reason = f"{path_view['text']}；开盘冲高后回落，短线有派发风险，现价较均价{dev:+.2f}%；{_price_plan('sell', quote.price)}"
-        return [Signal(config.name, config.code, hm, quote.price, "开盘高抛观察", reason, max(sell_score, 7))]
+        action = "开盘高位机会" if include_watch else "开盘高抛观察"
+        return [Signal(config.name, config.code, hm, quote.price, action, reason, max(sell_score, 7))]
     if buy_ready and path_view["buy_ok"] and buy_score >= max(buy_confirm, strict_min_score) and buy_score >= sell_score + 2:
         reason = _decision_reason("技术低吸", buy_reasons, buy_risk, buy_score)
         reason = f"{path_view['text']}；{reason}；{_price_plan('buy', quote.price)}"
-        return [Signal(config.name, config.code, hm, quote.price, "正T低吸观察", reason, buy_score)]
+        action = "低位机会" if include_watch else "正T低吸观察"
+        return [Signal(config.name, config.code, hm, quote.price, action, reason, buy_score)]
     if sell_ready and path_view["sell_ok"] and sell_score >= max(sell_confirm, strict_min_score) and sell_score >= buy_score + 2:
         reason = _decision_reason("高位回落", sell_reasons, sell_risk, sell_score)
         reason = f"{path_view['text']}；{reason}；{_price_plan('sell', quote.price)}"
-        return [Signal(config.name, config.code, hm, quote.price, "反T高抛观察", reason, sell_score)]
+        action = "高位机会" if include_watch else "反T高抛观察"
+        return [Signal(config.name, config.code, hm, quote.price, action, reason, sell_score)]
     if include_watch:
         buy_watch = (
             price_space
@@ -572,25 +576,30 @@ def _intraday_swing_signal(
     high_has_faded = fade_from_high >= float(strategy.get("swing_buy_fade_pct", 0.75))
     low_zone = lift_from_low <= max(0.85, min_space)
     if path_view.get("buy_ok", True) and near_vwap_low and high_has_faded and low_zone:
+        action = "低位机会" if include_watch else "正T低吸观察"
         reason = (
             f"{path_view.get('text', '走势预判：待确认')}；"
             f"日内高点{day_high:.2f}后回落{fade_from_high:.2f}%，现价接近黄线{avg:.2f}下方，"
             f"属于回落接回/低吸区；计划：{price:.2f}附近买入，{buy_target:.2f}附近卖出，"
             f"空间够但不贪心"
         )
-        return Signal(config.name, config.code, hm, price, "低位买入观察", reason, score_base)
+        return Signal(config.name, config.code, hm, price, action, reason, score_base)
 
     near_day_high = fade_from_high <= 0.55
     enough_lift = lift_from_low >= float(strategy.get("swing_sell_lift_pct", 0.85))
     above_vwap = price >= avg * 1.002
-    if path_view.get("sell_ok", True) and int(strategy.get("reverse_t_enabled", 1)) and near_day_high and enough_lift and above_vwap:
+    high_has_faded = fade_from_high >= max(0.18, float(strategy.get("opening_fade_pct", 0.38)) * 0.45)
+    high_is_extended = dev >= max(0.65, float(strategy.get("sell_min_dev", 1.35)) * 0.55)
+    vol_ok = vol_ratio >= 0.75
+    if path_view.get("sell_ok", True) and int(strategy.get("reverse_t_enabled", 1)) and near_day_high and enough_lift and above_vwap and high_has_faded and high_is_extended and vol_ok:
+        action = "高位机会" if include_watch else "反T高抛观察"
         reason = (
             f"{path_view.get('text', '走势预判：待确认')}；"
             f"日内低点{day_low:.2f}后拉升{lift_from_low:.2f}%，现价高于黄线{avg:.2f}，"
             f"接近日内高点{day_high:.2f}；计划：{price:.2f}附近卖出，{sell_cover:.2f}附近接回，"
             f"优先锁定小利润"
         )
-        return Signal(config.name, config.code, hm, price, "高位卖出观察", reason, score_base)
+        return Signal(config.name, config.code, hm, price, action, reason, score_base)
 
     if high_low_space >= 1.0 and abs(dev) <= 0.20 and include_watch:
         reason = (
