@@ -6418,7 +6418,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
     </div>
     <div class="side-bottom">
-      <button onclick="location.href='/app?section=account'">系统设置</button>
+      <button onclick="location.href='/account'">系统设置</button>
       <button onclick="location.href='/app?section=api'">API 管理</button>
       <button onclick="location.href='/app?section=strategy'">策略配置</button>
       <button onclick="location.href='/app?openLog=1'">日志中心</button>
@@ -6710,7 +6710,7 @@ td{
       <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
     </div>
     <div class="side-bottom">
-      <button onclick="location.href='/app?section=account'">系统设置</button>
+      <button onclick="location.href='/account'">系统设置</button>
       <button onclick="location.href='/app?section=api'">API 管理</button>
       <button onclick="location.href='/app?section=strategy'">策略配置</button>
       <button onclick="location.href='/app?openLog=1'">日志中心</button>
@@ -6774,7 +6774,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
   <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
   <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
   <div class="suite-bottom">
-    <button onclick="location.href='/app?section=account'">系统设置</button>
+    <button onclick="location.href='/account'">系统设置</button>
     <button onclick="location.href='/app?section=api'">API 管理</button>
     <button onclick="location.href='/app?section=strategy'">策略配置</button>
     <button onclick="location.href='/app?openLog=1'">日志中心</button>
@@ -6829,7 +6829,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
   <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
   <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
   <div class="suite-bottom">
-    <button onclick="location.href='/app?section=account'">系统设置</button>
+    <button onclick="location.href='/account'">系统设置</button>
     <button onclick="location.href='/app?section=api'">API 管理</button>
     <button onclick="location.href='/app?section=strategy'">策略配置</button>
     <button onclick="location.href='/app?openLog=1'">日志中心</button>

@@ -193,18 +193,22 @@ def main(argv: list[str]) -> int:
 
 def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int = 1) -> list[tuple[Stock, List[Bar]]]:
     """Fetch minute bars in parallel so random simulations do not crawl stock by stock."""
-    max_attempts = min(len(pool), max(sample_size * 4, sample_size + 18))
+    # Keep random tests responsive: scan enough symbols for variety, but do not
+    # let slow quote providers hold the UI hostage.
+    scan_factor = 2 if days > 1 else 3
+    max_attempts = min(len(pool), max(sample_size * scan_factor, sample_size + 18), 90 if days > 1 else 120)
     candidates = pool[:max_attempts]
     if not candidates:
         return []
     out: list[tuple[Stock, List[Bar]]] = []
-    workers = min(16, max(4, sample_size * 2))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(fetch_minutes, stock.symbol, days): stock for stock in candidates}
-        deadline = time_module.time() + 18
+    workers = min(12, max(4, min(sample_size, 30)))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    futures = {executor.submit(fetch_minutes, stock.symbol, days): stock for stock in candidates}
+    try:
+        deadline = time_module.time() + (14 if days > 1 else 10)
         pending = set(futures)
         while pending and len(out) < sample_size and time_module.time() < deadline:
-            done, pending = concurrent.futures.wait(pending, timeout=0.8, return_when=concurrent.futures.FIRST_COMPLETED)
+            done, pending = concurrent.futures.wait(pending, timeout=0.6, return_when=concurrent.futures.FIRST_COMPLETED)
             for fut in done:
                 stock = futures[fut]
                 try:
@@ -218,6 +222,8 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
                     break
         for fut in pending:
             fut.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
     return out
 
 
@@ -1033,7 +1039,7 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float) -> Result:
             continue
         avg = total_amt / (total_vol * 100.0)
         avg_prices.append(avg)
-        if avg <= 0 or not _in_trade_window(bar.hm):
+        if avg <= 0 or not _sane_vwap(bar.price, avg) or not _in_trade_window(bar.hm):
             continue
         dev = (bar.price - avg) / avg * 100.0
 
@@ -1142,7 +1148,7 @@ def _no_trigger_reason(bars: List[Bar], day_low: float, day_high: float) -> str:
         if total_vol <= 0 or not _in_trade_window(bar.hm):
             continue
         avg = total_amt / (total_vol * 100.0)
-        if avg <= 0:
+        if avg <= 0 or not _sane_vwap(bar.price, avg):
             continue
         avg_prices.append(avg)
         dev = (bar.price - avg) / avg * 100.0
@@ -1172,6 +1178,13 @@ def _no_trigger_reason(bars: List[Bar], day_low: float, day_high: float) -> str:
         notes.append("有波动但买卖闭合空间或风控条件不足")
     notes.append(sm)
     return "；".join(notes)
+
+
+def _sane_vwap(price: float, avg: float) -> bool:
+    if price <= 0 or avg <= 0:
+        return False
+    ratio = price / avg
+    return 0.5 <= ratio <= 1.5
 
 
 def _smart_money_reason(bars: List[Bar]) -> str:
