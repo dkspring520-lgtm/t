@@ -61,12 +61,10 @@ TASKS = {
     "start_all": [
         [sys.executable, "seconds_monitor_ctl.py", "start"],
         [sys.executable, "seconds_monitor_ctl.py", "status"],
-        [sys.executable, "global_events_push.py"],
     ],
     "signal": [[sys.executable, "dabao_trader_dual.py"]],
     "simulate": [[sys.executable, "simulate_t_random.py", "10", "--cash", "100000", "--per-trade", "20000"]],
     "simulate5": [[sys.executable, "simulate_t_random.py", "10", "--cash", "100000", "--per-trade", "20000", "--days", "5"]],
-    "wechat": [[sys.executable, "notify.py", "--self-test"]],
     "cron": [["schtasks", "/Query", "/FO", "LIST"]],
 }
 
@@ -109,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/admin":
             if not is_admin_email(email):
-                self._send_html(ACCOUNT_HTML)
+                self._send_html(FORBIDDEN_HTML, status=403)
                 return
             self._send_html(ADMIN_HTML)
             return
@@ -268,9 +266,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_html(self, html: str) -> None:
+    def _send_html(self, html: str, status: int = 200) -> None:
         data = html.encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -351,12 +349,13 @@ def user_data_path(email: str | None, filename: str) -> Path:
 
 
 def load_dashboard_settings(email: str | None = None) -> dict:
-    defaults = {"cash": 100000, "trade": 20000, "sample": 10}
+    defaults = {"cash": 100000, "trade": 20000, "sample": 10, "days": 5}
     data = read_dashboard_settings_file(email)
     settings = {
         "cash": clamp_int(data.get("cash"), defaults["cash"], 1000, 100000000),
         "trade": clamp_int(data.get("trade"), defaults["trade"], 1000, 100000000),
         "sample": clamp_int(data.get("sample"), defaults["sample"], 1, 30),
+        "days": clamp_int(data.get("days"), defaults["days"], 1, 60),
     }
     settings.update(public_extra_settings(data))
     settings.update(load_profit_strategy_settings(email))
@@ -371,17 +370,18 @@ def save_dashboard_settings(data: dict, email: str | None = None) -> dict:
         "cash": clamp_int(data.get("cash"), 100000, 1000, 100000000),
         "trade": clamp_int(data.get("trade"), 20000, 1000, 100000000),
         "sample": clamp_int(data.get("sample"), 10, 1, 30),
+        "days": clamp_int(data.get("days"), 5, 1, 60),
     })
     settings.update(sanitize_extra_settings(data, current))
     settings.update(sanitize_ai_settings(data, current))
     try:
         user_data_path(email, "dashboard_settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
-        out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
+        out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"], "days": settings["days"]}
         out.update(public_ai_settings(settings))
         return {"ok": False, **out}
     save_strategy_options(data, email)
-    out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"]}
+    out = {"cash": settings["cash"], "trade": settings["trade"], "sample": settings["sample"], "days": settings["days"]}
     out.update(load_profit_strategy_settings(email))
     out.update(public_extra_settings(settings))
     out.update(load_profit_strategy_settings(email))
@@ -811,7 +811,7 @@ def register_payload(handler: Handler, data: dict) -> dict | None:
         "watchLimit": 1,
         "aiReviewLimit": 5,
     }
-    if len(users) == 1:
+    if email in configured_admin_emails():
         users[email]["role"] = "admin"
     save_users(store)
     token = create_session(email)
@@ -876,19 +876,22 @@ def account_payload(handler: Handler) -> dict:
     return {"ok": True, "loggedIn": True, "account": public_user(user)}
 
 
+def configured_admin_emails() -> set[str]:
+    return {item.strip().lower() for item in os.environ.get("DASHBOARD_ADMINS", "").split(",") if item.strip()}
+
+
 def is_admin_email(email: str | None) -> bool:
     email = str(email or "").strip().lower()
     if not email:
         return False
-    env_admins = {item.strip().lower() for item in os.environ.get("DASHBOARD_ADMINS", "").split(",") if item.strip()}
-    if email in env_admins:
-        return True
-    users = load_users().get("users", {})
-    user = users.get(email) or {}
-    if str(user.get("role") or "").lower() == "admin":
-        return True
-    first_email = next(iter(users.keys()), "")
-    return bool(first_email and email == str(first_email).lower())
+    env_admins = configured_admin_emails()
+    if env_admins:
+        return email in env_admins
+    if os.environ.get("DASHBOARD_ALLOW_STORED_ADMIN", "") == "1":
+        users = load_users().get("users", {})
+        user = users.get(email) or {}
+        return str(user.get("role") or "").lower() == "admin"
+    return False
 
 
 def account_watch_limit(email: str | None) -> int:
@@ -923,6 +926,7 @@ def public_user(user: dict) -> dict:
         "watchLimit": account_watch_limit(email),
         "aiReviewLimit": user.get("aiReviewLimit", 5),
         "role": user.get("role", ""),
+        "isAdmin": is_admin_email(email),
     }
 
 
@@ -1520,6 +1524,7 @@ def gemini_cached_advice(code: str, max_age_seconds: int = 30 * 60) -> dict | No
 
 def stock_name_local(code: str) -> str:
     return {
+        "000630": "铜陵有色",
         "601899": "紫金矿业",
         "601012": "隆基绿能",
         "600580": "卧龙电驱",
@@ -3359,7 +3364,7 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         if json_file:
             cmd.extend(["--json-file", json_file])
         stocks = str(options.get("stocks") or "").strip()
-        if name == "simulate5" and not stocks:
+        if name == "simulate5" and not stocks and not options.get("random"):
             email = REQUEST_EMAIL.get("")
             watch_codes = [stock.code for stock in dashboard_watchlist(email)[: account_watch_limit(email)]]
             if watch_codes:
@@ -3486,8 +3491,6 @@ def clean_start_all_detail(raw: str) -> str:
         parts.append("秒级监控：正常")
     if "Scheduled Jobs" in raw or "任务" in raw:
         parts.append("定时任务：已检查")
-    if "推送" in raw or "微信" in raw:
-        parts.append("微信推送：已检查")
     return "\n".join(parts or ["一键启动已执行"])
 
 
@@ -3501,9 +3504,7 @@ def summarize(name: str, raw: str, ok: bool, stats: dict) -> str:
             return f"模拟完成：触发 {stats.get('trigger', '--')}，胜率 {stats.get('win', '--')}，盈亏 {stats.get('pnl', '--')}{extra}"
         return raw.strip() or "模拟完成，但暂时没有返回结果。"
     if name == "start_all":
-        return "一键启动完成。秒级监控、微信链路和定时任务已检查。"
-    if name == "wechat":
-        return "微信链路正在运行。" if ok else "微信链路未运行。"
+        return "一键启动完成。秒级监控已检查。"
     if name == "cron":
         return "定时任务已检查。"
     if name == "signal":
@@ -3780,6 +3781,8 @@ def parse_sim_stocks(raw: str) -> list[dict]:
         if not m:
             continue
         name, code, rest = m.groups()
+        if name == code:
+            name = stock_name_local(code)
         pnl_match = re.search(r"([+-]\d+(?:\.\d+)?)%", rest)
         yuan_match = re.search(r"([+-][\d,.]+)元", rest)
         if rest.startswith("未触发"):
@@ -3860,7 +3863,7 @@ body{background:#f5f7fb}.feature-panel,.band,.footer{background:#f5f7fb}.feature
   <div class="hero-topbar">
     <div class="hero-nav-inner">
       <a class="hero-brand" href="/"><img src="/assets/logo.png" alt="&#20570;T&#31070;&#22120;"><span>&#20570;T&#31070;&#22120;</span></a>
-      <nav class="hero-nav" aria-label="&#39318;&#39029;&#23548;&#33322;"><a class="active" href="/">&#39318;&#39029;</a><a href="#features">&#21151;&#33021;</a><a href="/commercial">&#31574;&#30053;</a><a href="#pricing">&#20215;&#26684;</a><a href="/account">&#24110;&#21161;</a><a href="/admin">&#20851;&#20110;&#25105;&#20204;</a></nav>
+      <nav class="hero-nav" aria-label="&#39318;&#39029;&#23548;&#33322;"><a class="active" href="/">&#39318;&#39029;</a><a href="#features">&#21151;&#33021;</a><a href="/commercial">&#31574;&#30053;</a><a href="#pricing">&#20215;&#26684;</a><a href="/account">&#24110;&#21161;</a><a href="#about">&#20851;&#20110;&#25105;&#20204;</a></nav>
       <a id="authPill" class="nav-auth" href="/login">&#30331;&#24405; / &#27880;&#20876;</a>
     </div>
   </div>
@@ -3869,7 +3872,7 @@ body{background:#f5f7fb}.feature-panel,.band,.footer{background:#f5f7fb}.feature
   <a class="hotspot hs-strategy" href="/commercial">策略</a>
   <a class="hotspot hs-price" href="#pricing">价格</a>
   <a class="hotspot hs-help" href="/account">帮助</a>
-  <a class="hotspot hs-about" href="/admin">关于我们</a>
+  <a class="hotspot hs-about" href="#about">关于我们</a>
   <a id="heroLoginLink" class="hotspot hs-login" href="/login">登录 / 注册</a>
   <a class="hotspot hs-cta" href="/app">立即体验</a>
   <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a id="mobileLoginLink" class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
@@ -3901,6 +3904,7 @@ body{background:#f5f7fb}.feature-panel,.band,.footer{background:#f5f7fb}.feature
     <div class="price"><h3>永久版</h3><div class="money">¥99</div><ul class="list"><li>包含月卡核心功能</li><li>永久使用当前版本</li><li>策略模板持续更新</li><li>优先体验新增功能</li></ul></div>
   </div>
 </section>
+<section id="about" class="band"><h2 class="section-title">关于做T神器</h2><p class="section-sub">做T神器是一套 A 股盘中监控、模拟复盘和策略研究工具，核心目标是把买卖点、价格带、风控和复盘沉淀成一个更容易执行的工作台。</p></section>
 <section class="cta"><div><h2>盘前看方向，盘中等价格带。</h2><p>把冲动交易压下来，把可复盘的动作留下来。</p></div><div><a class="btn primary" href="/app">进入控制台</a> <a id="ctaRegisterLink" class="btn" href="/register">注册体验账号</a></div></section>
 <footer class="footer">做T神器 · A股智能交易助手 · 策略研究工具，不承诺收益。</footer>
 <script>
@@ -3924,6 +3928,19 @@ async function syncLandingAuth(){
 document.addEventListener('DOMContentLoaded',syncLandingAuth);
 </script>
 </body>
+</html>"""
+
+FORBIDDEN_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>无权访问 - 做T神器</title>
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f7fb;color:#111827;font:15px/1.7 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif}.box{width:min(520px,calc(100vw - 32px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 22px 70px rgba(15,23,42,.08);padding:28px}h1{margin:0 0 8px;font-size:28px}p{margin:0 0 18px;color:#64748b}a{display:inline-flex;height:42px;align-items:center;border-radius:12px;background:#111827;color:#fff;padding:0 18px;text-decoration:none;font-weight:900}
+</style>
+</head>
+<body><main class="box"><h1>没有管理员权限</h1><p>管理后台只允许系统配置的管理员访问。普通用户请返回控制台或会员中心。</p><a href="/app">返回控制台</a></main></body>
 </html>"""
 
 AUTH_HTML = r"""<!doctype html>
@@ -4017,11 +4034,12 @@ async function loadAccount(){
     return;
   }
   const a=data.account||{};
+  const adminLink=a.isAdmin?'<a href="/admin"><button>用户管理</button></a>':'';
   root.innerHTML=`
     <div class="card"><h2>${a.nickname||'用户'}，欢迎回来</h2><div class="sub">当前套餐：${a.plan||'体验版'}。这是本地商业化原型，正式上线后会接支付、数据库和云端权限。</div></div>
     <div class="grid">
       <div class="card"><h3>账号信息</h3><div class="kv"><div>邮箱</div><div>${a.email||'--'}</div><div>昵称</div><div>${a.nickname||'--'}</div><div>套餐</div><div>${a.plan||'体验版'}</div><div>到期时间</div><div>${a.planExpireAt||'体验权限'}</div><div>注册时间</div><div>${a.createdAt||'--'}</div><div>监控额度</div><div>${a.watchLimit||1} 只股票</div><div>AI复核额度</div><div>${a.aiReviewLimit||5} 次/日</div></div></div>
-      <div class="card"><h3>快捷入口</h3><p><a href="/app"><button class="primary">进入控制台</button></a></p><p><a href="/recharge"><button class="primary">激活码充值</button></a></p><p><a href="/admin"><button>用户管理</button></a><a href="/commercial"><button>配置商业功能</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
+      <div class="card"><h3>快捷入口</h3><p><a href="/app"><button class="primary">进入控制台</button></a></p><p><a href="/recharge"><button class="primary">激活码充值</button></a></p><p>${adminLink}<a href="/commercial"><button>配置商业功能</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
     </div>
     <div class="card" style="margin-top:14px"><h3>套餐规划</h3><div class="plan"><div class="price active"><b>体验版</b><p>免费试用</p><ul><li>基础单股监控</li><li>盘前方向预览</li><li>模拟测试体验</li></ul></div><div class="price"><b>月卡</b><p>¥9.9 / 月</p><ul><li>多股实时监控</li><li>模拟测试与复盘</li><li>AI买卖点复核</li></ul></div><div class="price"><b>永久版</b><p>¥99</p><ul><li>核心功能长期使用</li><li>策略模板更新</li><li>优先体验新增功能</li></ul></div></div></div>`;
 }
@@ -5944,7 +5962,7 @@ function selectPremarket(code){premarketTargetCode=code;renderWatchTags();loadPr
 function addWatchStock(){const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw);if(!token){setStatus('请输入股票代码，例如 601899。');append('请输入股票代码，例如 601899。');return}const exists=watchStocks.some(s=>s.symbol===token);if(exists){setStatus('已在监控中：'+stockName(token)+token.slice(2));if($('stockCodeInput'))$('stockCodeInput').value='';return}watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist();if($('stockCodeInput'))$('stockCodeInput').value=''}
 function removeWatchStock(index){watchStocks.splice(index,1);saveWatchlist()}
 function normalizeStockToken(raw){let v=String(raw||'').trim().toLowerCase();const m=v.match(/(sh|sz)?(\d{6})/);if(!m)return '';const code=m[2];const prefix=(m[1]||(code.startsWith('6')||code.startsWith('5')?'sh':'sz'));return prefix+code}
-function stockName(symbol){const code=symbol.slice(2);return ({'601899':'紫金矿业','601012':'隆基绿能','000063':'中兴通讯','600519':'贵州茅台','300502':'新易盛','002050':'三花智控','600580':'卧龙电驱'})[code]||code}
+function stockName(symbol){const code=symbol.slice(2);return ({'000630':'铜陵有色','601899':'紫金矿业','601012':'隆基绿能','000063':'中兴通讯','600519':'贵州茅台','300502':'新易盛','002050':'三花智控','600580':'卧龙电驱'})[code]||code}
 
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;if($('cash'))$('cash').textContent=s.endingCash||s.cash||'--';if($('trade'))$('trade').textContent=s.trade||'--';if($('trigger'))$('trigger').textContent=s.trigger||'--';if($('win'))$('win').textContent=s.win||'--';if($('pnl')){$('pnl').textContent=s.pnl||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos')}if($('ret'))$('ret').textContent=s.return||'--';const ending=parseYuan(s.endingCash);if(persist&&ending>0){mainOptions.cash=ending;saveSettings()}}
@@ -6139,7 +6157,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 .side-bottom{margin-top:auto;display:grid;gap:10px;border-top:1px solid #edf0f5;padding-top:16px}.side-bottom button{height:34px;border:0;background:transparent;box-shadow:none;text-align:left;color:#5c6677}.side-user{display:flex;gap:10px;align-items:center;margin-top:12px}.side-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444)}.side-user b{display:block;font-size:13px}.side-user span{display:block;color:#8b95a5;font-size:11px}
 .page{min-height:0;height:100%;padding:14px 4px 8px;grid-template-rows:60px 84px auto minmax(0,1fr);gap:18px;background:transparent}
 .top{height:60px;padding:0;background:transparent;border:0;box-shadow:none}.title{font-size:26px;color:#111827}.top .sub{display:block;color:#64748b;font-size:14px}.top button{height:42px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;color:#111827;box-shadow:none}.top button:first-child{margin-right:8px}
-.controls{min-height:84px;padding:14px 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);display:flex;gap:12px;align-items:center;flex-wrap:nowrap;overflow:auto}.field span{display:block;position:static;margin-bottom:4px;font-size:12px;color:#7b8494}.field input,.field.wide input{height:40px;width:118px;border:1px solid #e2e8f0;border-radius:10px;background:#fbfcfe;padding:0 12px;color:#111827;font-weight:800}.field.wide input{width:170px}button{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}button.primary{background:#111827;border-color:#111827;color:#fff}
+.controls{min-height:84px;padding:14px 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);display:flex;gap:12px;align-items:center;flex-wrap:nowrap;overflow:auto}.field span{display:block;position:static;margin-bottom:4px;font-size:12px;color:#7b8494}.field input,.field select,.field.wide input{height:40px;width:118px;border:1px solid #e2e8f0;border-radius:10px;background:#fbfcfe;padding:0 12px;color:#111827;font-weight:800}.field select{width:96px}.field.wide input{width:170px}button{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}button.primary{background:#111827;border-color:#111827;color:#fff}
 .bar{height:3px;background:#22c55e;border-radius:99px}.bar:not(.on){opacity:.2}.progress{display:none!important}
 .metrics{grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px}.metric{min-height:68px;display:flex;flex-direction:column;justify-content:center;padding:10px 14px;background:#fff;border:1px solid #e7ebf2;border-radius:12px;box-shadow:0 8px 22px rgba(17,24,39,.035)}.metric .k{font-size:12px;color:#7b8494}.metric .v{font-size:18px;color:#111827;line-height:1.15}.metric:nth-child(5) .v{color:#10b981}
 .layout{grid-template-rows:minmax(0,1fr) 190px;gap:18px}.panel{border:1px solid #e7ebf2;border-radius:14px;background:#fff;box-shadow:0 12px 34px rgba(17,24,39,.04)}.head{height:54px;padding:0 22px;border-bottom:1px solid #eef2f6;color:#111827}.badge{background:#f1f5f9;color:#475569;border-radius:999px}
@@ -6150,7 +6168,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 /* Final compact simulation: metrics are a thin summary strip, not giant cards. */
 .page{grid-template-rows:58px auto 3px 54px minmax(0,1fr);gap:10px}
 .controls{min-height:64px;padding:10px 14px;gap:9px}
-.field input,.field.wide input{height:34px}
+.field input,.field select,.field.wide input{height:34px}
 .metrics{
   height:54px;
   min-height:54px;
@@ -6201,13 +6219,14 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
     <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
+    <label class="field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
     <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
     <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
-    <button class="primary" onclick="runSim('simulate')">当日模拟</button>
-    <button onclick="runSim('simulate5',{watchlist:true})">监控股近5天测试</button>
+    <button class="primary" onclick="runSim('simulate')">测试</button>
+    <button onclick="runSim('simulate',{random:true})">随机测试</button>
     <button onclick="loadHistory()">刷新历史</button>
     <button onclick="clearView()">清空</button>
     <div id="status" class="sub">就绪</div>
@@ -6229,7 +6248,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     <div class="metric"><div class="k">资金收益</div><div id="ret" class="v">--</div></div>
   </section>
   <section class="layout">
-    <main class="panel"><div class="head"><span>日内曲线与买卖点</span><span id="count" class="badge">等待运行</span></div><div id="rows" class="rows empty">点击“当日模拟”后显示曲线、买/卖点、盈亏和失败原因。</div></main>
+    <main class="panel"><div class="head"><span>日内曲线与买卖点</span><span id="count" class="badge">等待运行</span></div><div id="rows" class="rows empty">点击“测试”后显示曲线、买/卖点、盈亏和失败原因。</div></main>
     <aside class="side"><div class="panel"><div class="head">策略复盘</div><div id="review" class="content">模拟后自动讨论失败位置和下一轮优化方向。</div></div><div class="panel"><div class="head">历史缓存</div><div id="history" class="content">正在读取历史记录。</div></div></aside>
   </section>
 </div>
@@ -6238,7 +6257,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false,settingsTimer=null;
 window.addEventListener('DOMContentLoaded',async()=>{await loadSettings();await syncWatchlistStocks(false);loadHistory();restoreLatestSim();});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name,opts={}){
   setBusy(true);
@@ -6246,18 +6265,23 @@ async function runSim(name,opts={}){
   $('loading').classList.add('on');
   startProgress();
   try{
-    if(opts.watchlist){
+    if(opts.random){
+      // 随机测试明确走全市场随机池，不继承自定义或监控股票。
+    }else if(opts.watchlist){
       const stocks=await syncWatchlistStocks(true);
       if(!stocks.length)throw new Error('没有读取到监控股票，请先在监控页添加股票。');
     }else if(!$('stocksInput').value.trim()){
       await syncWatchlistStocks(false);
     }
     const payload=options();
-    if(name==='simulate5')payload.days=5;
+    if(opts.random){payload.stocks='';payload.random=true;}
+    const days=Math.max(1,Math.min(60,Number(payload.days||1)));
+    payload.days=days;
+    const task=days>1?'simulate5':'simulate';
     saveSettings();
     const ctrl=new AbortController();
     const timer=setTimeout(()=>ctrl.abort(),45000);
-    const res=await fetch('/api/run/'+name,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctrl.signal});
+    const res=await fetch('/api/run/'+task,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctrl.signal});
     clearTimeout(timer);
     markProgress(3);
     if(res.status===401)throw new Error('登录状态已过期，请重新登录后再测试。');
@@ -6291,7 +6315,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
@@ -6503,7 +6527,8 @@ LONGHUBANG_HTML = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#2b170f;background:radial-gradient(circle at 88% 0,#ffe2aa,transparent 34%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4)}button,a.btn{height:36px;border:1px solid #f0dfc7;border-radius:11px;background:#fff;color:#2b170f;text-decoration:none;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(151,79,18,.07);display:inline-flex;align-items:center}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:22px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(151,79,18,.16);display:grid;grid-template-rows:auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#8a6b52}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.status{min-height:24px;color:#6b5543;font-weight:750}.panel{background:#fff;border:1px solid #f0dfc7;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(151,79,18,.06)}.table-wrap{overflow:auto;max-height:calc(100vh - 160px)}table{width:100%;border-collapse:collapse;min-width:1320px}th,td{padding:12px 14px;border-bottom:1px solid #f3e7d8;text-align:left;vertical-align:top}th{position:sticky;top:0;background:#fff8ee;z-index:2;font-size:12px;color:#8a6b52}.rank{font-size:20px;font-weight:950;color:#d99a1b}.stock{font-weight:950}.code{display:block;color:#8a6b52;margin-top:2px}.tag{display:inline-flex;border-radius:999px;background:#fff1dc;padding:4px 8px;color:#6b5543;font-size:12px;font-weight:850;margin:0 4px 4px 0}.tag.hot{background:#fff0f1;color:#d71912}.tag.inst{background:#fff1dc;color:#a65b18}.money{font-weight:950}.up{color:#ec5f6b}.down{color:#35b978}.seat-list{display:grid;gap:7px}.seat{border:1px solid #f4e5cf;background:#fffaf4;border-radius:12px;padding:9px;min-width:330px}.seat b{display:block;margin-bottom:4px}.seat-meta{display:flex;gap:8px;flex-wrap:wrap;color:#6b5543;font-size:12px;font-weight:850}.reason{max-width:280px;line-height:1.7}.empty{text-align:center;padding:42px;color:#8a6b52;font-weight:850}@media(max-width:900px){.top{display:block}.actions{justify-content:flex-start;margin-top:12px}.shell{width:min(100%,calc(100vw - 14px));padding:12px}.table-wrap{max-height:none}th,td{padding:10px 8px;font-size:12px}}
 
 /* Unified cockpit shell for extension pages. */
-body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap,.matrix-wrap{max-height:calc(100vh - 170px)!important}@media(max-width:1180px){body{overflow:auto}.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}}</style>
+body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap,.matrix-wrap{max-height:calc(100vh - 170px)!important}
+@media(max-width:1180px){body{overflow:auto}.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}}</style>
 </head>
 <body>
 <aside class="suite-side">

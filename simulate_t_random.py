@@ -58,6 +58,12 @@ DEFAULT_STRATEGY = {
 }
 ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
+LOCAL_STOCK_NAME_MAP = {
+    "000630": "铜陵有色",
+    "601899": "紫金矿业",
+    "601012": "隆基绿能",
+    "600580": "卧龙电驱",
+}
 
 
 @dataclass(frozen=True)
@@ -581,6 +587,7 @@ def fetch_stock_pool_page(page: int) -> List[Stock]:
 
 def fallback_stock_pool() -> List[Stock]:
     items = [
+        ("铜陵有色", "000630", "sz000630"),
         ("\u7d2b\u91d1\u77ff\u4e1a", "601899", "sh601899"),
         ("\u9686\u57fa\u7eff\u80fd", "601012", "sh601012"),
         ("\u4e2d\u4fe1\u8bc1\u5238", "600030", "sh600030"),
@@ -743,7 +750,7 @@ def parse_custom_stock_pool(text: str, pool: List[Stock]) -> List[Stock]:
         if code in seen:
             continue
         prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
-        stock = by_code.get(code) or Stock(code, code, prefix + code)
+        stock = by_code.get(code) or Stock(LOCAL_STOCK_NAME_MAP.get(code, code), code, prefix + code)
         out.append(stock)
         seen.add(code)
         if len(out) >= 30:
