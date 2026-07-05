@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 import json
 import random
+import os
 
 from env_bootstrap import apply_local_env
 
@@ -43,7 +44,14 @@ simulation_engine = SimulationEngine()
 # ========== 页面路由 ==========
 @app.route('/')
 def index():
-    return render_template('index.html')
+    minimal_ui = os.getenv('TSHU_UI_MINIMAL', '1') == '1'
+    ui_features = {
+        'minimal': minimal_ui,
+        'show_position_tab': not minimal_ui,
+        'show_research_tab': not minimal_ui,
+        'show_simulation_tab': True
+    }
+    return render_template('index.html', ui_features=ui_features)
 
 # ========== 持仓管理API ==========
 @app.route('/api/positions', methods=['GET'])
