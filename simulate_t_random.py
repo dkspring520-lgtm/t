@@ -58,6 +58,7 @@ DEFAULT_STRATEGY = {
 }
 ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
+SIM_DAYS = 1
 LOCAL_STOCK_NAME_MAP = {
     "000630": "铜陵有色",
     "601899": "紫金矿业",
@@ -79,6 +80,7 @@ class Bar:
     price: float
     volume_lot: float
     amount_yuan: float
+    date: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,7 @@ class Result:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY
+    global ACTIVE_STRATEGY, SIM_DAYS
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -114,7 +116,8 @@ def main(argv: list[str]) -> int:
     sample_size = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 10
     total_cash = _arg_float(argv, "--cash", 100000.0)
     per_trade = _arg_float(argv, "--per-trade", 20000.0)
-    days = int(_arg_float(argv, "--days", 1.0))
+    days = max(1, min(10, int(_arg_float(argv, "--days", 1.0))))
+    SIM_DAYS = days
     max_trades = int(_arg_float(argv, "--max-trades", 1.0))
     json_file = _arg_value(argv, "--json-file", "")
     if per_trade <= 0:
@@ -131,13 +134,13 @@ def main(argv: list[str]) -> int:
     results: List[Result] = []
     minute_map: dict[str, List[Bar]] = {}
     random.shuffle(pool)
-    selected = fetch_simulation_candidates(pool, scan_size)
-    if not custom_mode and len(selected) < scan_size:
+    selected = fetch_simulation_candidates(pool, scan_size, days)
+    if days <= 1 and not custom_mode and len(selected) < scan_size:
         selected.extend(history_simulation_candidates(scan_size - len(selected), {stock.code for stock, _bars in selected}))
     skipped = max(0, min(len(pool), max(scan_size * 4, scan_size + 18)) - len(selected))
     for stock, bars in selected:
         minute_map[stock.code] = bars
-        results.append(simulate_one(stock, bars, per_trade))
+        results.append(simulate_across_days(stock, bars, per_trade, days))
 
     if not results:
         print("\u4eca\u65e5\u5206\u65f6\u6570\u636e\u4e0d\u8db3\uff0c\u6682\u65f6\u65e0\u6cd5\u6a21\u62df\u3002")
@@ -156,8 +159,8 @@ def main(argv: list[str]) -> int:
 
     today = datetime.now().strftime("%Y-%m-%d")
     if days > 1:
-        print(f"\u3010\u968f\u673a{len(results)}\u80a1\u8fd1{days}\u8f6e\u7f13\u5b58\u6d4b\u8bd5\u3011{today}")
-        print(f"\u8bf4\u660e\uff1a\u5f53\u524d\u516c\u5f00\u5206\u65f6\u6e90\u4ec5\u7a33\u5b9a\u652f\u6301\u5f53\u65e5\u5206\u65f6\uff0c\u672c\u9875\u5148\u4f7f\u7528\u5f53\u65e5\u6570\u636e\u548c\u5386\u53f2\u7f13\u5b58\u505a\u7b56\u7565\u538b\u529b\u6d4b\u8bd5\uff0c\u4e0d\u7b49\u540c\u771f\u5b9e{days}\u65e5\u5206\u949f\u56de\u6d4b\u3002")
+        print(f"\u3010\u968f\u673a{len(results)}\u80a1\u8fd1{days}\u5929\u505aT\u6a21\u62df\u3011{today}")
+        print(f"\u8bf4\u660e\uff1a\u5df2\u5c1d\u8bd5\u6309\u80a1\u7968\u62c9\u53d6\u8fd1{days}\u5929\u5206\u65f6\uff0c\u6bcf\u5929\u72ec\u7acb\u8ba1\u7b97VWAP\u548c\u4e70\u5356\u70b9\uff0c\u5c55\u793a\u4ee3\u8868\u7ed3\u679c\u3002")
     else:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u5f53\u65e5\u505aT\u6a21\u62df\u3011{today}")
     print(f"\u8d44\u91d1 {total_cash:,.0f}\u5143  \u5355\u7b14 {per_trade:,.0f}\u5143")
@@ -188,7 +191,7 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def fetch_simulation_candidates(pool: List[Stock], sample_size: int) -> list[tuple[Stock, List[Bar]]]:
+def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int = 1) -> list[tuple[Stock, List[Bar]]]:
     """Fetch minute bars in parallel so random simulations do not crawl stock by stock."""
     max_attempts = min(len(pool), max(sample_size * 4, sample_size + 18))
     candidates = pool[:max_attempts]
@@ -197,7 +200,7 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int) -> list[tup
     out: list[tuple[Stock, List[Bar]]] = []
     workers = min(16, max(4, sample_size * 2))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(fetch_minutes, stock.symbol): stock for stock in candidates}
+        futures = {executor.submit(fetch_minutes, stock.symbol, days): stock for stock in candidates}
         deadline = time_module.time() + 18
         pending = set(futures)
         while pending and len(out) < sample_size and time_module.time() < deadline:
@@ -216,6 +219,58 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int) -> list[tup
         for fut in pending:
             fut.cancel()
     return out
+
+
+def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, days: int) -> Result:
+    groups = split_bars_by_date(bars)
+    if days <= 1 or len(groups) <= 1:
+        return simulate_one(stock, bars, trade_amount)
+
+    daily_results: list[tuple[str, Result]] = []
+    for date, day_bars in groups[-days:]:
+        if len(day_bars) < 30:
+            continue
+        daily_results.append((date, simulate_one(stock, day_bars, trade_amount)))
+    if not daily_results:
+        return simulate_one(stock, bars, trade_amount)
+
+    traded = [(date, result) for date, result in daily_results if result.action != "\u672a\u89e6\u53d1"]
+    if traded:
+        date, result = max(traded, key=lambda item: (_trade_quality_score(item[1]), item[1].pnl_pct))
+        return clone_result_with_reason(result, stock, f"\u8fd1{len(daily_results)}\u5929\u626b\u63cf\uff0c\u4ee3\u8868\u65e5{date}\uff1a{result.reason}")
+
+    date, result = daily_results[-1]
+    return clone_result_with_reason(result, stock, f"\u8fd1{len(daily_results)}\u5929\u5747\u672a\u89e6\u53d1\uff1b\u6700\u8fd1\u65e5{date}\uff1a{result.reason}")
+
+
+def split_bars_by_date(bars: List[Bar]) -> list[tuple[str, List[Bar]]]:
+    if not bars:
+        return []
+    groups: dict[str, list[Bar]] = {}
+    order: list[str] = []
+    for bar in bars:
+        date = bar.date or datetime.now().strftime("%Y-%m-%d")
+        if date not in groups:
+            groups[date] = []
+            order.append(date)
+        groups[date].append(bar)
+    return [(date, groups[date]) for date in order if len(groups[date]) >= 1]
+
+
+def clone_result_with_reason(result: Result, stock: Stock, reason: str) -> Result:
+    return Result(
+        stock,
+        result.action,
+        result.buy_time,
+        result.buy_price,
+        result.sell_time,
+        result.sell_price,
+        result.pnl_pct,
+        result.pnl_yuan,
+        result.trade_amount,
+        result.shares,
+        reason,
+    )
 
 
 def history_simulation_candidates(sample_size: int, used_codes: set[str]) -> list[tuple[Stock, List[Bar]]]:
@@ -782,7 +837,12 @@ def save_cached_stock_pool(pool: List[Stock]) -> None:
         pass
 
 
-def fetch_minutes(symbol: str) -> List[Bar]:
+def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
+    if days > 1:
+        bars = fetch_minutes_eastmoney(symbol, days)
+        if len(bars) >= 30:
+            return bars
+
     url = f"http://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=js&code={symbol}"
     try:
         text = _get(url, "utf-8", 10)
@@ -809,13 +869,13 @@ def fetch_minutes(symbol: str) -> List[Bar]:
             minute_amount = max(amount - last_amount, 0.0)
             last_volume = volume
             last_amount = amount
-            bars.append(Bar(_hm(parts[0]), float(parts[1]), minute_volume, minute_amount))
+            bars.append(Bar(_hm(parts[0]), float(parts[1]), minute_volume, minute_amount, datetime.now().strftime("%Y-%m-%d")))
         except Exception:
             continue
     if len(bars) >= 30:
         save_cached_minutes(symbol, bars)
         return bars
-    bars = fetch_minutes_eastmoney(symbol) or fetch_minutes_sina(symbol)
+    bars = fetch_minutes_eastmoney(symbol, 1) or fetch_minutes_sina(symbol)
     if len(bars) >= 30:
         save_cached_minutes(symbol, bars)
         return bars
@@ -830,7 +890,7 @@ def save_cached_minutes(symbol: str, bars: List[Bar]) -> None:
         payload = {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "symbol": symbol,
-            "bars": [{"hm": b.hm, "price": b.price, "volume": b.volume_lot, "amount": b.amount_yuan} for b in bars],
+            "bars": [{"hm": b.hm, "price": b.price, "volume": b.volume_lot, "amount": b.amount_yuan, "date": b.date} for b in bars],
         }
         (MINUTE_CACHE_DIR / f"{symbol}.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     except Exception:
@@ -841,7 +901,7 @@ def load_cached_minutes(symbol: str) -> List[Bar]:
     try:
         data = json.loads((MINUTE_CACHE_DIR / f"{symbol}.json").read_text(encoding="utf-8"))
         rows = data.get("bars") or []
-        bars = [Bar(str(x["hm"]), float(x["price"]), float(x.get("volume") or 0.0), float(x.get("amount") or 0.0)) for x in rows if x.get("price")]
+        bars = [Bar(str(x["hm"]), float(x["price"]), float(x.get("volume") or 0.0), float(x.get("amount") or 0.0), str(x.get("date") or data.get("date") or "")) for x in rows if x.get("price")]
         return bars if len(bars) >= 30 else []
     except Exception:
         return []
@@ -877,7 +937,7 @@ def load_history_price_bars(symbol: str) -> List[Bar]:
     return []
 
 
-def fetch_minutes_eastmoney(symbol: str) -> List[Bar]:
+def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
     code = symbol[2:]
     market = "1" if symbol.startswith("sh") else "0"
     params = {
@@ -887,7 +947,7 @@ def fetch_minutes_eastmoney(symbol: str) -> List[Bar]:
         "iscr": "0",
         "iscca": "0",
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
-        "ndays": "1",
+        "ndays": str(max(1, min(10, int(days or 1)))),
     }
     url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get?" + urllib.parse.urlencode(params)
     try:
@@ -901,11 +961,13 @@ def fetch_minutes_eastmoney(symbol: str) -> List[Bar]:
         if len(parts) < 7:
             continue
         try:
-            hm = parts[0][-5:]
+            full_time = parts[0]
+            date = full_time[:10] if len(full_time) >= 10 and full_time[4:5] == "-" else datetime.now().strftime("%Y-%m-%d")
+            hm = full_time[-5:]
             close = float(parts[2])
             volume = float(parts[5])
             amount = float(parts[6])
-            bars.append(Bar(hm, close, volume, amount))
+            bars.append(Bar(hm, close, volume, amount, date))
         except Exception:
             continue
     return bars
@@ -938,7 +1000,7 @@ def fetch_minutes_sina(symbol: str) -> List[Bar]:
             last_total_volume = total_volume
             last_total_amount = total_amount
             if price > 0:
-                bars.append(Bar(hm, price, minute_volume / 100.0, minute_amount))
+                bars.append(Bar(hm, price, minute_volume / 100.0, minute_amount, datetime.now().strftime("%Y-%m-%d")))
         except Exception:
             continue
     return bars
