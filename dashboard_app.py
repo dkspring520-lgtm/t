@@ -5203,7 +5203,7 @@ body{
 <div class="shell"><main class="panel">
   <div id="signalToasts" class="signal-toasts"></div>
   <aside class="side-nav">
-    <div class="side-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+    <div class="side-brand"><img src="/assets/app-icon.svg" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
     <div class="side-menu">
       <button class="active" onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
@@ -5221,7 +5221,7 @@ body{
     </div>
   </aside>
   <div class="top">
-    <div class="app-brand"><button class="nav-toggle" title="菜单">☰</button><img class="app-logo" src="/assets/logo.png" alt="做T神器"><div><div class="title-row"><div class="title">多股监控</div><span id="activeStockPill" class="active-stock-pill">紫金矿业 601899</span></div><div class="sub">多股票实时监控</div></div></div>
+    <div class="app-brand"><button class="nav-toggle" title="菜单">☰</button><img class="app-logo" src="/assets/app-icon.svg" alt="做T神器"><div><div class="title-row"><div class="title">多股监控</div><span id="activeStockPill" class="active-stock-pill">紫金矿业 601899</span></div><div class="sub">多股票实时监控</div></div></div>
     <div class="top-actions"><button onclick="location.href='/recharge'">会员码</button><button id="settingsBtn" onclick="toggleSettings()">设置</button><div id="status" class="sub">就绪</div></div>
   </div>
   <section class="workbench-links" aria-label="工作台入口">
@@ -5642,7 +5642,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 <body>
 <div class="sim-shell">
   <aside class="side-nav">
-    <div class="side-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+    <div class="side-brand"><img src="/assets/app-icon.svg" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
     <div class="side-menu">
       <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button class="active" onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
@@ -5795,7 +5795,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 <body>
 <div class="research-shell">
   <aside class="side-nav">
-    <div class="side-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+    <div class="side-brand"><img src="/assets/app-icon.svg" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
     <div class="side-menu">
       <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
@@ -5856,7 +5856,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
 </head>
 <body>
 <aside class="suite-side">
-  <div class="suite-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+  <div class="suite-brand"><img src="/assets/app-icon.svg" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
   <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
   <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
   <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
@@ -5904,7 +5904,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
 </head>
 <body>
 <aside class="suite-side">
-  <div class="suite-brand"><img src="/assets/logo.png" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
+  <div class="suite-brand"><img src="/assets/app-icon.svg" alt="做T神器"><div><b>神器控制台</b><span>多股联动实时监控</span></div></div>
   <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
   <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
   <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
