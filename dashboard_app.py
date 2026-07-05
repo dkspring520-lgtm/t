@@ -4407,6 +4407,212 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
   .live-chart{height:190px}
 }
 
+/* Final workstation layout: compact top, chart-first realtime card. */
+body{background:#f3f6fb;color:#111827}
+.shell{background:#eef2f7}
+.panel{
+  width:min(1780px,calc(100vw - 28px));
+  height:calc(100vh - 28px);
+  grid-template-rows:54px 56px 116px minmax(0,1fr) 44px;
+  gap:10px;
+  padding:14px;
+  background:#f7f9fc;
+  border:1px solid #e6ebf2;
+  box-shadow:none;
+}
+.top{
+  min-height:54px;
+  padding:0;
+  background:transparent;
+  border:0;
+  box-shadow:none;
+  color:#111827;
+}
+.app-brand{gap:12px}
+.app-logo{width:42px;height:42px;border-radius:10px;object-fit:cover}
+.title{font-size:24px;line-height:1.1;color:#111827}
+.top .sub{color:#7b8494}
+.top-actions button{height:38px;border-radius:10px;background:#fff;color:#111827;border:1px solid #e3e8ef}
+.top-actions #settingsBtn{background:#4f46e5;color:#fff;border-color:#4f46e5;box-shadow:0 10px 24px rgba(79,70,229,.20)}
+.top-actions #status{height:34px;min-width:68px;background:#f8fafc;color:#16a34a;border-radius:999px}
+.workbench-links{
+  max-width:none;
+  height:56px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:8px 10px;
+  background:#fff;
+  border:1px solid #e6ebf2;
+  border-radius:14px;
+  box-shadow:0 10px 30px rgba(17,24,39,.04);
+}
+.workbench-card{
+  flex:0 0 142px;
+  min-height:40px;
+  height:40px;
+  padding:0 14px;
+  border-radius:10px;
+  background:#fff;
+  border:1px solid #e3e8ef;
+  box-shadow:none;
+  justify-content:flex-start;
+}
+.workbench-card.primary-card{
+  background:#4f46e5;
+  border-color:#4f46e5;
+  color:#fff;
+  box-shadow:0 10px 24px rgba(79,70,229,.18);
+}
+.workbench-card b{font-size:14px}
+.workbench-card span,.workbench-card i{display:none}
+.premarket{
+  grid-template-columns:280px minmax(0,1fr) 340px;
+  gap:10px;
+  transform:none;
+  align-self:stretch;
+}
+.pm-card{
+  min-height:0;
+  border-radius:14px;
+  border:1px solid #e6ebf2;
+  background:#fff;
+  box-shadow:none;
+  padding:12px 14px;
+}
+.pm-title{color:#667085;font-size:12px}
+.pm-score{font-size:30px;line-height:1;color:#111827}
+.pm-signal{padding:4px 10px;background:#fff1f2;color:#ef4444}
+.pm-list{grid-template-columns:repeat(6,minmax(110px,1fr));gap:8px}
+.pm-item{background:#f8fafc;border:1px solid #e6ebf2;border-radius:10px;padding:8px 10px}
+.pm-reasons{color:#667085;line-height:1.6}
+.live{
+  margin-top:0;
+  padding:0;
+  background:#fff;
+  border:1px solid #e6ebf2;
+  border-radius:16px;
+  box-shadow:0 16px 44px rgba(17,24,39,.05);
+}
+.monitor-table{
+  display:grid;
+  gap:12px;
+  min-width:0;
+  padding:12px;
+}
+.monitor-row{
+  display:grid;
+  grid-template-columns:220px minmax(680px,1fr) 280px 130px;
+  grid-template-areas:
+    "stock chart signal ops"
+    "price chart agents ops";
+  gap:14px;
+  min-height:300px;
+  padding:16px;
+  border:1px solid #edf1f6;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:none;
+  align-items:stretch;
+}
+.monitor-row:hover{background:#fbfcfe}
+.monitor-row.strong-signal{border-color:#93c5fd;box-shadow:inset 4px 0 0 #3b82f6}
+.mon-stock{grid-area:stock;justify-content:flex-end;padding-bottom:10px}
+.mon-price{grid-area:price;justify-content:flex-start;padding-top:4px}
+.mon-chart{grid-area:chart;min-width:0}
+.mon-kv{grid-area:signal;text-align:left;justify-content:center;background:#f8fafc;border:1px solid #e6ebf2;border-radius:12px;padding:14px}
+.mon-agents{grid-area:agents}
+.mon-signal{grid-area:ops;justify-content:center}
+.mon-stock .live-name{font-size:20px;color:#111827}
+.mon-stock .live-code{display:block;margin:4px 0 0 18px;color:#7b8494}
+.live-price{font-size:42px;line-height:1;font-weight:950}
+.mon-price .kv{font-size:13px;color:#7b8494}
+.live-chart{
+  width:100%;
+  height:252px;
+  border-radius:14px;
+  background:linear-gradient(180deg,#ffffff,#fffaf2);
+  border:1px solid #e6ebf2;
+  box-shadow:none;
+}
+.chart-note{margin-top:7px;color:#667085;font-size:11px}
+.signal-pill{
+  width:100%;
+  justify-content:center;
+  min-height:42px;
+  border-radius:12px;
+  background:#eef2ff;
+  color:#312e81;
+  font-size:16px;
+}
+.signal-pill.hot{background:#dbeafe;color:#1d4ed8}
+.live-signal{font-size:13px;line-height:1.65;color:#475467}
+.money-line{
+  max-height:116px;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  border-radius:12px;
+  color:#9a3412;
+  line-height:1.6;
+}
+.mon-signal button{width:100%;height:40px;border-radius:10px}
+.mon-signal button.ai{background:#111827;border-color:#111827;color:#fff}
+.stock-manager{
+  height:44px;
+  min-height:44px;
+  padding:6px 10px;
+  border-radius:12px;
+  background:#fff;
+  border:1px solid #e6ebf2;
+  box-shadow:none;
+}
+.tag{border-radius:9px;background:#eef2f7;border:1px solid #dde5ef;color:#334155}
+.tag.active{background:#334155;border-color:#334155;color:#fff}
+.settings-panel{
+  position:fixed;
+  right:18px;
+  top:18px;
+  bottom:18px;
+  z-index:80;
+  width:min(460px,calc(100vw - 36px));
+  max-height:none;
+  overflow:auto;
+  padding:0;
+  background:#fff;
+  border:1px solid #e6ebf2;
+  border-radius:16px;
+  box-shadow:0 24px 70px rgba(17,24,39,.18);
+}
+.settings-panel[hidden]{display:none!important}
+.settings-head{height:62px;padding:0 18px;margin:0;border-bottom:1px solid #eef2f6;background:#fff}
+.settings-head span{font-size:18px;color:#111827}
+.settings-head button{height:34px;border-radius:10px;background:#f8fafc;color:#334155;border:1px solid #e6ebf2}
+.settings-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px 14px;border-bottom:1px solid #eef2f6;background:#fbfcfe}
+.settings-tab{height:34px;border-radius:10px;background:#fff;color:#475467;border:1px solid #e6ebf2;box-shadow:none}
+.settings-tab.active{background:#111827;color:#fff;border-color:#111827}
+.settings-panel .settings-group{display:none;padding:18px;border-top:0;margin:0}
+.settings-panel[data-section="account"] #settingsSectionAccount,
+.settings-panel[data-section="api"] #settingsSectionApi,
+.settings-panel[data-section="strategy"] #settingsSectionStrategy{display:block}
+.settings-panel .settings-title{font-size:16px;color:#111827;margin:0 0 14px}
+.settings-panel .settings-actions{grid-template-columns:1fr 1fr;gap:10px}
+.settings-panel .settings-actions button{height:38px;border-radius:10px;background:#111827;color:#fff;border:1px solid #111827}
+.settings-panel .settings-actions button:nth-child(2n){background:#fff;color:#111827;border-color:#e6ebf2}
+.settings-panel .ai-config-grid{gap:12px}
+.settings-panel .ai-config-grid label{color:#667085}
+.settings-panel .ai-config-grid input,
+.settings-panel .ai-config-grid select,
+.settings-panel .ai-config-grid textarea{border-color:#e6ebf2;background:#fbfcfe;color:#111827}
+.settings-panel .settings-note{padding:0 18px 18px;color:#667085}
+@media(max-width:1180px){
+  .panel{height:auto;min-height:100vh;grid-template-rows:auto}
+  .workbench-links{height:auto;flex-wrap:wrap}
+  .premarket{grid-template-columns:1fr}
+  .monitor-table{min-width:1180px}
+  .monitor-row{grid-template-columns:190px 620px 250px 110px;min-height:286px}
+  .live-chart{height:236px}
+}
+
 </style>
 </head>
 <body>
@@ -4439,7 +4645,12 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
     <button class="workbench-card" onclick="location.href='/research'"><span><b>选股研究</b><span>AI评审、龙虎榜、RPS筛选</span></span><i>研</i></button>
   </section>
   <div id="settingsPanel" class="settings-panel" hidden>
-    <div class="settings-head"><span>系统设置</span><button onclick="toggleSettings(false)">关闭</button></div>
+    <div class="settings-head"><span id="settingsPanelTitle">系统设置</span><button onclick="toggleSettings(false)">关闭</button></div>
+    <div class="settings-tabs">
+      <button class="settings-tab" id="settingsTabAccount" onclick="openSettingsSection('account')">系统</button>
+      <button class="settings-tab" id="settingsTabApi" onclick="openSettingsSection('api')">AI</button>
+      <button class="settings-tab" id="settingsTabStrategy" onclick="openSettingsSection('strategy')">策略</button>
+    </div>
       <div class="settings-group" id="settingsSectionAccount" style="border-top:0;margin-top:0;padding-top:0">
       <div class="settings-title">账号与商业</div>
       <div class="settings-actions">
@@ -4533,21 +4744,24 @@ function toggleSettings(force){
   const show = typeof force === 'boolean' ? force : el.hasAttribute('hidden');
   if (show) el.removeAttribute('hidden');
   else el.setAttribute('hidden', '');
-  if (show) {
-    const first = $('settingsSectionAccount');
-    if(first) first.scrollIntoView({behavior:'smooth', block:'start'});
-  }
+  if (show && !el.dataset.section) setSettingsSection('account');
 }
 function openSettingsSection(section){
-  const key = String(section || 'account').toLowerCase();
   toggleSettings(true);
-  const map = {
-    account: 'settingsSectionAccount',
-    api: 'settingsSectionApi',
-    strategy: 'settingsSectionStrategy'
-  };
-  const target = $(map[key] || 'settingsSectionApi');
-  if (target) target.scrollIntoView({behavior:'smooth',block:'start'});
+  setSettingsSection(section);
+}
+function setSettingsSection(section){
+  const panel = $('settingsPanel');
+  if(!panel) return;
+  const key = ['account','api','strategy'].includes(String(section||'').toLowerCase()) ? String(section).toLowerCase() : 'account';
+  const titles = {account:'系统设置',api:'AI 管理',strategy:'策略配置'};
+  panel.dataset.section = key;
+  if($('settingsPanelTitle')) $('settingsPanelTitle').textContent = titles[key];
+  [['account','settingsTabAccount'],['api','settingsTabApi'],['strategy','settingsTabStrategy']].forEach(([name,id])=>{
+    const tab=$(id);
+    if(tab) tab.classList.toggle('active', name===key);
+  });
+  panel.scrollTop = 0;
 }
 function toggleLogPanel(force){
   const panel = $('logPanel');
