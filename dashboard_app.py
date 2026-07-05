@@ -3884,19 +3884,13 @@ body{background:#f5f7fb}.feature-panel,.band,.footer{background:#f5f7fb}.feature
   <div class="hero-topbar">
     <div class="hero-nav-inner">
       <a class="hero-brand" href="/"><img src="/assets/app-icon.svg" alt="&#20570;T&#31070;&#22120;"><span>&#20570;T&#31070;&#22120;</span></a>
-      <nav class="hero-nav" aria-label="&#39318;&#39029;&#23548;&#33322;"><a class="active" href="/">&#39318;&#39029;</a><a href="#features">&#21151;&#33021;</a><a href="/commercial">&#31574;&#30053;</a><a href="#pricing">&#20215;&#26684;</a><a href="/account">&#24110;&#21161;</a><a href="#about">&#20851;&#20110;&#25105;&#20204;</a></nav>
       <a id="authPill" class="nav-auth" href="/login">&#30331;&#24405; / &#27880;&#20876;</a>
     </div>
   </div>
   <a class="hotspot hs-home" href="/">首页</a>
-  <a class="hotspot hs-features" href="#features">功能</a>
-  <a class="hotspot hs-strategy" href="/commercial">策略</a>
-  <a class="hotspot hs-price" href="#pricing">价格</a>
-  <a class="hotspot hs-help" href="/account">帮助</a>
-  <a class="hotspot hs-about" href="#about">关于我们</a>
   <a id="heroLoginLink" class="hotspot hs-login" href="/login">登录 / 注册</a>
   <a class="hotspot hs-cta" href="/app">立即体验</a>
-  <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a id="mobileLoginLink" class="btn" href="/login">登录 / 注册</a><a class="btn" href="#features">功能</a><a class="btn" href="#pricing">价格</a></div>
+  <div class="mobile-actions"><a class="btn primary" href="/app">立即体验</a><a id="mobileLoginLink" class="btn" href="/login">登录 / 注册</a></div>
 </section>
 <section id="features" class="feature-panel">
   <div class="feature-head">
