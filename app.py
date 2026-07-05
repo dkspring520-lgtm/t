@@ -2,7 +2,7 @@
 A股做T监控系统 - Flask后端
 包含实时监控、买卖信号、持仓管理、模拟测试功能
 """
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect, url_for
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import threading
@@ -52,6 +52,50 @@ def index():
         'show_simulation_tab': True
     }
     return render_template('index.html', ui_features=ui_features)
+
+
+def _redirect_to_home(reason: str = ''):
+    """
+    非公开页面统一回首页，避免误点到未开放后台/入口页面。
+    """
+    if reason:
+        return redirect(f"/?from={reason}")
+    return redirect(url_for('index'))
+
+
+@app.route('/admin')
+def admin_blocked():
+    return _redirect_to_home('admin')
+
+
+@app.route('/about')
+def about_us_blocked():
+    return _redirect_to_home('about')
+
+
+@app.route('/register')
+def register_blocked():
+    return _redirect_to_home('register')
+
+
+@app.route('/login')
+def login_blocked():
+    return _redirect_to_home('login')
+
+
+@app.route('/landing')
+def landing_redirect():
+    return _redirect_to_home()
+
+
+@app.route('/commercial')
+def commercial_redirect():
+    return _redirect_to_home('commercial')
+
+
+@app.route('/account')
+def account_redirect():
+    return _redirect_to_home('account')
 
 # ========== 持仓管理API ==========
 @app.route('/api/positions', methods=['GET'])
