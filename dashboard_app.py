@@ -5826,7 +5826,23 @@ html,body{overflow:hidden;background:#eef3f9}
 
 /* Desktop density pass: make 100% browser feel close to the old 67% zoom. */
 @media(min-width:1181px){
+  .shell{
+    width:149.253731vw;
+    height:149.253731vh;
+    min-height:0;
+    padding:0;
+    display:flex;
+    align-items:stretch;
+    justify-content:stretch;
+    transform:scale(.67);
+    transform-origin:top left;
+    overflow:hidden;
+  }
   .panel{
+    width:100%;
+    height:100%;
+    margin:0;
+    border-radius:0;
     grid-template-columns:220px minmax(0,1fr);
     grid-template-rows:48px 36px 104px minmax(0,1fr);
   }
@@ -6666,12 +6682,17 @@ td{
   font-size:12px;
 }
 @media(min-width:1181px){
-  .research-shell{height:100vh;overflow:hidden}
-  .research-shell>.shell{
-    width:calc(149.253731vw - 328.358209px);
+  .research-shell{
+    width:149.253731vw;
     height:149.253731vh;
+    overflow:hidden;
     transform:scale(.67);
     transform-origin:top left;
+  }
+  .research-shell>.shell{
+    width:100%;
+    height:100%;
+    transform:none;
   }
 }
 @media(max-width:1180px){body{overflow:auto}.research-shell{height:auto;grid-template-columns:1fr}.side-nav{display:none}.shell{height:auto}.top{display:block}.actions{margin-top:10px;justify-content:flex-start}.single-bar{height:auto;display:grid;grid-template-columns:1fr 160px auto}.single-bar b{grid-column:1/-1}.grid .panel:nth-child(2)>div[style]{max-height:none!important}}
@@ -6740,7 +6761,8 @@ LONGHUBANG_HTML = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;min-height:100vh;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#2b170f;background:radial-gradient(circle at 88% 0,#ffe2aa,transparent 34%),linear-gradient(135deg,#b4783b,#fff5e8 42%,#fffaf4)}button,a.btn{height:36px;border:1px solid #f0dfc7;border-radius:11px;background:#fff;color:#2b170f;text-decoration:none;padding:0 15px;font-weight:850;cursor:pointer;box-shadow:0 8px 18px rgba(151,79,18,.07);display:inline-flex;align-items:center}button.primary{background:linear-gradient(135deg,#ff3b24,#d71912);color:#fff;border-color:#e83324}.shell{width:min(1680px,calc(100vw - 28px));min-height:calc(100vh - 36px);margin:18px auto;padding:18px;border-radius:22px;background:rgba(255,255,255,.94);box-shadow:0 24px 70px rgba(151,79,18,.16);display:grid;grid-template-rows:auto auto 1fr;gap:14px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.title{font-size:24px;font-weight:950}.sub,.muted{color:#8a6b52}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.status{min-height:24px;color:#6b5543;font-weight:750}.panel{background:#fff;border:1px solid #f0dfc7;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(151,79,18,.06)}.table-wrap{overflow:auto;max-height:calc(100vh - 160px)}table{width:100%;border-collapse:collapse;min-width:1320px}th,td{padding:12px 14px;border-bottom:1px solid #f3e7d8;text-align:left;vertical-align:top}th{position:sticky;top:0;background:#fff8ee;z-index:2;font-size:12px;color:#8a6b52}.rank{font-size:20px;font-weight:950;color:#d99a1b}.stock{font-weight:950}.code{display:block;color:#8a6b52;margin-top:2px}.tag{display:inline-flex;border-radius:999px;background:#fff1dc;padding:4px 8px;color:#6b5543;font-size:12px;font-weight:850;margin:0 4px 4px 0}.tag.hot{background:#fff0f1;color:#d71912}.tag.inst{background:#fff1dc;color:#a65b18}.money{font-weight:950}.up{color:#ec5f6b}.down{color:#35b978}.seat-list{display:grid;gap:7px}.seat{border:1px solid #f4e5cf;background:#fffaf4;border-radius:12px;padding:9px;min-width:330px}.seat b{display:block;margin-bottom:4px}.seat-meta{display:flex;gap:8px;flex-wrap:wrap;color:#6b5543;font-size:12px;font-weight:850}.reason{max-width:280px;line-height:1.7}.empty{text-align:center;padding:42px;color:#8a6b52;font-weight:850}@media(max-width:900px){.top{display:block}.actions{justify-content:flex-start;margin-top:12px}.shell{width:min(100%,calc(100vw - 14px));padding:12px}.table-wrap{max-height:none}th,td{padding:10px 8px;font-size:12px}}
 
 /* Unified cockpit shell for extension pages. */
-body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden;grid-template-rows:auto auto minmax(0,1fr)}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}.panel{min-height:0;display:flex;flex-direction:column}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap{flex:1 1 auto;height:100%;min-height:0;max-height:none!important}.matrix-wrap{max-height:calc(100vh - 170px)!important}
+body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.suite-bottom{margin-top:auto;display:grid;gap:10px;border-top:1px solid #edf0f5;padding-top:16px}.suite-bottom button{height:34px}.suite-user{display:flex;gap:10px;align-items:center;margin-top:12px;cursor:pointer}.suite-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444);color:#fff;display:grid;place-items:center;font-weight:950}.suite-user b{display:block;font-size:13px}.suite-user span{display:block;color:#8b95a5;font-size:11px}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden;grid-template-rows:auto auto minmax(0,1fr)}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}.panel{min-height:0;display:flex;flex-direction:column}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap{flex:1 1 auto;height:100%;min-height:0;max-height:none!important}.matrix-wrap{max-height:calc(100vh - 170px)!important}
+@media(min-width:1181px){.suite-side{left:24px;top:24px;bottom:auto;height:calc(149.253731vh - 48px);transform:scale(.67);transform-origin:top left}.shell{width:calc(149.253731vw - 276px);height:calc(149.253731vh - 32px);min-height:0;margin:16px 16px 16px 276px;transform:scale(.67);transform-origin:top left}}
 @media(max-width:1180px){body{overflow:auto}.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}}</style>
 </head>
 <body>
@@ -6751,6 +6773,13 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
   <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
   <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
   <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
+  <div class="suite-bottom">
+    <button onclick="location.href='/app?section=account'">系统设置</button>
+    <button onclick="location.href='/app?section=api'">API 管理</button>
+    <button onclick="location.href='/app?section=strategy'">策略配置</button>
+    <button onclick="location.href='/app?openLog=1'">日志中心</button>
+    <div class="suite-user" onclick="location.href='/account'"><span class="suite-avatar">T</span><div><b>交易员小T</b><span>点击进入个人中心</span></div></div>
+  </div>
 </aside>
 <main class="shell">
   <div class="top">
@@ -6799,6 +6828,13 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
   <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
   <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
   <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
+  <div class="suite-bottom">
+    <button onclick="location.href='/app?section=account'">系统设置</button>
+    <button onclick="location.href='/app?section=api'">API 管理</button>
+    <button onclick="location.href='/app?section=strategy'">策略配置</button>
+    <button onclick="location.href='/app?openLog=1'">日志中心</button>
+    <div class="suite-user" onclick="location.href='/account'"><span class="suite-avatar">T</span><div><b>交易员小T</b><span>点击进入个人中心</span></div></div>
+  </div>
 </aside>
 <main class="shell">
 <style>
@@ -6807,6 +6843,7 @@ body{font-size:12px}
 .suite-side{left:0;top:0;bottom:0;width:220px;border-radius:0;border:0;border-right:1px solid #e7ebf2;box-shadow:none;padding:18px 16px;align-items:stretch}
 .suite-brand{justify-content:flex-start;margin-bottom:14px}.suite-brand img{width:34px;height:34px;border-radius:10px}.suite-brand div{display:block}
 .suite-side button{width:100%;height:44px;padding:0 14px;display:flex;align-items:center;justify-content:flex-start;border-radius:10px;font-size:14px;text-align:left}.suite-side button small{width:22px;height:22px;margin:0 9px 0 0}
+.suite-bottom{margin-top:auto;display:grid;gap:10px;border-top:1px solid #edf0f5;padding-top:16px}.suite-bottom button{height:34px}.suite-user{display:flex;gap:10px;align-items:center;margin-top:12px;cursor:pointer}.suite-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#f97316,#ef4444);color:#fff;display:grid;place-items:center;font-weight:950}.suite-user b{display:block;font-size:13px}.suite-user span{display:block;color:#8b95a5;font-size:11px}
 .shell{
   height:100vh;min-height:0;margin:0 0 0 220px;padding:10px 14px 12px;border-radius:0;
   display:grid;grid-template-columns:minmax(0,1fr);
@@ -6826,10 +6863,8 @@ body{font-size:12px}
 .candidates-panel>div[style]{max-height:none!important;height:auto!important;overflow:auto!important}
 table{min-width:960px}th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:12px;line-height:1.42}.stock{font-size:13px}.code{display:block;margin:1px 0 0}.agents{line-height:1.42;max-height:54px;overflow:hidden}.tag{padding:3px 7px;font-size:11px}
 @media(min-width:1181px){
-  .suite-side{transform:none}
-  .shell{transform:none;transform-origin:top left}
-  .suite-side{width:220px;padding:18px 16px}.suite-side button{width:100%;height:44px}.suite-side button small{width:22px;height:22px;font-size:11px}.suite-brand img{width:34px;height:34px}
-  .shell{width:auto;height:100vh;margin-left:220px;padding:12px 16px 14px;grid-template-columns:minmax(0,1fr);grid-template-rows:50px 74px minmax(0,1fr);gap:10px}
+  .suite-side{width:220px;height:149.253731vh;transform:scale(.67);transform-origin:top left;padding:18px 16px}.suite-side button{width:100%;height:44px}.suite-side button small{width:22px;height:22px;font-size:11px}.suite-brand img{width:34px;height:34px}
+  .shell{width:calc(149.253731vw - 220px);height:149.253731vh;margin-left:220px;transform:scale(.67);transform-origin:top left;padding:12px 16px 14px;grid-template-columns:minmax(0,1fr);grid-template-rows:50px 74px minmax(0,1fr);gap:10px}
   .top{align-items:center}
   .title{font-size:24px}.actions .btn,.actions button,button,a.btn{height:34px;padding:0 13px;font-size:13px}.card{padding:10px 14px;display:flex;flex-direction:column;justify-content:center}.card span{font-size:12px;line-height:1.1;margin-bottom:5px}.card b{font-size:22px;line-height:1.05}.head{height:38px;padding:0 14px;font-size:15px}.body{padding:10px 12px}
   .shell>.grid{grid-template-rows:200px minmax(0,1fr);gap:9px}

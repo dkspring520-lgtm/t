@@ -9,6 +9,8 @@ node_modules/
 # Logs and local runtime state
 *.log
 *.pid
+server.out
+server.err
 *.out.txt
 *.bak
 *.bak*
