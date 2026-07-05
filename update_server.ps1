@@ -1,6 +1,12 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
+$oldPid = (Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)
+if ($oldPid) {
+  Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+}
+
 $proxy = $env:GIT_PROXY
 if (-not $proxy -and (Test-Path "C:\Users\Administrator\Desktop\1.env")) {
   $envText = Get-Content "C:\Users\Administrator\Desktop\1.env" -ErrorAction SilentlyContinue
