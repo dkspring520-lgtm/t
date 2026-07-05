@@ -5197,6 +5197,196 @@ body{
   .mini-watchlist{display:none}
 }
 
+/* TradingView-style workstation: chart first, decision rail second. */
+html,body{overflow:hidden;background:#eef3f9}
+.panel{
+  width:min(1900px,calc(100vw - 12px));
+  height:calc(100vh - 12px);
+  grid-template-columns:238px minmax(0,1fr);
+  grid-template-rows:62px 48px 96px minmax(0,1fr);
+  grid-template-areas:
+    "nav top"
+    "nav tools"
+    "nav premarket"
+    "nav live";
+  gap:0;
+  margin:6px auto;
+  border-radius:12px;
+  background:#f7f9fc;
+}
+.side-nav{padding:22px 18px;gap:24px}
+.side-brand b{font-size:18px}
+.side-menu button{height:42px;border-radius:10px}
+.side-bottom button{height:34px}
+.top{min-height:62px;height:62px;padding:0 20px 0 28px}
+.title-row{gap:14px}
+.title{font-size:22px}
+.active-stock-pill{height:34px;min-width:172px;border-radius:9px}
+.top-actions button{height:36px}
+.top-actions #status{height:32px}
+.actions-strip{padding:8px 20px 8px 28px}
+.stock-manager{
+  height:36px;
+  min-height:36px;
+  grid-template-columns:92px minmax(0,1fr) 250px 82px;
+  gap:10px;
+}
+.actions-strip .watch-tags{display:flex}
+.watch-tags .tag:not(.active){display:none}
+.stock-manager-title{font-size:14px}
+#stockCodeInput{height:34px}
+.stock-manager>button{height:34px}
+.premarket{
+  padding:8px 20px 8px 28px;
+  grid-template-columns:240px minmax(0,1fr) 300px;
+  gap:12px;
+}
+.pm-card{padding:9px 12px;border-radius:12px;box-shadow:none}
+.pm-score{font-size:30px}
+.pm-list{grid-template-columns:repeat(6,minmax(96px,1fr));gap:8px}
+.pm-item{padding:6px 9px}
+.pm-reasons{max-height:72px}
+.live{
+  padding:0 20px 18px 28px;
+  min-height:0;
+  overflow:hidden;
+}
+.monitor-dashboard{
+  position:relative;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 292px;
+  grid-template-rows:minmax(0,1fr) 44px;
+  grid-template-areas:
+    "chart rail"
+    "tabs tabs";
+  gap:12px;
+  height:100%;
+}
+.focus-card{
+  grid-area:chart;
+  display:grid;
+  grid-template-rows:68px minmax(0,1fr) 58px;
+  min-width:0;
+  min-height:0;
+  overflow:hidden;
+  border-radius:14px;
+  box-shadow:0 16px 42px rgba(15,23,42,.055);
+}
+.focus-card.strong-signal{border-color:#bfdbfe;box-shadow:inset 4px 0 0 #3b82f6,0 16px 42px rgba(59,130,246,.10)}
+.focus-head{
+  min-height:0;
+  grid-template-columns:minmax(230px,.9fr) 158px minmax(390px,1.55fr);
+  gap:16px;
+  padding:9px 18px;
+}
+.focus-name{font-size:20px}
+.focus-code{font-size:15px}
+.focus-price-main{font-size:34px}
+.focus-change{margin-top:4px}
+.focus-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.focus-metric span{font-size:11px}
+.focus-metric b{font-size:13px}
+.focus-card>*{min-width:0}
+.focus-chart{padding:10px 16px 6px;min-width:0;width:100%;min-height:0;overflow:hidden;box-sizing:border-box}
+.focus-chart .live-chart{
+  width:100%;
+  max-width:100%;
+  height:100%;
+  min-height:0;
+  display:block;
+  border-radius:12px;
+  background:#fff;
+}
+.focus-chart .chart-note{
+  height:22px;
+  padding:4px 2px 0;
+  font-size:11px;
+}
+.focus-agents{
+  margin:0 18px 14px;
+  padding:8px 12px;
+  max-height:50px;
+  border-radius:10px;
+  font-size:12px;
+}
+.focus-rail{
+  grid-area:rail;
+  display:grid;
+  min-height:0;
+  grid-template-rows:auto 190px minmax(0,1fr);
+  gap:12px;
+}
+.focus-rail-card{
+  border-radius:14px;
+  padding:14px 16px;
+  box-shadow:0 12px 30px rgba(15,23,42,.045);
+  overflow:hidden;
+}
+.focus-rail-card h3{font-size:15px;margin-bottom:12px}
+.advice-box{padding:12px;border-radius:11px}
+.advice-icon{width:38px;height:38px;border-radius:10px}
+.advice-box span{font-size:12px;line-height:1.45}
+.gauge{height:134px}
+.gauge svg{width:158px;height:104px}
+.gauge-score{top:70px}
+.indicator-list{gap:8px}
+.indicator-row{grid-template-columns:1fr 58px 46px;font-size:12px}
+.mini-watchlist{
+  grid-area:tabs;
+  position:static;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:0;
+  padding:0;
+  opacity:1;
+  overflow:hidden;
+  pointer-events:auto;
+}
+.mini-chip{
+  height:32px;
+  border-radius:10px;
+  background:#fff;
+  border-color:#e2e8f0;
+  color:#334155;
+  box-shadow:0 8px 18px rgba(15,23,42,.035);
+}
+.mini-chip:hover{border-color:#bfdbfe;color:#1d4ed8}
+.signal-toasts{top:86px;right:26px}
+.settings-panel{right:18px;top:18px;bottom:18px}
+@media(max-width:1180px){
+  .premarket{grid-template-columns:250px minmax(0,1fr)}
+  .premarket .pm-card:last-child{display:none}
+  .monitor-dashboard{grid-template-columns:minmax(0,1fr) 270px}
+  .focus-head{grid-template-columns:1fr 140px;grid-template-areas:"name price" "metrics metrics"}
+  .focus-head>div:first-child{grid-area:name}
+  .focus-head>div:nth-child(2){grid-area:price}
+  .focus-metrics{grid-area:metrics}
+}
+@media(max-width:980px){
+  html,body{overflow:auto}
+  .panel{
+    width:100%;
+    height:auto;
+    min-height:100vh;
+    grid-template-columns:1fr;
+    grid-template-rows:auto auto auto auto;
+    grid-template-areas:"top" "tools" "premarket" "live";
+    border-radius:0;
+  }
+  .side-nav{display:none}
+  .top{height:auto;min-height:62px;padding:12px}
+  .actions-strip{padding:10px 12px}
+  .stock-manager{grid-template-columns:1fr; height:auto}
+  .premarket{padding:12px;grid-template-columns:1fr}
+  .live{padding:0 12px 12px;overflow:visible}
+  .monitor-dashboard{grid-template-columns:1fr;grid-template-areas:"chart" "tabs";height:auto}
+  .focus-rail{display:none}
+  .focus-card{grid-template-rows:auto 360px auto}
+  .focus-head{grid-template-columns:1fr}
+  .focus-metrics{grid-template-columns:repeat(2,1fr)}
+}
+
 </style>
 </head>
 <body>
@@ -5463,7 +5653,7 @@ function renderRealtime(rows){
     </section>
     <aside class="focus-rail">
       <div class="focus-rail-card">
-        <h3>买作建议</h3>
+        <h3>买卖建议</h3>
         <div class="advice-box"><div class="advice-icon">↯</div><div><b>${escapeHtml(signal)}</b><span>${escapeHtml(focus.reason||'当前没有高质量买卖点，等待黄线、量能和价格带同步确认。')}</span></div></div>
       </div>
       <div class="focus-rail-card">
