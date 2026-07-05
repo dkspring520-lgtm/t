@@ -5733,6 +5733,93 @@ html,body{overflow:hidden;background:#eef3f9}
   .skeleton-head{grid-template-columns:1fr 110px}
 }
 
+/* Final monitor chart pass: make the intraday graph the primary workspace. */
+.panel{
+  grid-template-rows:56px 42px 82px minmax(0,1fr);
+}
+.live{
+  padding:0 16px 12px 18px;
+  background:transparent;
+  border:0;
+  box-shadow:none;
+}
+.monitor-dashboard{
+  grid-template-columns:minmax(760px,1fr) 276px;
+  grid-template-rows:minmax(0,1fr) 34px;
+  gap:12px;
+}
+.focus-card{
+  grid-template-rows:minmax(0,1fr) auto;
+  border:1px solid #e5ebf3;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 16px 42px rgba(15,23,42,.055);
+}
+.focus-card.strong-signal{box-shadow:0 16px 42px rgba(15,23,42,.055)}
+.focus-head{display:none}
+.focus-chart{
+  padding:14px 18px 8px 16px;
+  height:100%;
+}
+.focus-chart .live-chart{
+  width:100%;
+  height:100%;
+  min-height:420px;
+  border-radius:0;
+  background:#fff;
+  box-shadow:none;
+}
+.focus-chart .chart-note{display:none}
+.focus-agents{
+  margin:0 16px 12px;
+  min-height:38px;
+  max-height:54px;
+  padding:8px 12px;
+  border:1px solid #fed7aa;
+  border-radius:10px;
+  background:#fffaf2;
+  color:#9a3412;
+  line-height:1.5;
+  overflow:hidden;
+}
+.focus-agents b{display:inline;margin-right:10px;font-size:13px}
+.focus-rail{
+  grid-template-rows:128px 174px minmax(0,1fr);
+  gap:12px;
+}
+.focus-rail-card{
+  border:1px solid #e5ebf3;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 12px 30px rgba(15,23,42,.045);
+}
+.advice-box{
+  background:#f3edff;
+  color:#334155;
+}
+.advice-icon{background:#7c3aed}
+.mini-watchlist{
+  height:34px;
+  align-items:center;
+  overflow:auto hidden;
+}
+.mini-chip{
+  cursor:pointer;
+  user-select:none;
+}
+@media(max-width:1180px){
+  .monitor-dashboard{grid-template-columns:minmax(0,1fr) 250px}
+  .focus-chart .live-chart{min-height:380px}
+}
+@media(max-width:980px){
+  .live{padding:0 10px 12px}
+  .monitor-dashboard{grid-template-columns:1fr;grid-template-areas:"chart" "tabs"}
+  .focus-card{grid-template-rows:auto}
+  .focus-chart{height:420px;padding:10px 8px}
+  .focus-chart .live-chart{height:100%;min-height:0}
+  .focus-agents{margin:0 12px 12px;max-height:76px}
+}
+
 </style>
 </head>
 <body>
@@ -6048,7 +6135,7 @@ function liveSpark(row){const series=(row.prices||[]).filter(x=>Number(x.price)>
 function liveSparkBig(row){
   const series=(row.prices||[]).filter(x=>Number(x.price)>0);
   if(series.length<2){
-    return '<svg class="live-chart" viewBox="0 0 920 360"><rect x="0" y="0" width="920" height="360" fill="transparent"/><text x="460" y="185" text-anchor="middle" fill="#94a3af" font-size="18" font-weight="900">等待分时数据</text></svg>';
+    return '<svg class="live-chart" viewBox="0 0 1180 430"><rect x="0" y="0" width="1180" height="430" fill="transparent"/><text x="590" y="220" text-anchor="middle" fill="#94a3af" font-size="20" font-weight="900">等待分时数据</text></svg>';
   }
   const step=Math.max(1,Math.floor(series.length/170));
   const points=series.filter((_,i)=>i%step===0);
@@ -6056,7 +6143,7 @@ function liveSparkBig(row){
   const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);
   const pad=rawSpan*.22;
   const min=rawMin-pad,max=rawMax+pad,span=Math.max(max-min,.01);
-  const W=920,H=360,L=54,R=132,T=26,CH=232,VTop=280,VH=56;
+  const W=1180,H=430,L=62,R=134,T=86,CH=210,VTop=334,VH=70;
   const xOf=i=>L+(i/(points.length-1))*(W-L-R);
   const yOf=v=>T+((max-Number(v))/span)*CH;
   const xy=points.map((p,i)=>({x:xOf(i),y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));
@@ -6068,9 +6155,9 @@ function liveSparkBig(row){
   const priceText=v=>Number(v||0).toFixed(2);
   const level=(v,label,color,fill='transparent')=>{
     const y=yOf(v),tx=W-R+12,ty=Math.max(T+13,Math.min(T+CH-6,y+5));
-    return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.4" stroke-dasharray="6 6" opacity=".72"/><rect x="${tx}" y="${(ty-14).toFixed(1)}" width="92" height="24" rx="7" fill="${fill}" stroke="${color}" opacity=".96"/><text x="${tx+10}" y="${(ty+3).toFixed(1)}" fill="${color}" font-size="12" font-weight="950">${label} ${priceText(v)}</text>`;
+    return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.6" stroke-dasharray="7 7" opacity=".72"/><rect x="${tx}" y="${(ty-17).toFixed(1)}" width="112" height="30" rx="9" fill="${fill}" stroke="${color}" opacity=".96"/><text x="${tx+12}" y="${(ty+4).toFixed(1)}" fill="${color}" font-size="16" font-weight="950">${label} ${priceText(v)}</text>`;
   };
-  const yTicks=[max,rawMax,(rawMin+rawMax)/2,rawMin,min].map(v=>`<text x="12" y="${(yOf(v)+4).toFixed(1)}" fill="#64748b" font-size="12" font-weight="800">${priceText(v)}</text><line x1="${L}" y1="${yOf(v).toFixed(1)}" x2="${W-R}" y2="${yOf(v).toFixed(1)}" stroke="#eef2f7"/>`).join('');
+  const yTicks=[max,rawMax,(rawMin+rawMax)/2,rawMin,min].map(v=>`<text x="14" y="${(yOf(v)+4).toFixed(1)}" fill="#64748b" font-size="14" font-weight="800">${priceText(v)}</text><line x1="${L}" y1="${yOf(v).toFixed(1)}" x2="${W-R}" y2="${yOf(v).toFixed(1)}" stroke="#eef2f7"/>`).join('');
   const avgLine=avg>0?`<polyline points="${xy.map(p=>`${p.x.toFixed(1)},${yOf(avg).toFixed(1)}`).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="2" opacity=".88"/><text x="${L+8}" y="${Math.max(T+14,yOf(avg)-8).toFixed(1)}" fill="#b77900" font-size="12" font-weight="950">黄线 ${priceText(avg)}</text>`:'';
   const prevLine=prev>0?`<line x1="${L}" y1="${yOf(prev).toFixed(1)}" x2="${W-R}" y2="${yOf(prev).toFixed(1)}" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 6"/><text x="${L-6}" y="${(yOf(prev)+4).toFixed(1)}" text-anchor="end" fill="#475569" font-size="12" font-weight="900">昨收</text>`:'';
   const vols=xy.map((p,i)=>p.vol||Math.abs((p.price-(xy[i-1]?.price||p.price)))*1200+.1);
@@ -6087,11 +6174,18 @@ function liveSparkBig(row){
   const sig=String(row.signal||'');
   const last=xy[xy.length-1];
   const liveBadge=/低吸|买入/.test(sig)?badge(last.time,'买入信号','#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,'卖出信号','#ef4444',true):'');
-  const times=`<text x="${L}" y="264" fill="#475569" font-size="12">09:30</text><text x="${L+(W-L-R)*.33}" y="264" fill="#475569" font-size="12">10:30</text><text x="${L+(W-L-R)*.55}" y="264" fill="#475569" font-size="12">11:30/13:00</text><text x="${W-R-26}" y="264" fill="#475569" font-size="12">15:00</text>`;
-  const volumeText=`<text x="${L+8}" y="${VTop+14}" fill="#334155" font-size="13" font-weight="950">成交量</text>`;
+  const times=`<text x="${L}" y="${T+CH+28}" fill="#475569" font-size="14">09:30</text><text x="${L+(W-L-R)*.33}" y="${T+CH+28}" fill="#475569" font-size="14">10:30</text><text x="${L+(W-L-R)*.55}" y="${T+CH+28}" fill="#475569" font-size="14">11:30/13:00</text><text x="${W-R-30}" y="${T+CH+28}" fill="#475569" font-size="14">15:00</text>`;
+  const dateText=new Date().toLocaleDateString('zh-CN').replaceAll('/','-');
+  const statusText=String(row.marketStatus||'已收盘');
+  const changeText=`${change>=0?'+':''}${Number(row.changeAmount||row.diff||0).toFixed(2)}`;
+  const pctText=`${change>=0?'+':''}${change.toFixed(2)}%`;
+  const headerMetric=(i,k,v,color='#101828')=>`<g transform="translate(${W-520+i*104},18)"><text x="0" y="0" fill="#64748b" font-size="13" font-weight="850">${k}</text><text x="0" y="34" fill="${color}" font-size="20" font-weight="950">${v}</text>${i<4?`<line x1="82" y1="-8" x2="82" y2="44" stroke="#e5e7eb"/>`:''}</g>`;
+  const header=`<text x="16" y="38" fill="#101828" font-size="28" font-weight="950">分时走势</text><rect x="134" y="14" width="108" height="30" rx="15" fill="#f8fafc" stroke="#dbe3ef"/><text x="158" y="35" fill="#475569" font-size="15" font-weight="850">${dateText}</text><rect x="254" y="14" width="78" height="30" rx="15" fill="#ecfdf5" stroke="#bbf7d0"/><text x="276" y="35" fill="#059669" font-size="15" font-weight="950">${escapeHtml(statusText)}</text><rect x="${W-550}" y="0" width="532" height="60" rx="14" fill="#fff" stroke="#e5e7eb" filter="drop-shadow(0 6px 10px rgba(15,23,42,.08))"/>${headerMetric(0,'最新价',priceText(row.price),lineColor)}${headerMetric(1,'涨跌额',changeText,lineColor)}${headerMetric(2,'涨跌幅',pctText,lineColor)}${headerMetric(3,'成交量',formatVolume(row.volume||row.vol))}${headerMetric(4,'成交额',formatAmount(row.amount))}`;
+  const volumeText=`<text x="${L}" y="${VTop+18}" fill="#334155" font-size="14" font-weight="950">成交量（手）</text>`;
   return `<svg class="live-chart" viewBox="0 0 ${W} ${H}">
     <defs><linearGradient id="lineFade${row.code||''}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${lineColor}" stop-opacity=".16"/><stop offset="1" stop-color="${lineColor}" stop-opacity="0"/></linearGradient></defs>
     <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
+    ${header}
     ${yTicks}
     <path d="M ${pts.replaceAll(' ', ' L ')} L ${W-R} ${T+CH} L ${L} ${T+CH} Z" fill="url(#lineFade${row.code||''})"/>
     ${prevLine}${level(s2,'压力位','#ef4444','#fff5f5')}${level(s1,'卖点位','#ef4444','#fff5f5')}${avgLine}${level(b1,'支撑位','#10b981','#f0fdf4')}${level(b2,'买点位','#10b981','#f0fdf4')}
