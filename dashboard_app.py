@@ -6737,7 +6737,6 @@ LONGHUBANG_HTML = r"""<!doctype html>
 
 /* Unified cockpit shell for extension pages. */
 body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed;left:16px;top:16px;bottom:16px;width:220px;z-index:20;display:flex;flex-direction:column;gap:10px;padding:20px 16px;background:rgba(255,255,255,.92);border:1px solid #e7ebf2;border-radius:18px;box-shadow:0 18px 50px rgba(17,24,39,.06)}.suite-brand{display:flex;gap:12px;align-items:center;margin-bottom:18px}.suite-brand img{width:34px;height:34px;border-radius:10px;object-fit:cover}.suite-brand b{display:block;font-size:18px}.suite-brand span{display:block;color:#7b8494;font-size:12px}.suite-side button{height:44px;border:0;border-radius:10px;background:transparent;color:#5c6677;text-align:left;padding:0 14px;box-shadow:none}.suite-side button small{display:inline-grid;place-items:center;width:22px;height:22px;margin-right:9px;border:1px solid currentColor;border-radius:6px;font-size:11px}.suite-side button:hover{background:#f8fafc;box-shadow:none}.shell{width:auto;min-height:calc(100vh - 32px);height:calc(100vh - 32px);margin:16px 16px 16px 252px;padding:18px;border:0;border-radius:18px;background:#f7f8fb;box-shadow:none;overflow:hidden}.top{align-items:center}.title{font-size:26px;color:#111827}.sub,.muted{color:#64748b}.actions{gap:10px}.actions .btn,.actions button,button,a.btn{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}.actions .primary,button.primary,.primary{background:#ef4444!important;color:#fff!important;border-color:#ef4444!important}.panel,.card{background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}th{background:#fbfcfe!important;color:#7b8494!important;border-bottom:1px solid #e7ebf2!important}td{border-bottom:1px solid #eef2f6!important}.tag{border-radius:8px;background:#f1f5f9;color:#334155}.table-wrap,.matrix-wrap{max-height:calc(100vh - 170px)!important}
-@media(min-width:1181px){.shell{width:calc(149.253731vw - 376.119403px);height:149.253731vh;transform:scale(.67);transform-origin:top left}}
 @media(max-width:1180px){body{overflow:auto}.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0}.top{display:block}.actions{justify-content:flex-start;margin-top:10px}}</style>
 </head>
 <body>
@@ -6824,11 +6823,12 @@ body{font-size:12px}
 table{min-width:960px}th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:12px;line-height:1.42}.stock{font-size:13px}.code{display:block;margin:1px 0 0}.agents{line-height:1.42;max-height:54px;overflow:hidden}.tag{padding:3px 7px;font-size:11px}
 @media(min-width:1181px){
   .suite-side{transform:none}
-  .shell{transform:scale(.67);transform-origin:top left}
+  .shell{transform:none;transform-origin:top left}
   .suite-side{width:220px;padding:18px 16px}.suite-side button{width:100%;height:44px}.suite-side button small{width:22px;height:22px;font-size:11px}.suite-brand img{width:34px;height:34px}
-  .shell{width:calc(149.253731vw - 328.358209px);height:149.253731vh;margin-left:220px;padding:12px 16px 14px;grid-template-columns:minmax(0,1fr);grid-template-rows:42px 50px minmax(0,1fr);gap:9px}
-  .title{font-size:24px}.actions .btn,.actions button,button,a.btn{height:34px;padding:0 13px;font-size:13px}.card{padding:9px 13px}.card span{font-size:12px}.card b{font-size:21px}.head{height:38px;padding:0 14px;font-size:15px}.body{padding:10px 12px}
-  .shell>.grid{grid-template-rows:210px minmax(0,1fr);gap:9px}
+  .shell{width:auto;height:100vh;margin-left:220px;padding:12px 16px 14px;grid-template-columns:minmax(0,1fr);grid-template-rows:50px 74px minmax(0,1fr);gap:10px}
+  .top{align-items:center}
+  .title{font-size:24px}.actions .btn,.actions button,button,a.btn{height:34px;padding:0 13px;font-size:13px}.card{padding:10px 14px;display:flex;flex-direction:column;justify-content:center}.card span{font-size:12px;line-height:1.1;margin-bottom:5px}.card b{font-size:22px;line-height:1.05}.head{height:38px;padding:0 14px;font-size:15px}.body{padding:10px 12px}
+  .shell>.grid{grid-template-rows:200px minmax(0,1fr);gap:9px}
   .themes-panel,.paths-panel{grid-template-rows:38px minmax(0,1fr)}
   .note{max-height:54px;font-size:12px}
   .theme .muted,.path-meta{font-size:12px}.rps{font-size:18px}.path b,.stock{font-size:14px}.stage,.tag,th,td{font-size:12px}.agents{max-height:58px}.sector-cell{min-width:86px}
