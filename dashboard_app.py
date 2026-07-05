@@ -5563,10 +5563,11 @@ html,body{overflow:hidden;background:#eef3f9}
 }
 .focus-agents{
   margin:0 18px 12px;
-  padding:8px 11px;
-  min-height:38px;
-  max-height:54px;
+  padding:9px 12px;
+  min-height:92px;
+  max-height:112px;
   font-size:12px;
+  line-height:1.42;
   overflow:hidden;
   border-color:#fde7c4;
   background:#fffaf2;
@@ -5607,6 +5608,14 @@ html,body{overflow:hidden;background:#eef3f9}
 .mini-chip{
   height:30px;
   border-radius:9px;
+  cursor:pointer;
+  transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease;
+}
+.mini-chip:hover{
+  border-color:#bfdbfe;
+  color:#1d4ed8;
+  box-shadow:0 8px 18px rgba(37,99,235,.10);
+  transform:translateY(-1px);
 }
 @media(max-width:1180px){
   .panel{grid-template-columns:64px minmax(0,1fr)}
