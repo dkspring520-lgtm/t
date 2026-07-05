@@ -4714,13 +4714,46 @@ body{background:#f3f6fb;color:#111827}
   background:#2563eb;
   border-color:#2563eb;
 }
+
+/* Make the intraday chart the primary object in each monitor card. */
+.monitor-row{
+  grid-template-columns:170px minmax(860px,1fr) 220px 104px;
+  grid-template-areas:
+    "stock chart signal ops"
+    "price chart agents ops";
+  min-height:430px;
+  gap:16px;
+}
+.mon-stock{justify-content:flex-end;padding-bottom:18px}
+.mon-price{justify-content:flex-start;padding-top:10px}
+.live-price{font-size:36px}
+.mon-chart{display:flex;flex-direction:column;justify-content:center}
+.live-chart{
+  height:354px;
+  border-radius:16px;
+}
+.chart-note{
+  justify-content:center;
+  gap:14px;
+  font-size:12px;
+}
+.mon-kv{
+  align-self:center;
+  min-height:150px;
+}
+.mon-agents{
+  justify-content:flex-start;
+}
+.money-line{
+  max-height:156px;
+}
 @media(max-width:1180px){
   .panel{height:auto;min-height:100vh;grid-template-rows:auto}
   .workbench-links{height:auto;flex-wrap:wrap}
   .premarket{grid-template-columns:1fr}
-  .monitor-table{min-width:1180px}
-  .monitor-row{grid-template-columns:190px 620px 250px 110px;min-height:286px}
-  .live-chart{height:236px}
+  .monitor-table{min-width:1320px}
+  .monitor-row{grid-template-columns:160px 760px 220px 96px;min-height:390px}
+  .live-chart{height:320px}
 }
 
 </style>
@@ -5047,7 +5080,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 .top{height:60px;padding:0;background:transparent;border:0;box-shadow:none}.title{font-size:26px;color:#111827}.top .sub{display:block;color:#64748b;font-size:14px}.top button{height:42px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;color:#111827;box-shadow:none}.top button:first-child{margin-right:8px}
 .controls{min-height:84px;padding:14px 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);display:flex;gap:12px;align-items:center;flex-wrap:nowrap;overflow:auto}.field span{display:block;position:static;margin-bottom:4px;font-size:12px;color:#7b8494}.field input,.field.wide input{height:40px;width:118px;border:1px solid #e2e8f0;border-radius:10px;background:#fbfcfe;padding:0 12px;color:#111827;font-weight:800}.field.wide input{width:170px}button{height:40px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#111827;box-shadow:none}button.primary{background:#111827;border-color:#111827;color:#fff}
 .bar{height:3px;background:#22c55e;border-radius:99px}.bar:not(.on){opacity:.2}.progress{display:none!important}
-.metrics{grid-template-columns:repeat(6,minmax(140px,1fr));gap:14px}.metric{min-height:112px;display:flex;flex-direction:column;justify-content:center;padding:18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04)}.metric .k{font-size:13px;color:#7b8494}.metric .v{font-size:24px;color:#111827}.metric:nth-child(5) .v{color:#10b981}
+.metrics{grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px}.metric{min-height:68px;display:flex;flex-direction:column;justify-content:center;padding:10px 14px;background:#fff;border:1px solid #e7ebf2;border-radius:12px;box-shadow:0 8px 22px rgba(17,24,39,.035)}.metric .k{font-size:12px;color:#7b8494}.metric .v{font-size:18px;color:#111827;line-height:1.15}.metric:nth-child(5) .v{color:#10b981}
 .layout{grid-template-rows:minmax(0,1fr) 190px;gap:18px}.panel{border:1px solid #e7ebf2;border-radius:14px;background:#fff;box-shadow:0 12px 34px rgba(17,24,39,.04)}.head{height:54px;padding:0 22px;border-bottom:1px solid #eef2f6;color:#111827}.badge{background:#f1f5f9;color:#475569;border-radius:999px}
 .sim-table{min-width:1080px}.sim-head,.sim-row{grid-template-columns:180px 110px minmax(320px,1fr) 110px 130px minmax(280px,.8fr);gap:18px}.sim-head{height:48px;padding:0 22px;background:#fbfcfe;border-bottom:1px solid #e7ebf2;color:#7b8494}.sim-row{min-height:96px;padding:14px 22px;border-bottom:1px solid #eef2f6}.stock{font-size:15px}.code{display:block;margin:2px 0 0;color:#64748b}.chart{height:70px}.status{display:inline-flex;padding:6px 10px;border-radius:8px;background:#fff1f2;color:#e11d48}.pos{color:#10b981!important}.neg{color:#ef4444!important}.reason{color:#64748b;font-size:13px}
 .side{grid-template-columns:1fr 1.1fr;max-height:none;min-height:0}.content{padding:16px 22px;color:#334155;line-height:1.65}.run-item{padding:8px 0;border-bottom:1px solid #eef2f6}
