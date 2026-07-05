@@ -3862,7 +3862,7 @@ body{background:#f5f7fb}.feature-panel,.band,.footer{background:#f5f7fb}.feature
   <img src="/assets/home-hero.png" alt="做T神器 A股智能交易助手">
   <div class="hero-topbar">
     <div class="hero-nav-inner">
-      <a class="hero-brand" href="/"><img src="/assets/logo.png" alt="&#20570;T&#31070;&#22120;"><span>&#20570;T&#31070;&#22120;</span></a>
+      <a class="hero-brand" href="/"><img src="/assets/app-icon.svg" alt="&#20570;T&#31070;&#22120;"><span>&#20570;T&#31070;&#22120;</span></a>
       <nav class="hero-nav" aria-label="&#39318;&#39029;&#23548;&#33322;"><a class="active" href="/">&#39318;&#39029;</a><a href="#features">&#21151;&#33021;</a><a href="/commercial">&#31574;&#30053;</a><a href="#pricing">&#20215;&#26684;</a><a href="/account">&#24110;&#21161;</a><a href="#about">&#20851;&#20110;&#25105;&#20204;</a></nav>
       <a id="authPill" class="nav-auth" href="/login">&#30331;&#24405; / &#27880;&#20876;</a>
     </div>
@@ -4383,8 +4383,15 @@ button:hover,a.btn:hover{border-color:#cbd5e1;box-shadow:0 8px 18px rgba(15,23,4
 .settings-actions button{background:#111827;color:#fff;border-color:#111827}
 .settings-actions button:nth-child(2n){background:#fff;color:#111827;border-color:#e2e8f0}
 .actions button.primary{background:#ef4444;color:#fff;border-color:#ef4444}
-.hero-image>img{height:calc(100vh + 118px);min-height:878px;transform:translateY(-118px);margin-bottom:-118px}
-@media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}}
+.hero-topbar{height:68px;background:rgba(255,250,243,.90);box-shadow:0 10px 30px rgba(151,79,18,.06)}
+.hero-nav-inner{width:min(1320px,calc(100vw - 40px))}
+.hero-brand{gap:10px;font-size:20px}
+.hero-brand img{width:42px;height:42px;object-fit:contain;border-radius:12px;background:#fff;box-shadow:0 8px 18px rgba(151,79,18,.10)}
+.hero-nav a.active:after{bottom:-10px}
+.nav-auth{height:36px;min-width:112px;padding:0 16px}
+.hero-image>img{height:100vh;min-height:760px;transform:none;margin-bottom:0;object-position:center top}
+@media(max-width:1280px){.hero-topbar{height:64px}.hero-brand img{width:38px;height:38px}}
+@media(max-width:900px){.hero-image>img{height:auto;min-height:0;transform:none;margin-bottom:0}.hero-topbar{height:60px}.hero-brand img{width:36px;height:36px}}
 
 /* Final cockpit harmonization: bigger signals, clearer actions, valid side operations. */
 :root{
