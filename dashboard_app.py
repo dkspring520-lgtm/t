@@ -5429,12 +5429,17 @@ html,body{overflow:hidden;background:#eef3f9}
 }
 .side-bottom button{
   width:48px;
-  height:36px;
+  height:38px;
   padding:0;
   display:grid;
   place-items:center;
+  border-radius:13px;
+  background:#f8fafc;
+  border:1px solid #e6edf5;
+  color:#334155;
   font-size:0;
 }
+.side-bottom button:hover{background:#eef4ff;border-color:#d7e3f4}
 .side-bottom button:nth-child(1)::before{content:"设";font-size:13px;font-weight:950}
 .side-bottom button:nth-child(2)::before{content:"AI";font-size:12px;font-weight:950}
 .side-bottom button:nth-child(3)::before{content:"策";font-size:13px;font-weight:950}
@@ -5458,13 +5463,24 @@ html,body{overflow:hidden;background:#eef3f9}
   min-width:156px;
   padding:0 12px;
 }
-.top-actions{gap:10px}
+.top-actions{gap:8px;min-width:0}
 .top-actions:before{width:26px;height:26px;font-size:13px}
 .top-actions button{
   height:34px;
   padding:0 13px;
+  flex:0 0 auto;
 }
-.top-actions #status{height:30px}
+.top-actions #status{
+  height:30px;
+  max-width:160px;
+  min-width:46px;
+  padding:0 8px;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  text-align:right;
+  font-size:12px;
+}
 .actions-strip{
   padding:5px 16px 5px 18px;
 }
@@ -5479,7 +5495,7 @@ html,body{overflow:hidden;background:#eef3f9}
 .stock-manager>button{height:32px}
 .premarket{
   padding:8px 16px 8px 18px;
-  grid-template-columns:230px minmax(0,1fr) 270px;
+  grid-template-columns:230px minmax(0,1fr) 240px;
   gap:10px;
 }
 .pm-card{
@@ -5510,6 +5526,7 @@ html,body{overflow:hidden;background:#eef3f9}
 .pm-item span{font-size:12px}
 .pm-reasons{
   max-height:72px;
+  overflow:hidden;
   line-height:1.5;
 }
 .live{
@@ -5521,7 +5538,7 @@ html,body{overflow:hidden;background:#eef3f9}
   gap:10px;
 }
 .focus-card{
-  grid-template-rows:62px minmax(0,1fr) 42px;
+  grid-template-rows:62px minmax(0,1fr) auto;
   border-radius:13px;
 }
 .focus-head{
@@ -5537,7 +5554,7 @@ html,body{overflow:hidden;background:#eef3f9}
 .focus-metrics{gap:8px}
 .focus-metric span{font-size:11px}
 .focus-metric b{font-size:12px}
-.focus-chart{padding:8px 16px 4px}
+.focus-chart{padding:8px 34px 4px 16px}
 .focus-chart .live-chart{border-radius:10px}
 .focus-chart .chart-note{
   height:18px;
@@ -5545,10 +5562,14 @@ html,body{overflow:hidden;background:#eef3f9}
   font-size:10px;
 }
 .focus-agents{
-  margin:0 18px 10px;
-  padding:7px 10px;
-  max-height:36px;
+  margin:0 18px 12px;
+  padding:8px 11px;
+  min-height:38px;
+  max-height:54px;
   font-size:12px;
+  overflow:hidden;
+  border-color:#fde7c4;
+  background:#fffaf2;
 }
 .focus-agents b{display:inline;margin-right:10px}
 .focus-rail{
@@ -5669,7 +5690,7 @@ html,body{overflow:hidden;background:#eef3f9}
     padding:12px;
   }
   .focus-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .focus-chart{height:360px;padding:8px}
+  .focus-chart{height:360px;padding:8px 18px 8px 8px}
   .focus-chart .live-chart{height:100%;min-height:0}
   .focus-agents{margin:0 12px 12px;max-height:88px}
   .mini-watchlist{display:none}
@@ -6062,7 +6083,14 @@ function append(t){
 }
 function setStatus(text){
   const el=$('status');
-  if(el) el.textContent=String(text||'就绪');
+  if(!el) return;
+  let value=String(text||'就绪');
+  value=value.replace(/^已添加：.+$/,'已添加');
+  value=value.replace(/^已保存监控股票：.+$/,'已保存');
+  value=value.replace(/^已在监控中：.+$/,'已在监控中');
+  value=value.replace(/^请输入股票代码，例如 601899。$/,'请输入代码');
+  el.textContent=value.length>18?value.slice(0,18)+'...':value;
+  el.title=String(text||'就绪');
 }
 function clearAll(){
   const o=$('out');
