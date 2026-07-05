@@ -4604,6 +4604,64 @@ body{background:#f3f6fb;color:#111827}
 .settings-panel .ai-config-grid select,
 .settings-panel .ai-config-grid textarea{border-color:#e6ebf2;background:#fbfcfe;color:#111827}
 .settings-panel .settings-note{padding:0 18px 18px;color:#667085}
+.settings-panel[data-section="api"]{
+  width:min(390px,calc(100vw - 36px));
+}
+.settings-panel[data-section="api"] .settings-head{
+  height:56px;
+}
+.settings-panel[data-section="api"] .settings-tabs{
+  padding:10px 12px;
+}
+.settings-panel[data-section="api"] .settings-group{
+  padding:14px;
+}
+.settings-panel[data-section="api"] .settings-title{
+  font-size:15px;
+  margin-bottom:10px;
+}
+.settings-panel[data-section="api"] .ai-config-grid{
+  grid-template-columns:1fr;
+  gap:9px;
+}
+.settings-panel[data-section="api"] .ai-config-grid label{
+  display:block;
+  padding:9px 10px;
+  border:1px solid #e6ebf2;
+  border-radius:12px;
+  background:#fbfcfe;
+  font-size:11px;
+  color:#667085;
+}
+.settings-panel[data-section="api"] .ai-config-grid input,
+.settings-panel[data-section="api"] .ai-config-grid select{
+  height:32px;
+  margin-top:5px;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  font-size:13px;
+  color:#111827;
+}
+.settings-panel[data-section="api"] .settings-actions{
+  grid-template-columns:1fr 1fr 1fr;
+  gap:8px;
+  padding-top:2px;
+}
+.settings-panel[data-section="api"] .settings-actions button{
+  height:34px;
+  padding:0 8px;
+  font-size:12px;
+}
+.settings-panel[data-section="api"] .settings-note{
+  margin:0 14px 14px;
+  padding:10px 12px;
+  border-radius:12px;
+  background:#f8fafc;
+  border:1px solid #e6ebf2;
+  font-size:11px;
+}
 @media(max-width:1180px){
   .panel{height:auto;min-height:100vh;grid-template-rows:auto}
   .workbench-links{height:auto;flex-wrap:wrap}
@@ -4652,12 +4710,10 @@ body{background:#f3f6fb;color:#111827}
       <button class="settings-tab" id="settingsTabStrategy" onclick="openSettingsSection('strategy')">策略</button>
     </div>
       <div class="settings-group" id="settingsSectionAccount" style="border-top:0;margin-top:0;padding-top:0">
-      <div class="settings-title">账号与商业</div>
+      <div class="settings-title">账号设置</div>
       <div class="settings-actions">
         <button onclick="location.href='/account'">账号中心</button>
-        <button onclick="location.href='/recharge'">激活码充值</button>
         <button onclick="location.href='/commercial'">功能中心</button>
-        <button onclick="location.href='/landing'">商业首页</button>
       </div>
     </div>
       <div class="settings-group" id="settingsSectionApi">
