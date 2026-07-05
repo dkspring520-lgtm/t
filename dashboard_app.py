@@ -5719,6 +5719,8 @@ html,body{overflow:hidden;background:#eef3f9}
       <button class="active" onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
       <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
+      <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
+      <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
     </div>
     <div class="side-bottom">
       <button onclick="openSettingsSection('account')">系统设置</button>
@@ -6182,6 +6184,8 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button class="active" onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
       <button onclick="location.href='/research'"><small>◇</small>选股研究</button>
+      <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
+      <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
     </div>
     <div class="side-bottom">
       <button onclick="location.href='/app?section=account'">系统设置</button>
@@ -6324,6 +6328,116 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 .status{min-height:0;color:#64748b;font-size:13px;display:flex;align-items:center}.single-bar{height:58px;padding:0 18px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);gap:14px}.single-bar b{font-size:15px}.single-bar input{width:220px;height:38px;border:1px solid #e2e8f0;border-radius:10px;background:#fbfcfe}.single-bar select{width:190px;height:38px;border-color:#e2e8f0}.single-bar button{height:38px;background:#111827;color:#fff;border-color:#111827}
 .grid{display:grid;grid-template-columns:1fr;gap:14px;min-height:0}.panel{border:1px solid #e7ebf2;border-radius:14px;background:#fff;box-shadow:0 12px 34px rgba(17,24,39,.04)}.grid>aside.panel{order:0}.grid>section.panel{order:1;min-height:0}.head{height:48px;padding:0 18px;border-bottom:1px solid #eef2f6;color:#111827}.body{padding:14px 18px;display:flex;gap:12px;overflow:auto}.cat{height:34px;border-radius:9px;background:#f8fafc;border:1px solid #e2e8f0;color:#111827;padding:0 14px}.cat.active{background:#ef4444;color:#fff;border-color:#ef4444}.badge{background:#dcfce7;color:#16a34a;border-radius:999px}
 .grid .panel:nth-child(2)>div[style]{max-height:calc(100vh - 286px)!important;overflow:auto}table{min-width:1320px}th{height:44px;background:#fbfcfe;color:#7b8494;border-bottom:1px solid #e7ebf2}td{padding:14px 16px;border-bottom:1px solid #eef2f6;color:#111827}.stock{font-size:15px}.code{display:block;margin:3px 0 0;color:#64748b}.tag{background:#f1f5f9;color:#334155;border-radius:8px}.score{color:#f59e0b}.up{color:#ef4444}.down{color:#10b981}.agents{max-height:82px;line-height:1.55;color:#334155}.detail{max-height:220px;background:#fff;border:1px solid #e7ebf2;border-radius:14px;box-shadow:0 12px 34px rgba(17,24,39,.04);color:#334155}
+
+/* Research density pass: readable at 100% browser zoom. */
+body{font-size:12px}
+.research-shell{
+  grid-template-columns:72px minmax(0,1fr);
+  gap:0;
+  padding:0;
+}
+.side-nav{
+  border-radius:0;
+  border:0;
+  border-right:1px solid #e7ebf2;
+  box-shadow:none;
+  padding:14px 8px;
+  align-items:center;
+}
+.side-brand{justify-content:center}
+.side-brand img{width:42px;height:42px;border-radius:13px}
+.side-brand div,.side-user div{display:none}
+.side-menu{width:100%;gap:8px}
+.side-menu button{
+  width:48px;
+  height:48px;
+  padding:0;
+  display:grid;
+  place-items:center;
+  font-size:0;
+  border-radius:14px;
+}
+.side-menu small{width:24px;height:24px;margin:0}
+.side-bottom{width:100%;gap:8px;padding-top:12px}
+.side-bottom button{
+  width:48px;
+  height:38px;
+  padding:0;
+  display:grid;
+  place-items:center;
+  border:1px solid #e6edf5;
+  border-radius:13px;
+  background:#f8fafc;
+  font-size:0;
+}
+.side-bottom button:nth-child(1)::before{content:"设";font-size:13px;font-weight:950}
+.side-bottom button:nth-child(2)::before{content:"AI";font-size:12px;font-weight:950}
+.side-bottom button:nth-child(3)::before{content:"策";font-size:13px;font-weight:950}
+.side-bottom button:nth-child(4)::before{content:"志";font-size:13px;font-weight:950}
+.side-avatar{width:34px;height:34px}
+.shell{
+  grid-template-rows:50px 26px 46px minmax(0,1fr) auto;
+  gap:8px;
+  padding:8px 12px 10px;
+}
+.top{align-items:center}
+.title{font-size:21px;line-height:1.15}
+.top .sub{display:none}
+.actions{gap:6px;justify-content:flex-end}
+.actions .btn,.actions button,button,a.btn{
+  height:32px;
+  padding:0 11px;
+  border-radius:9px;
+  font-size:12px;
+}
+.status{
+  min-height:0;
+  height:26px;
+  align-items:center;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+  font-size:12px;
+}
+.single-bar{
+  height:46px;
+  padding:0 12px;
+  gap:8px;
+  border-radius:12px;
+}
+.single-bar b{font-size:13px}
+.single-bar input{width:180px;height:32px}
+.single-bar select{width:140px;height:32px}
+.single-bar button{height:32px;padding:0 13px}
+.single-bar .muted{display:none}
+.grid{gap:8px}
+.panel{border-radius:12px;box-shadow:none}
+.head{height:34px;padding:0 12px}
+.body{padding:7px 10px;gap:6px}
+.cat{height:28px;padding:0 10px;border-radius:8px}
+.grid .panel:nth-child(2)>div[style]{max-height:calc(100vh - 210px)!important}
+table{min-width:1120px}
+th{
+  height:34px;
+  padding:0 10px;
+  font-size:11px;
+  white-space:nowrap;
+}
+td{
+  padding:8px 10px;
+  font-size:12px;
+  line-height:1.42;
+}
+.stock{font-size:13px}
+.code{margin-top:1px}
+.tag{padding:3px 7px;font-size:11px}
+.agents{max-height:50px;line-height:1.4;overflow:hidden}
+.detail{
+  max-height:150px;
+  padding:10px 12px;
+  overflow:auto;
+  font-size:12px;
+}
 @media(max-width:1180px){body{overflow:auto}.research-shell{height:auto;grid-template-columns:1fr}.side-nav{display:none}.shell{height:auto}.top{display:block}.actions{margin-top:10px;justify-content:flex-start}.single-bar{height:auto;display:grid;grid-template-columns:1fr 160px auto}.single-bar b{grid-column:1/-1}.grid .panel:nth-child(2)>div[style]{max-height:none!important}}
 </style>
 </head>
@@ -6335,6 +6449,8 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
       <button onclick="location.href='/app'"><small>⌁</small>做T监控</button>
       <button onclick="location.href='/simulation'"><small>▣</small>模拟测试</button>
       <button class="active" onclick="location.href='/research'"><small>◇</small>选股研究</button>
+      <button onclick="location.href='/rps'"><small>R</small>RPS主线</button>
+      <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
     </div>
     <div class="side-bottom">
       <button onclick="location.href='/app?section=account'">系统设置</button>
@@ -6345,7 +6461,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     </div>
   </aside>
 <main class="shell">
-  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/rps">RPS主线</a><a class="btn" href="/longhubang">龙虎榜</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
+  <div class="top"><div><div class="title">A股选股研究</div><div class="sub">多Agent评审 + AI选股，输出10只跨行业候选</div></div><div class="actions"><a class="btn" href="/app">返回监控</a><button class="primary" id="reviewBtn" onclick="loadData('review')">评审选股</button><button id="geminiBtn" onclick="loadData('gemini')">AI选股</button><button id="checkBtn" onclick="checkAi()">检测AI</button></div></div>
   <div class="status" id="status">准备加载本地选股...</div>
   <section class="single-bar">
     <b>单股研究</b>
@@ -6401,7 +6517,7 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
 <main class="shell">
   <div class="top">
     <div><div class="title">龙虎榜排名</div><div class="sub">股票上榜排名 + 营业部/游资席位 + 机构席位买卖明细</div></div>
-    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><a class="btn" href="/rps">RPS主线</a><button class="primary" id="refreshBtn" onclick="loadLhb()">刷新</button></div>
+    <div class="actions"><button class="primary" id="refreshBtn" onclick="loadLhb()">刷新</button></div>
   </div>
   <div class="status" id="status">正在加载龙虎榜...</div>
   <section class="panel">
@@ -6447,9 +6563,28 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}.suite-side{position:fixed
   <button onclick="location.href='/longhubang'"><small>榜</small>龙虎榜</button>
 </aside>
 <main class="shell">
+<style>
+/* RPS functional zoning: summary, flow, matrix, candidates are separated. */
+body{font-size:12px}
+.suite-side{left:0;top:0;bottom:0;width:72px;border-radius:0;border:0;border-right:1px solid #e7ebf2;box-shadow:none;padding:14px 8px;align-items:center}
+.suite-brand{justify-content:center;margin-bottom:14px}.suite-brand img{width:42px;height:42px;border-radius:13px}.suite-brand div{display:none}
+.suite-side button{width:48px;height:48px;padding:0;display:grid;place-items:center;border-radius:14px;font-size:0}.suite-side button small{width:24px;height:24px;margin:0}
+.shell{height:100vh;min-height:0;margin:0 0 0 72px;padding:10px 14px 12px;border-radius:0;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(430px,.95fr);grid-template-rows:50px 74px minmax(260px,.55fr) minmax(0,1fr);grid-template-areas:"top top" "cards cards" "flow matrix" "bottom bottom";gap:10px}
+.top{grid-area:top}.title{font-size:21px;line-height:1.15}.top .sub{display:none}.actions{gap:6px}.actions .btn,.actions button,button,a.btn{height:32px;padding:0 12px;border-radius:9px;font-size:12px}
+.cards{grid-area:cards;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.card{padding:10px 12px;border-radius:12px}.card span{font-size:11px}.card b{font-size:20px;line-height:1.1}
+.shell>section.panel:nth-of-type(1){grid-area:flow}.shell>section.panel:nth-of-type(2){grid-area:matrix}.shell>.grid{grid-area:bottom}
+.panel{border-radius:12px;box-shadow:none;min-height:0}.head{height:36px;padding:0 12px;font-size:13px}.body{padding:10px;min-height:0}
+.flow-grid{grid-template-columns:minmax(0,1fr) 300px;gap:10px}.flow-chart{height:210px}.note{padding:10px;border-radius:11px;line-height:1.55}.flow-row{grid-template-columns:84px 1fr 58px;gap:7px}
+.matrix-wrap{max-height:none!important}.matrix th,.matrix td{padding:5px 7px;font-size:11px}.sector-cell{min-width:78px}
+.grid{grid-template-columns:360px minmax(0,1fr);gap:10px}.grid>aside.panel,.grid>section.panel{min-height:0}.grid>aside.panel{display:grid;grid-template-rows:36px minmax(0,.62fr) 36px minmax(0,.38fr);overflow:hidden}.grid>aside.panel>.body:last-child{display:none}
+.theme{padding:7px 0;grid-template-columns:1fr 54px}.theme .muted{font-size:11px}.rps{font-size:17px}.path{padding:8px 0}.path-meta{line-height:1.45;font-size:11px}
+.grid>section.panel>div[style]{max-height:100%!important;height:calc(100% - 36px);overflow:auto!important}
+th{height:32px;font-size:11px;white-space:nowrap}td{padding:8px 10px;font-size:12px;line-height:1.42}.stock{font-size:13px}.code{display:block;margin:1px 0 0}.agents{line-height:1.42;max-height:60px;overflow:hidden}.tag{padding:3px 7px;font-size:11px}
+@media(max-width:1180px){.suite-side{display:none}.shell{height:auto;min-height:100vh;margin:0;padding:14px;border-radius:0;display:grid;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "cards" "flow" "matrix" "bottom"}.cards{grid-template-columns:repeat(2,1fr)}.grid,.flow-grid{grid-template-columns:1fr}.grid>aside.panel{display:block}.grid>aside.panel>.body:last-child{display:block}.shell>section.panel:nth-of-type(1),.shell>section.panel:nth-of-type(2),.shell>.grid{grid-area:auto}}
+</style>
   <div class="top">
     <div><div class="title">RPS主线雷达</div><div class="sub">大盘资金动向、板块热度、相对强度排名、龙虎榜观察位</div></div>
-    <div class="actions"><a class="btn" href="/app">返回监控</a><a class="btn" href="/research">选股研究</a><button class="primary" id="rpsRefreshBtn" onclick="loadRps()">刷新主线</button></div>
+    <div class="actions"><button class="primary" id="rpsRefreshBtn" onclick="loadRps()">刷新主线</button></div>
   </div>
   <div class="cards">
     <div class="card"><span>扫描样本</span><b id="sample">--</b></div>
