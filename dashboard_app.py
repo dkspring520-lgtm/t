@@ -1003,6 +1003,11 @@ def realtime_payload(email: str | None = None) -> dict:
                     "time": _format_time(quote.time_raw, minutes) if quote else "--:--",
                     "price": quote.price if quote else 0,
                     "change": quote.change_pct if quote else 0,
+                    "prevClose": quote.pre_close if quote else 0,
+                    "high": quote.high if quote else 0,
+                    "low": quote.low if quote else 0,
+                    "volume": quote.volume_lot if quote else 0,
+                    "amount": (quote.amount_wan * 10000.0) if quote else 0,
                     "avg": avg or 0,
                     "dev": dev,
                     "signal": display_signal,
@@ -1011,7 +1016,7 @@ def realtime_payload(email: str | None = None) -> dict:
                     "marketStatus": "交易中" if is_open else "休市中",
                     "quoteAgeSeconds": age_seconds,
                     "quoteStale": quote_stale,
-                    "prices": [{"time": m.time, "price": m.price} for m in minutes],
+                    "prices": [{"time": m.time, "price": m.price, "volume": m.volume_lot, "amount": m.amount_yuan} for m in minutes],
                     "buyTime": signal.time if signal and is_buy_signal else "",
                     "sellTime": signal.time if signal and is_sell_signal else "",
                     "smartMoney": smart_money_payload(quote, minutes, avg, dev),
@@ -5771,18 +5776,8 @@ html,body{overflow:hidden;background:#eef3f9}
 }
 .focus-chart .chart-note{display:none}
 .focus-agents{
-  margin:0 16px 12px;
-  min-height:38px;
-  max-height:54px;
-  padding:8px 12px;
-  border:1px solid #fed7aa;
-  border-radius:10px;
-  background:#fffaf2;
-  color:#9a3412;
-  line-height:1.5;
-  overflow:hidden;
+  display:none;
 }
-.focus-agents b{display:inline;margin-right:10px;font-size:13px}
 .focus-rail{
   grid-template-rows:128px 174px minmax(0,1fr);
   gap:12px;
@@ -5818,6 +5813,59 @@ html,body{overflow:hidden;background:#eef3f9}
   .focus-chart{height:420px;padding:10px 8px}
   .focus-chart .live-chart{height:100%;min-height:0}
   .focus-agents{margin:0 12px 12px;max-height:76px}
+}
+
+/* Desktop density pass: make 100% browser feel close to the old 67% zoom. */
+@media(min-width:1181px){
+  .panel{
+    grid-template-columns:64px minmax(0,1fr);
+    grid-template-rows:48px 36px 104px minmax(0,1fr);
+  }
+  .side-nav{padding:10px 6px;gap:10px}
+  .side-brand img{width:36px;height:36px}
+  .side-menu button{width:42px;height:42px;border-radius:12px}
+  .side-menu small{width:20px;height:20px}
+  .side-bottom button{width:42px;height:32px}
+  .side-avatar{width:30px;height:30px}
+  .top{height:48px;min-height:48px;padding:0 14px}
+  .title{font-size:20px}
+  .active-stock-pill{height:28px;min-width:140px;font-size:12px}
+  .top-actions button{height:30px;padding:0 11px;font-size:12px}
+  .top-actions #status{height:28px;max-width:180px}
+  .actions-strip{padding:4px 14px}
+  .stock-manager{height:30px;min-height:30px;grid-template-columns:78px minmax(0,1fr) 230px 70px}
+  .stock-manager-title{font-size:12px}
+  .watch-tags .tag,.mini-chip{height:28px;font-size:12px}
+  #stockCodeInput,.stock-manager>button{height:30px;font-size:12px}
+  .premarket{
+    padding:6px 14px;
+    grid-template-columns:210px minmax(520px,1fr) 360px;
+    gap:8px;
+  }
+  .pm-card{
+    min-height:88px;
+    padding:8px 10px;
+    border-radius:10px;
+    display:block!important;
+  }
+  .pm-title{font-size:11px}
+  .pm-score{font-size:22px;line-height:1}
+  .pm-signal{font-size:11px;padding:3px 7px}
+  .pm-list{grid-template-columns:repeat(6,minmax(78px,1fr));gap:6px}
+  .pm-item{padding:5px 7px;border-radius:8px}
+  .pm-item b,.pm-item span{font-size:11px}
+  .pm-reasons{max-height:72px;font-size:12px;line-height:1.45;overflow:auto}
+  .live{padding:0 12px 10px 14px}
+  .monitor-dashboard{grid-template-columns:minmax(760px,1fr) 244px;gap:10px}
+  .focus-rail{grid-template-rows:112px 150px minmax(0,1fr);gap:10px}
+  .focus-rail-card{padding:11px 12px}
+  .focus-rail-card h3{font-size:14px;margin-bottom:8px}
+  .focus-chart{padding:10px 12px 6px 12px}
+  .focus-chart .live-chart{min-height:360px}
+  .gauge{height:104px}
+  .gauge svg{width:132px;height:86px}
+  .gauge-score{top:56px;font-size:20px}
+  .indicator-row{font-size:11px}
 }
 
 </style>
@@ -6137,8 +6185,18 @@ function liveSparkBig(row){
   if(series.length<2){
     return '<svg class="live-chart" viewBox="0 0 1180 430"><rect x="0" y="0" width="1180" height="430" fill="transparent"/><text x="590" y="220" text-anchor="middle" fill="#94a3af" font-size="20" font-weight="900">等待分时数据</text></svg>';
   }
-  const step=Math.max(1,Math.floor(series.length/170));
-  const points=series.filter((_,i)=>i%step===0);
+  const indexed=series.map((p,i)=>Object.assign({_i:i},p));
+  const rawVols=indexed.map(p=>Number(p.volume||p.vol||0));
+  const rawAmounts=indexed.map(p=>Number(p.amount||0));
+  const volDeltas=rawVols.map((v,i)=>i&&v>=rawVols[i-1]?v-rawVols[i-1]:v);
+  const amountDeltas=rawAmounts.map((v,i)=>i&&v>=rawAmounts[i-1]?v-rawAmounts[i-1]:v);
+  const monotonicVol=rawVols.length>1&&rawVols.every((v,i)=>!i||v>=rawVols[i-1]);
+  const monotonicAmount=rawAmounts.length>1&&rawAmounts.every((v,i)=>!i||v>=rawAmounts[i-1]);
+  const totalVolume=Number(row.volume||row.vol||0)||Math.max(0,monotonicVol?rawVols[rawVols.length-1]:volDeltas.reduce((a,b)=>a+Math.max(0,b),0));
+  const lastPrice=Number(row.price||series[series.length-1]?.price||0);
+  const totalAmount=Number(row.amount||0)||Math.max(0,monotonicAmount?rawAmounts[rawAmounts.length-1]:amountDeltas.reduce((a,b)=>a+Math.max(0,b),0))||(totalVolume*lastPrice*100);
+  const step=Math.max(1,Math.floor(indexed.length/170));
+  const points=indexed.filter((_,i)=>i%step===0);
   const values=points.map(x=>Number(x.price));
   const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);
   const pad=rawSpan*.22;
@@ -6146,16 +6204,23 @@ function liveSparkBig(row){
   const W=1180,H=430,L=62,R=134,T=86,CH=210,VTop=334,VH=70;
   const xOf=i=>L+(i/(points.length-1))*(W-L-R);
   const yOf=v=>T+((max-Number(v))/span)*CH;
-  const xy=points.map((p,i)=>({x:xOf(i),y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));
+  const xy=points.map((p,i)=>({x:xOf(i),y:yOf(p.price),price:Number(p.price),time:p.time,vol:Math.max(0,volDeltas[p._i]||0),amount:Math.max(0,amountDeltas[p._i]||0)}));
   const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const change=Number(row.change||0),lineColor=change>=0?'#ef4444':'#10b981';
+  const change=Number(row.change||0),trendColor=change>=0?'#ef4444':'#10b981',lineColor='#4f8fd8';
   const prev=Number(row.prevClose||row.lastClose||row.close||0);
   const avg=Number(row.avg||0);
   const b2=rawMin+rawSpan*.08,b1=rawMin+rawSpan*.22,s1=rawMax-rawSpan*.22,s2=rawMax-rawSpan*.08;
   const priceText=v=>Number(v||0).toFixed(2);
-  const level=(v,label,color,fill='transparent')=>{
-    const y=yOf(v),tx=W-R+12,ty=Math.max(T+13,Math.min(T+CH-6,y+5));
-    return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.6" stroke-dasharray="7 7" opacity=".72"/><rect x="${tx}" y="${(ty-17).toFixed(1)}" width="112" height="30" rx="9" fill="${fill}" stroke="${color}" opacity=".96"/><text x="${tx+12}" y="${(ty+4).toFixed(1)}" fill="${color}" font-size="16" font-weight="950">${label} ${priceText(v)}</text>`;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const labelPair=(upperY,lowerY)=>{
+    const top=clamp(Math.min(upperY,lowerY),T+18,T+CH-58);
+    return [top,top+36];
+  };
+  const [s2LabelY,s1LabelY]=labelPair(yOf(s2),yOf(s1));
+  const [b1LabelY,b2LabelY]=labelPair(yOf(b1),yOf(b2));
+  const level=(v,label,color,fill='transparent',labelY)=>{
+    const y=yOf(v),tx=W-R+12,ty=clamp(labelY??(y+5),T+16,T+CH-12);
+    return `<line x1="${L}" y1="${y.toFixed(1)}" x2="${W-R}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.6" stroke-dasharray="7 7" opacity=".64"/><path d="M ${W-R} ${y.toFixed(1)} L ${tx-5} ${ty.toFixed(1)}" stroke="${color}" stroke-width="1" opacity=".45"/><rect x="${tx}" y="${(ty-17).toFixed(1)}" width="112" height="30" rx="9" fill="${fill}" stroke="${color}" opacity=".96"/><text x="${tx+12}" y="${(ty+4).toFixed(1)}" fill="${color}" font-size="16" font-weight="950">${label} ${priceText(v)}</text>`;
   };
   const yTicks=[max,rawMax,(rawMin+rawMax)/2,rawMin,min].map(v=>`<text x="14" y="${(yOf(v)+4).toFixed(1)}" fill="#64748b" font-size="14" font-weight="800">${priceText(v)}</text><line x1="${L}" y1="${yOf(v).toFixed(1)}" x2="${W-R}" y2="${yOf(v).toFixed(1)}" stroke="#eef2f7"/>`).join('');
   const avgLine=avg>0?`<polyline points="${xy.map(p=>`${p.x.toFixed(1)},${yOf(avg).toFixed(1)}`).join(' ')}" fill="none" stroke="#f59e0b" stroke-width="2" opacity=".88"/><text x="${L+8}" y="${Math.max(T+14,yOf(avg)-8).toFixed(1)}" fill="#b77900" font-size="12" font-weight="950">黄线 ${priceText(avg)}</text>`:'';
@@ -6180,7 +6245,7 @@ function liveSparkBig(row){
   const changeText=`${change>=0?'+':''}${Number(row.changeAmount||row.diff||0).toFixed(2)}`;
   const pctText=`${change>=0?'+':''}${change.toFixed(2)}%`;
   const headerMetric=(i,k,v,color='#101828')=>`<g transform="translate(${W-520+i*104},18)"><text x="0" y="0" fill="#64748b" font-size="13" font-weight="850">${k}</text><text x="0" y="34" fill="${color}" font-size="20" font-weight="950">${v}</text>${i<4?`<line x1="82" y1="-8" x2="82" y2="44" stroke="#e5e7eb"/>`:''}</g>`;
-  const header=`<text x="16" y="38" fill="#101828" font-size="28" font-weight="950">分时走势</text><rect x="134" y="14" width="108" height="30" rx="15" fill="#f8fafc" stroke="#dbe3ef"/><text x="158" y="35" fill="#475569" font-size="15" font-weight="850">${dateText}</text><rect x="254" y="14" width="78" height="30" rx="15" fill="#ecfdf5" stroke="#bbf7d0"/><text x="276" y="35" fill="#059669" font-size="15" font-weight="950">${escapeHtml(statusText)}</text><rect x="${W-550}" y="0" width="532" height="60" rx="14" fill="#fff" stroke="#e5e7eb" filter="drop-shadow(0 6px 10px rgba(15,23,42,.08))"/>${headerMetric(0,'最新价',priceText(row.price),lineColor)}${headerMetric(1,'涨跌额',changeText,lineColor)}${headerMetric(2,'涨跌幅',pctText,lineColor)}${headerMetric(3,'成交量',formatVolume(row.volume||row.vol))}${headerMetric(4,'成交额',formatAmount(row.amount))}`;
+  const header=`<text x="16" y="38" fill="#101828" font-size="28" font-weight="950">分时走势</text><rect x="134" y="14" width="108" height="30" rx="15" fill="#f8fafc" stroke="#dbe3ef"/><text x="158" y="35" fill="#475569" font-size="15" font-weight="850">${dateText}</text><rect x="254" y="14" width="78" height="30" rx="15" fill="#ecfdf5" stroke="#bbf7d0"/><text x="276" y="35" fill="#059669" font-size="15" font-weight="950">${escapeHtml(statusText)}</text><rect x="${W-550}" y="0" width="532" height="60" rx="14" fill="#fff" stroke="#e5e7eb" filter="drop-shadow(0 6px 10px rgba(15,23,42,.08))"/>${headerMetric(0,'最新价',priceText(row.price),trendColor)}${headerMetric(1,'涨跌额',changeText,trendColor)}${headerMetric(2,'涨跌幅',pctText,trendColor)}${headerMetric(3,'成交量',formatVolume(totalVolume))}${headerMetric(4,'成交额',formatAmount(totalAmount))}`;
   const volumeText=`<text x="${L}" y="${VTop+18}" fill="#334155" font-size="14" font-weight="950">成交量（手）</text>`;
   return `<svg class="live-chart" viewBox="0 0 ${W} ${H}">
     <defs><linearGradient id="lineFade${row.code||''}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${lineColor}" stop-opacity=".16"/><stop offset="1" stop-color="${lineColor}" stop-opacity="0"/></linearGradient></defs>
@@ -6188,8 +6253,8 @@ function liveSparkBig(row){
     ${header}
     ${yTicks}
     <path d="M ${pts.replaceAll(' ', ' L ')} L ${W-R} ${T+CH} L ${L} ${T+CH} Z" fill="url(#lineFade${row.code||''})"/>
-    ${prevLine}${level(s2,'压力位','#ef4444','#fff5f5')}${level(s1,'卖点位','#ef4444','#fff5f5')}${avgLine}${level(b1,'支撑位','#10b981','#f0fdf4')}${level(b2,'买点位','#10b981','#f0fdf4')}
-    <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${prevLine}${level(s2,'压力位','#ef4444','#fff5f5',s2LabelY)}${level(s1,'卖点位','#ef4444','#fff5f5',s1LabelY)}${avgLine}${level(b1,'支撑位','#10b981','#f0fdf4',b1LabelY)}${level(b2,'买点位','#10b981','#f0fdf4',b2LabelY)}
+    <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".82"/>
     ${badge(row.buyTime,'买入信号','#10b981',false)}${badge(row.sellTime,'卖出信号','#ef4444',true)}${liveBadge}
     ${times}<line x1="${L}" y1="${VTop+VH}" x2="${W-R}" y2="${VTop+VH}" stroke="#e5e7eb"/>${volumeText}${bars}
   </svg><div class="chart-note"><span>红线=价格走势</span><span>黄线=分时均价</span><span>绿色=支撑/买点</span><span>红色=压力/卖点</span><span>底部=量能</span></div>`;
@@ -6288,6 +6353,21 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
 .layout{grid-template-rows:minmax(0,1fr) 156px;gap:10px}
 .sim-row{min-height:76px}
 .side{max-height:none;min-height:0}
+.run-actions{display:inline-flex;height:34px;border:1px solid #dbe3ef;border-radius:11px;overflow:hidden;background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.04);flex:0 0 auto}
+.run-actions button{height:34px;border:0;border-radius:0;padding:0 16px;background:#fff;color:#111827;font-weight:950;box-shadow:none}
+.run-actions button+button{border-left:1px solid #e7ebf2}
+.run-actions button.primary{background:#111827;color:#fff;border:0}
+.run-actions button:hover{background:#f8fafc}
+.run-actions button.primary:hover{background:#020617}
+@media(min-width:1181px){
+  body{overflow:hidden}
+  .sim-shell{
+    width:149.253731vw;
+    height:149.253731vh;
+    transform:scale(.67);
+    transform-origin:top left;
+  }
+}
 @media(max-width:1180px){
   .page{grid-template-rows:auto auto 3px auto minmax(0,1fr)}
   .metrics{height:auto;grid-template-columns:repeat(2,1fr)}
@@ -6326,8 +6406,10 @@ body{background:#f5f7fb;color:#111827;overflow:hidden}
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
-    <button class="primary" onclick="runSim('simulate')">测试</button>
-    <button onclick="runSim('simulate',{random:true})">随机测试</button>
+    <div class="run-actions" aria-label="模拟测试操作">
+      <button class="primary" onclick="runSim('simulate')">开始测试</button>
+      <button onclick="runSim('simulate',{random:true})">随机抽测</button>
+    </div>
     <button onclick="loadHistory()">刷新历史</button>
     <button onclick="clearView()">清空</button>
     <div id="status" class="sub">就绪</div>
