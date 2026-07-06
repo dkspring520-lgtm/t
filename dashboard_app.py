@@ -6297,7 +6297,14 @@ function liveSparkBig(row){
   const buyLabel=`买 ${priceText(row.buyPrice||row.price)}`;
   const sellLabel=`卖 ${priceText(row.sellPrice||row.price)}`;
   const liveBadge=/低吸|买入/.test(sig)?badge(last.time,buyLabel,'#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,sellLabel,'#ef4444',true):'');
-  const times=`<text x="${L}" y="${T+CH+28}" fill="#475569" font-size="14">09:30</text><text x="${L+(W-L-R)*.33}" y="${T+CH+28}" fill="#475569" font-size="14">10:30</text><text x="${L+(W-L-R)*.55}" y="${T+CH+28}" fill="#475569" font-size="14">11:30/13:00</text><text x="${W-R-30}" y="${T+CH+28}" fill="#475569" font-size="14">15:00</text>`;
+  const tickIndexes=[0,Math.floor((xy.length-1)*.33),Math.floor((xy.length-1)*.66),xy.length-1].filter((v,i,a)=>v>=0&&a.indexOf(v)===i);
+  const times=tickIndexes.map((idx,i)=>{
+    const p=xy[idx],isFirst=i===0,isLast=idx===xy.length-1;
+    const x=isFirst?L:(isLast?W-R:p.x);
+    const anchor=isFirst?'start':(isLast?'end':'middle');
+    const label=escapeHtml(String(p.time||'--:--').slice(0,5));
+    return `<line x1="${x.toFixed(1)}" y1="${T+CH+6}" x2="${x.toFixed(1)}" y2="${T+CH+14}" stroke="#cbd5e1"/><text x="${x.toFixed(1)}" y="${T+CH+31}" text-anchor="${anchor}" fill="#475569" font-size="14">${label}</text>`;
+  }).join('');
   const dateText=new Date().toLocaleDateString('zh-CN').replaceAll('/','-');
   const statusText=String(row.marketStatus||'已收盘');
   const changeText=`${change>=0?'+':''}${Number(row.changeAmount||row.diff||0).toFixed(2)}`;
