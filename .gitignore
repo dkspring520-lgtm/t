@@ -32,6 +32,7 @@ global_events_seen.json
 commercial_users.json
 commercial_sessions.json
 activation_codes.json
+admin_credentials.json
 dashboard_settings.json
 monitor_watchlist.json
 runtime_vendor_config.json

@@ -36,6 +36,7 @@ ADAPTIVE_STRATEGY_PATH = BASE_DIR / "adaptive_strategy.json"
 USERS_PATH = BASE_DIR / "commercial_users.json"
 SESSIONS_PATH = BASE_DIR / "commercial_sessions.json"
 ACTIVATION_CODES_PATH = BASE_DIR / "activation_codes.json"
+ADMIN_CREDENTIALS_PATH = BASE_DIR / "admin_credentials.json"
 LAST_GEMINI_ERROR = ""
 MARKET_CONTEXT_CACHE: dict = {"ts": 0.0, "data": {}}
 GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
@@ -52,10 +53,7 @@ LOGIN_FAILURES: dict[str, dict] = {}
 MAX_LOGIN_FAILURES = 6
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_LOCK_SECONDS = 15 * 60
-BUILTIN_ACTIVATION_CODES = {
-    "T9-DEMO-MONTH": {"plan": "月卡", "days": 31, "watchLimit": 20, "aiReviewLimit": 80},
-    "T99-DEMO-LIFE": {"plan": "永久版", "days": 36500, "watchLimit": 200, "aiReviewLimit": 500},
-}
+BUILTIN_ACTIVATION_CODES: dict[str, dict] = {}
 
 TASKS = {
     "start_all": [
@@ -79,7 +77,8 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "loggedIn": False, "message": "请先登录后使用。"}, status=401)
             else:
-                self._redirect(f"/login?next={urllib.parse.quote(self.path or '/', safe='')}")
+                target = "/admin/login" if path == "/admin" else f"/login?next={urllib.parse.quote(self.path or '/', safe='')}"
+                self._redirect(target)
             return
         if path.startswith("/assets/"):
             self._send_asset(path)
@@ -101,6 +100,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/account":
             self._send_html(ACCOUNT_HTML)
+            return
+        if path == "/admin/login":
+            ensure_admin_account()
+            self._send_html(ADMIN_LOGIN_HTML)
             return
         if path == "/recharge":
             self._send_html(RECHARGE_HTML)
@@ -219,6 +222,11 @@ class Handler(BaseHTTPRequestHandler):
             if payload is not None:
                 self._send_json(payload)
             return
+        if path == "/api/admin/login":
+            payload = admin_login_payload(self, self._read_json())
+            if payload is not None:
+                self._send_json(payload)
+            return
         if path == "/api/logout":
             logout_payload(self)
             return
@@ -237,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _requires_login(self, path: str) -> bool:
-        public_paths = {"/", "/index.html", "/landing", "/login", "/register", "/account", "/api/account", "/api/login", "/api/register", "/api/logout", "/api/status"}
+        public_paths = {"/", "/index.html", "/landing", "/login", "/register", "/account", "/admin/login", "/api/account", "/api/login", "/api/admin/login", "/api/register", "/api/logout", "/api/status"}
         if path in public_paths:
             return False
         if path.startswith("/assets/"):
@@ -684,6 +692,89 @@ def maybe_upgrade_password(password: str, user: dict, store: dict) -> None:
     save_users(store)
 
 
+def ensure_admin_account() -> dict:
+    env_email = str(os.environ.get("DASHBOARD_ADMIN_EMAIL") or "").strip().lower()
+    env_password = str(os.environ.get("DASHBOARD_ADMIN_PASSWORD") or "")
+    created = False
+    if env_email and env_password:
+        creds = {"email": env_email, "password": env_password, "source": "env"}
+    else:
+        try:
+            creds = json.loads(ADMIN_CREDENTIALS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            creds = {}
+        email = str(creds.get("email") or "admin@zhuandianmi.local").strip().lower()
+        password = str(creds.get("password") or "")
+        if len(password) < 10:
+            password = "T" + secrets.token_urlsafe(13)
+            created = True
+        creds = {
+            "email": email,
+            "password": password,
+            "createdAt": str(creds.get("createdAt") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            "note": "本机管理员账号。请妥善保存，勿提交到 GitHub。",
+        }
+        if created or not ADMIN_CREDENTIALS_PATH.exists():
+            try:
+                ADMIN_CREDENTIALS_PATH.write_text(json.dumps(creds, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+    store = load_users()
+    users = store.setdefault("users", {})
+    user = users.get(creds["email"])
+    if not user or env_password:
+        salt = secrets.token_hex(12)
+        user = {
+            "email": creds["email"],
+            "nickname": "管理员",
+            "salt": salt,
+            "password": hash_password(creds["password"], salt),
+            "plan": "管理员",
+            "planExpireAt": "永久",
+            "watchLimit": 999,
+            "aiReviewLimit": 999,
+            "role": "admin",
+            "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        users[creds["email"]] = user
+        save_users(store)
+    elif str(user.get("role") or "").lower() != "admin":
+        user["role"] = "admin"
+        user["plan"] = user.get("plan") or "管理员"
+        user["planExpireAt"] = user.get("planExpireAt") or "永久"
+        save_users(store)
+    return creds
+
+
+def admin_login_payload(handler: Handler, data: dict) -> dict | None:
+    creds = ensure_admin_account()
+    email = str(data.get("email") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not email:
+        email = str(creds.get("email") or "").strip().lower()
+    throttle_key = login_throttle_key(handler, f"admin:{email}")
+    blocked = login_block_seconds(throttle_key)
+    if blocked > 0:
+        return {"ok": False, "message": f"登录尝试过多，请 {max(1, blocked // 60)} 分钟后再试。"}
+    store = load_users()
+    users = store.get("users", {})
+    user = users.get(email)
+    if not user or str(user.get("role") or "").lower() != "admin" or not verify_password(password, user):
+        record_login_failure(throttle_key)
+        return {"ok": False, "message": "管理员账号或密码不正确。"}
+    clear_login_failures(throttle_key)
+    maybe_upgrade_password(password, user, store)
+    token = create_session(email)
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    set_session_cookie(handler, token)
+    payload = json.dumps({"ok": True, "message": "管理员登录成功。", "account": public_user(user)}, ensure_ascii=False).encode("utf-8")
+    handler.send_header("Content-Length", str(len(payload)))
+    handler.end_headers()
+    handler.wfile.write(payload)
+    return None
+
+
 def login_throttle_key(handler: Handler, email: str) -> str:
     forwarded = str(handler.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip()
     ip = forwarded or (handler.client_address[0] if handler.client_address else "unknown")
@@ -885,13 +976,11 @@ def is_admin_email(email: str | None) -> bool:
     if not email:
         return False
     env_admins = configured_admin_emails()
-    if env_admins:
-        return email in env_admins
-    if os.environ.get("DASHBOARD_ALLOW_STORED_ADMIN", "") == "1":
-        users = load_users().get("users", {})
-        user = users.get(email) or {}
-        return str(user.get("role") or "").lower() == "admin"
-    return False
+    if email in env_admins:
+        return True
+    users = load_users().get("users", {})
+    user = users.get(email) or {}
+    return str(user.get("role") or "").lower() == "admin"
 
 
 def account_watch_limit(email: str | None) -> int:
@@ -3964,6 +4053,41 @@ document.addEventListener('DOMContentLoaded',syncLandingAuth);
 </body>
 </html>"""
 
+ADMIN_LOGIN_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>管理员登录 - 做T神器</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(135deg,#0f172a,#111827 52%,#f8fafc 52%);font:14px/1.6 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif;color:#111827}.card{width:min(430px,calc(100vw - 32px));background:#fff;border:1px solid #e5e7eb;border-radius:20px;box-shadow:0 28px 90px rgba(15,23,42,.28);padding:28px}.brand{font-size:24px;font-weight:950;margin-bottom:4px}.sub{color:#64748b;margin-bottom:22px}.field{margin-bottom:14px}.field label{display:block;font-size:12px;color:#64748b;font-weight:900;margin-bottom:6px}.field input{width:100%;height:44px;border:1px solid #dbe3ef;border-radius:12px;padding:0 13px;font-weight:850}.field input:focus{outline:2px solid rgba(37,99,235,.14);border-color:#93c5fd}button{width:100%;height:44px;border:0;border-radius:12px;background:#111827;color:#fff;font-weight:950;cursor:pointer}.msg{min-height:22px;margin-top:12px;color:#64748b}.msg.bad{color:#dc2626}.links{display:flex;justify-content:space-between;margin-top:14px}.links a{color:#475569;text-decoration:none;font-weight:900}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">管理员登录</div>
+  <div class="sub">用于生成激活码、查看用户和管理权限。</div>
+  <div class="field"><label>管理员账号</label><input id="email" autocomplete="username" placeholder="admin@zhuandianmi.local"></div>
+  <div class="field"><label>管理员密码</label><input id="password" type="password" autocomplete="current-password" placeholder="请输入管理员密码"></div>
+  <button onclick="submitAdmin()">进入后台</button>
+  <div id="msg" class="msg"></div>
+  <div class="links"><a href="/">返回首页</a><a href="/login">用户登录</a></div>
+</main>
+<script>
+async function submitAdmin(){
+  const msg=document.getElementById('msg');msg.textContent='正在验证...';msg.className='msg';
+  try{
+    const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value.trim(),password:password.value})});
+    const data=await res.json();
+    if(!data.ok){msg.textContent=data.message||'登录失败';msg.className='msg bad';return}
+    location.href='/admin';
+  }catch(e){msg.textContent='服务异常，请稍后再试。';msg.className='msg bad'}
+}
+password.addEventListener('keydown',e=>{if(e.key==='Enter')submitAdmin()});
+</script>
+</body>
+</html>"""
+
 FORBIDDEN_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -3974,7 +4098,7 @@ FORBIDDEN_HTML = r"""<!doctype html>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f7fb;color:#111827;font:15px/1.7 "Microsoft YaHei UI",Segoe UI,system-ui,sans-serif}.box{width:min(520px,calc(100vw - 32px));background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 22px 70px rgba(15,23,42,.08);padding:28px}h1{margin:0 0 8px;font-size:28px}p{margin:0 0 18px;color:#64748b}a{display:inline-flex;height:42px;align-items:center;border-radius:12px;background:#111827;color:#fff;padding:0 18px;text-decoration:none;font-weight:900}
 </style>
 </head>
-<body><main class="box"><h1>没有管理员权限</h1><p>管理后台只允许系统配置的管理员访问。普通用户请返回控制台或会员中心。</p><a href="/app">返回控制台</a></main></body>
+<body><main class="box"><h1>没有管理员权限</h1><p>请使用管理员账号登录后台。普通用户请返回控制台或会员中心。</p><a href="/admin/login">管理员登录</a></main></body>
 </html>"""
 
 AUTH_HTML = r"""<!doctype html>
@@ -3992,14 +4116,14 @@ a,button,input{font:inherit}a{text-decoration:none;color:inherit}.card{width:min
 <body>
 <main class="card">
   <section class="hero">
-    <div class="brand">T神器 · 商业内测账号</div>
+    <div class="brand">T神器 · 用户账号</div>
     <h1>把策略、提醒和复盘绑定到你的账号。</h1>
-    <p>当前是本地内测版：账号会保存在本机，用于模拟会员权限、策略草稿和后续商业化流程。</p>
+    <p>账号用于保存监控股票、策略配置、会员权限和复盘记录。</p>
     <div class="points">
-      <div class="point"><b>体验版</b><span>注册后可试用基础能力</span></div>
-      <div class="point"><b>月卡</b><span>9.9元/月，多股监控</span></div>
-      <div class="point"><b>永久版</b><span>99元，长期使用</span></div>
-      <div class="point"><b>云端可迁移</b><span>后续接数据库和支付</span></div>
+      <div class="point"><b>监控</b><span>保存多股实时监控配置</span></div>
+      <div class="point"><b>模拟</b><span>记录做T测试与复盘</span></div>
+      <div class="point"><b>策略</b><span>同步自定义策略参数</span></div>
+      <div class="point"><b>会员</b><span>通过激活码开通权限</span></div>
     </div>
   </section>
   <section class="form">
@@ -4054,7 +4178,7 @@ ACCOUNT_HTML = r"""<!doctype html>
 <body>
 <main class="shell">
   <div class="top">
-    <div><div class="brand">会员中心</div><div class="sub">本地内测账号，后续可升级为云端商业版。</div></div>
+    <div><div class="brand">会员中心</div><div class="sub">查看当前权限、到期时间和快捷入口。</div></div>
     <div class="actions"><a href="/app"><button>控制台</button></a><a href="/recharge"><button class="primary">激活码充值</button></a><a href="/commercial"><button>功能中心</button></a><a href="/"><button>商业页</button></a></div>
   </div>
   <section id="root" class="panel"><div class="empty">正在读取账号状态...</div></section>
@@ -4070,7 +4194,7 @@ async function loadAccount(){
   const a=data.account||{};
   const adminLink=a.isAdmin?'<a href="/admin"><button>用户管理</button></a>':'';
   root.innerHTML=`
-    <div class="card"><h2>${a.nickname||'用户'}，欢迎回来</h2><div class="sub">当前套餐：${a.plan||'体验版'}。这是本地商业化原型，正式上线后会接支付、数据库和云端权限。</div></div>
+    <div class="card"><h2>${a.nickname||'用户'}，欢迎回来</h2><div class="sub">当前套餐：${a.plan||'体验版'}。权限以激活码兑换结果为准。</div></div>
     <div class="grid">
       <div class="card"><h3>账号信息</h3><div class="kv"><div>邮箱</div><div>${a.email||'--'}</div><div>昵称</div><div>${a.nickname||'--'}</div><div>套餐</div><div>${a.plan||'体验版'}</div><div>到期时间</div><div>${a.planExpireAt||'体验权限'}</div><div>注册时间</div><div>${a.createdAt||'--'}</div><div>监控额度</div><div>${a.watchLimit||1} 只股票</div><div>AI复核额度</div><div>${a.aiReviewLimit||5} 次/日</div></div></div>
       <div class="card"><h3>快捷入口</h3><p><a href="/app"><button class="primary">进入控制台</button></a></p><p><a href="/recharge"><button class="primary">激活码充值</button></a></p><p>${adminLink}<a href="/commercial"><button>配置商业功能</button></a></p><p><button onclick="logout()">退出登录</button></p></div>
@@ -4098,29 +4222,23 @@ RECHARGE_HTML = r"""<!doctype html>
 <body>
 <main class="shell">
   <div class="top">
-    <div><div class="brand">激活码充值</div><div class="sub">月卡 9.9 元，永久版 99 元；当前为本地商业化原型。</div></div>
+    <div><div class="brand">激活码兑换</div><div class="sub">输入管理员发放的激活码，开通对应权限。</div></div>
     <div class="actions"><a href="/app"><button>控制台</button></a><a href="/account"><button>会员中心</button></a><a href="/commercial"><button>功能中心</button></a></div>
   </div>
   <section class="hero">
     <div>
-      <h1>输入激活码，开通你的做T神器权限。</h1>
-      <p>正式上线后，支付成功会自动生成激活码；用户复制激活码到这里兑换即可。这样比直接改账号更适合早期售卖和人工发码。</p>
-      <div class="plans">
-        <div class="plan"><h3>体验版</h3><div class="price">试用</div><p>基础单股监控、盘前方向预览。</p></div>
-        <div class="plan featured"><h3>月卡</h3><div class="price">¥9.9</div><p>多股监控、模拟复盘、AI复核，31天。</p></div>
-        <div class="plan"><h3>永久版</h3><div class="price">¥99</div><p>核心功能长期使用，策略模板更新。</p></div>
-      </div>
+      <h1>输入激活码，开通做T神器权限。</h1>
+      <p>激活码由管理员生成并发放，兑换成功后会自动绑定当前账号。请确认已登录自己的账号后再兑换。</p>
     </div>
     <div class="card form">
       <label>激活码</label>
-      <input id="code" placeholder="例如 T9-DEMO-MONTH" autocomplete="off">
+      <input id="code" placeholder="请输入激活码" autocomplete="off">
       <button class="primary" style="width:100%;margin-top:12px" onclick="redeem()">立即兑换</button>
       <div id="msg" class="msg"></div>
       <div id="account" class="kv"></div>
       <div class="tips">
-        <div class="tip"><b>内测月卡：</b>T9-DEMO-MONTH</div>
-        <div class="tip"><b>内测永久：</b>T99-DEMO-LIFE</div>
-        <div class="tip">正式商业版会改成后台批量生成一次性激活码，并绑定订单号。</div>
+        <div class="tip">激活码只能绑定一个账号，请勿转发给他人。</div>
+        <div class="tip">兑换后可在会员中心查看当前权限和到期时间。</div>
       </div>
     </div>
   </section>
@@ -4160,7 +4278,7 @@ a,button,input,select{font:inherit}a{text-decoration:none;color:inherit}button{h
 </head>
 <body>
 <main class="shell">
-  <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">本机内测后台：查看注册用户、套餐和当前登录状态。</div></div><div class="actions"><a href="/app"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
+  <div class="top"><div><div class="brand"><img src="/assets/logo.png" alt="做T神器"><span>用户管理</span></div><div class="sub">查看注册用户、激活码、套餐和当前登录状态。</div></div><div class="actions"><a href="/app"><button>工作台</button></a><a href="/account"><button>会员中心</button></a><button class="primary" onclick="loadUsers()">刷新</button></div></div>
   <section class="panel">
     <div class="cards"><div class="card"><span>注册用户</span><b id="userCount">--</b></div><div class="card"><span>在线会话</span><b id="onlineCount">--</b></div><div class="card"><span>未使用激活码</span><b id="unusedCount">--</b></div><div class="card"><span>数据文件</span><b>本机JSON</b></div></div>
     <div class="code-bar">
@@ -4236,7 +4354,7 @@ a,button{font:inherit}a{text-decoration:none;color:inherit}button{height:36px;bo
   <section class="hero">
     <div><h1>把做T策略产品化</h1><p>商业版的核心不是承诺收益，而是让用户能配置自己的做T逻辑、接收高质量提醒、复盘失败原因，并用AI复核买卖点是否真的值得执行。</p></div>
     <div class="status">
-      <div class="stat"><span>当前阶段</span><b>内测前</b></div>
+      <div class="stat"><span>当前阶段</span><b>Beta</b></div>
       <div class="stat"><span>核心模块</span><b>4 个</b></div>
       <div class="stat"><span>建议服务器</span><b>2核4G</b></div>
       <div class="stat"><span>收费准备</span><b>60%</b></div>
