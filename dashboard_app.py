@@ -1016,6 +1016,21 @@ def realtime_payload(email: str | None = None) -> dict:
                 display_signal, display_reason = "行情延迟", f"报价时间超过{int(age_seconds or 0)}秒未更新，暂停买卖点提醒，等待下一笔有效行情。"
             else:
                 display_signal, display_reason = news_adjusted_signal(signal.action if signal else ("观察" if is_open else "休市中"), signal.reason if signal else ("暂无高质量买卖点" if is_open else "当前休市，仅显示最近分时数据"), rapid_news)
+            price_points = [{"time": m.time, "price": m.price, "volume": m.volume_lot, "amount": m.amount_yuan} for m in minutes]
+            signal_price = float(getattr(signal, "price", 0) or 0) if signal else 0.0
+            if quote:
+                quote_time = _format_time(quote.time_raw, minutes)
+                latest_point = {
+                    "time": quote_time,
+                    "price": quote.price,
+                    "volume": quote.volume_lot,
+                    "amount": quote.amount_wan * 10000.0,
+                    "realtime": True,
+                }
+                if price_points and price_points[-1].get("time") == quote_time:
+                    price_points[-1].update(latest_point)
+                elif quote_time and quote_time != "--:--":
+                    price_points.append(latest_point)
             rows.append(
                 {
                     "name": stock.name,
@@ -1023,6 +1038,7 @@ def realtime_payload(email: str | None = None) -> dict:
                     "time": _format_time(quote.time_raw, minutes) if quote else "--:--",
                     "price": quote.price if quote else 0,
                     "change": quote.change_pct if quote else 0,
+                    "changeAmount": (quote.price - quote.pre_close) if quote else 0,
                     "prevClose": quote.pre_close if quote else 0,
                     "high": quote.high if quote else 0,
                     "low": quote.low if quote else 0,
@@ -1036,9 +1052,11 @@ def realtime_payload(email: str | None = None) -> dict:
                     "marketStatus": "交易中" if is_open else "休市中",
                     "quoteAgeSeconds": age_seconds,
                     "quoteStale": quote_stale,
-                    "prices": [{"time": m.time, "price": m.price, "volume": m.volume_lot, "amount": m.amount_yuan} for m in minutes],
+                    "prices": price_points,
                     "buyTime": signal.time if signal and is_buy_signal else "",
                     "sellTime": signal.time if signal and is_sell_signal else "",
+                    "buyPrice": signal_price if signal and is_buy_signal else 0,
+                    "sellPrice": signal_price if signal and is_sell_signal else 0,
                     "smartMoney": smart_money_payload(quote, minutes, avg, dev),
                     "rapidNews": rapid_news,
                     "agents": agents,
@@ -5387,7 +5405,12 @@ html,body{overflow:hidden;background:#eef3f9}
   box-shadow:0 8px 18px rgba(15,23,42,.035);
 }
 .mini-chip:hover{border-color:#bfdbfe;color:#1d4ed8}
-.signal-toasts{top:86px;right:26px}
+.mini-chip.active{background:#111827;color:#fff;border-color:#111827}
+.mini-chip b{margin-left:6px;font-size:11px}
+.mini-chip.signal-buy{border-color:#fecaca;background:#fff1f2;color:#b91c1c}
+.mini-chip.signal-sell{border-color:#bbf7d0;background:#ecfdf5;color:#047857}
+.mini-chip.active.signal-buy,.mini-chip.active.signal-sell{background:#111827;color:#fff;border-color:#111827}
+.signal-toasts{top:86px;right:26px;display:flex!important;position:fixed;z-index:80}
 .settings-panel{right:18px;top:18px;bottom:18px}
 @media(max-width:1180px){
   .premarket{grid-template-columns:250px minmax(0,1fr)}
@@ -6126,7 +6149,7 @@ let watchStocks=[],premarketTargetCode='';
 async function loadWatchlist(){try{const data=await (await fetch('/api/watchlist',{cache:'no-store'})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text||'';renderWatchTags()}}catch(e){}}
 async function saveWatchlist(){const text=watchStocks.map(s=>s.symbol).join(',');try{const data=await (await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})).json();if(data.ok){watchStocks=data.stocks||[];$('watchInput').value=data.text;renderWatchTags();setStatus('已添加：'+watchStocks.map(s=>s.name+s.code).join('、'));append('已保存监控股票：'+watchStocks.map(s=>s.name+s.code).join('、'));loadPremarket();loadRealtime()}else{setStatus(data.error||'添加失败');append('保存失败：'+(data.error||'未知原因'))}}catch(e){setStatus('添加失败：'+e.message);append('保存失败：'+e.message)}}
 function renderWatchTags(){const el=$('watchTags');if(!el)return;if(!premarketTargetCode&&watchStocks[0])premarketTargetCode=watchStocks[0].code;el.innerHTML=(watchStocks||[]).map((s,i)=>`<span class="tag ${premarketTargetCode===s.code?'active':''}" onclick="selectPremarket('${escapeHtml(s.code)}')" title="点击切换盘前风向">${escapeHtml(s.name)} ${escapeHtml(s.code)}<button onclick="event.stopPropagation();removeWatchStock(${i})" title="移除">×</button></span>`).join('')||'<span class="sub">请添加要监控的股票</span>'}
-function selectPremarket(code){premarketTargetCode=code;renderWatchTags();loadPremarket()}
+function selectPremarket(code){premarketTargetCode=code;renderWatchTags();loadPremarket();if(latestRealtimeRows.length)renderRealtime(latestRealtimeRows)}
 function addWatchStock(){const raw=($('stockCodeInput')?.value||'').trim();const token=normalizeStockToken(raw);if(!token){setStatus('请输入股票代码，例如 601899。');append('请输入股票代码，例如 601899。');return}const exists=watchStocks.some(s=>s.symbol===token);if(exists){setStatus('已在监控中：'+stockName(token)+token.slice(2));if($('stockCodeInput'))$('stockCodeInput').value='';return}watchStocks.push({name:stockName(token),code:token.slice(2),symbol:token});saveWatchlist();if($('stockCodeInput'))$('stockCodeInput').value=''}
 function removeWatchStock(index){watchStocks.splice(index,1);saveWatchlist()}
 function normalizeStockToken(raw){let v=String(raw||'').trim().toLowerCase();const m=v.match(/(sh|sz)?(\d{6})/);if(!m)return '';const code=m[2];const prefix=(m[1]||(code.startsWith('6')||code.startsWith('5')?'sh':'sz'));return prefix+code}
@@ -6136,12 +6159,13 @@ function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFracti
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;if($('cash'))$('cash').textContent=s.endingCash||s.cash||'--';if($('trade'))$('trade').textContent=s.trade||'--';if($('trigger'))$('trigger').textContent=s.trigger||'--';if($('win'))$('win').textContent=s.win||'--';if($('pnl')){$('pnl').textContent=s.pnl||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos')}if($('ret'))$('ret').textContent=s.return||'--';const ending=parseYuan(s.endingCash);if(persist&&ending>0){mainOptions.cash=ending;saveSettings()}}
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});append('已恢复最近一次模拟：'+(latest.time||''))}}catch(e){}}
 function renderReview(review,history){const parts=[];if(review.headline)parts.push(`<b>本轮复盘</b><div>${escapeHtml(review.headline)}</div>`);if((review.suggestions||[]).length)parts.push('<b>下一轮优化</b><ul>'+review.suggestions.map(x=>`<li>${escapeHtml(x)}</li>`).join('')+'</ul>');if(history&&history.runs){const fails=(history.failures||[]).map(x=>`${escapeHtml(x.type)} ${x.count}次`).join('；')||'暂无高频问题';parts.push(`<b>累计统计</b><div>${history.runs} 次模拟，${history.trades} 笔交易，总胜率 ${history.winRate}，总盈亏 ${history.pnl}。问题：${fails}</div>`)}$('review').innerHTML=parts.join('')||'<b>策略复盘</b>模拟后自动显示失败原因和下一轮优化方向。'}
-let realtimeBusy=false,realtimeLastOk=0;
+let realtimeBusy=false,realtimeLastOk=0,latestRealtimeRows=[];
 async function loadRealtime(){if(realtimeBusy)return;realtimeBusy=true;try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),6500);const data=await (await fetch('/api/realtime',{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);realtimeLastOk=Date.now();renderRealtime(data.stocks||[])}catch(e){if(Date.now()-realtimeLastOk>15000){const msg=e.name==='AbortError'?'行情读取较慢，正在等待下一次刷新。':(e.message||'请求超时');$('live').innerHTML='<div class="empty-live">实时监控暂不可用：'+escapeHtml(msg)+'</div>';setStatus('行情刷新较慢')}}finally{realtimeBusy=false}}
 async function loadPremarket(){try{const q=premarketTargetCode?'?code='+encodeURIComponent(premarketTargetCode):'';const data=await (await fetch('/api/premarket'+q,{cache:'no-store'})).json();renderPremarket(data)}catch(e){$('pmReason').textContent='外盘读取失败：'+e.message}}
 function renderPremarket(data){const z=data.target||data.zijin||{},rows=data.rows||[];const signal=z.signal||'观望';const cls=signal==='偏多'?'bull':signal==='偏空'?'bear':'';if($('pmTargetTitle'))$('pmTargetTitle').textContent=(z.name||'目标股')+'开盘前风向';document.querySelector('.pm-score').textContent=(z.score??'--')+'分';const pill=document.querySelector('.pm-signal');pill.textContent=signal+'｜'+(z.category||'综合')+'｜刷新 '+(data.updatedAt||'--');pill.className='pm-signal '+cls;$('pmList').innerHTML=rows.length?rows.map(r=>{const ch=Number(r.change||0),c=ch>=0?'live-pos':'live-neg';const price=Number(r.price||0);return `<div class="pm-item"><b>${escapeHtml(r.name)}</b><span class="${c}">${price>=100?price.toFixed(1):price.toFixed(2)} ${ch>=0?'+':''}${ch.toFixed(2)}%</span><div class="sub">${escapeHtml(r.time||'时间未知')}</div></div>`}).join(''):'<div class="muted">暂无外盘数据</div>';$('pmReason').innerHTML=`<b>${escapeHtml(z.action||'等待盘中确认')}</b><br>${(z.reasons||[]).map(escapeHtml).join('<br>')}<br><span class="sub">外盘为 Yahoo 5分钟快照，按当前主监控股票降权计算，只作为盘前方向。</span>`}
 function renderRealtime(rows){
   if(!rows.length){$('live').innerHTML='<div class="empty-live">暂无监控股票，请先添加代码。</div>';return;}
+  latestRealtimeRows=rows;
   rows.forEach(r=>{maybeBeep(r);showSignalToast(r);});
   const focus = rows.find(r=>r.code===premarketTargetCode) || rows[0];
   const change = Number(focus.change||0);
@@ -6153,7 +6177,12 @@ function renderRealtime(rows){
   const agents = (Array.isArray(focus.agents)&&focus.agents.length?focus.agents:[(focus.smartMoney&&focus.smartMoney.text)||'技术员：等待量价确认','资金员：关注成交量是否持续放大','风控员：休市或弱信号时不建议追单','决策员：只执行高质量买卖点']).map(escapeHtml).join('<br>');
   const pill=$('activeStockPill');
   if(pill) pill.textContent=`${focus.name} ${focus.code}`;
-  const chips = rows.map(r=>`<span class="mini-chip" onclick="selectPremarket('${escapeHtml(r.code)}');loadRealtime()">${escapeHtml(r.name)} ${escapeHtml(r.code)}</span>`).join('');
+  const chips = rows.map(r=>{
+    const side=alertSide(r.signal||''),active=r.code===focus.code;
+    const px=Number((side==='buy'?r.buyPrice:r.sellPrice)||r.price||0);
+    const text=side?`<b>${side==='buy'?'买':'卖'} ${px?px.toFixed(2):'--'}</b>`:'';
+    return `<span class="mini-chip ${active?'active':''} ${side?'signal-'+side:''}" onclick="selectPremarket('${escapeHtml(r.code)}')">${escapeHtml(r.name)} ${escapeHtml(r.code)}${text}</span>`;
+  }).join('');
   $('live').innerHTML = `<div class="monitor-dashboard">
     <section class="focus-card ${tradable?'strong-signal':''}">
       <div class="focus-head">
@@ -6205,9 +6234,11 @@ function focusStock(code){location.href='/research?code='+encodeURIComponent(cod
 async function aiIntraday(code){toggleAi(true);const body=$('aiBody');body.innerHTML='<span class="ai-chip">Gemini</span><span class="ai-chip">大方向</span><span class="ai-chip">路径预判</span><span class="ai-chip">买卖点复核</span><br>正在集中讨论当前买卖点...';try{const ctrl=new AbortController();const timer=setTimeout(()=>ctrl.abort(),11000);const data=await (await fetch('/api/gemini_intraday?code='+encodeURIComponent(code),{cache:'no-store',signal:ctrl.signal})).json();clearTimeout(timer);if(!data.ok){body.textContent=data.message||'Gemini 暂无返回';return}const a=data.analysis||{},s=data.stock||{};const agents=Array.isArray(a.agents)?a.agents:[];const key=formatKeyPrices(a.keyPrices);const path=formatPathForecast(a.pathForecast);body.innerHTML=`<span class="ai-chip">${escapeHtml(s.股票||code)}</span><span class="ai-chip">现价 ${escapeHtml(s.现价??'--')}</span><span class="ai-chip">昨收 ${escapeHtml(s.昨收??'--')}</span><span class="ai-chip">黄线偏离 ${escapeHtml(s.黄线偏离??'--')}%</span><b>大方向</b>${escapeHtml(a.macroView||a.trend||'观察')}<b>今日路径预判</b>${escapeHtml(path)}<b>关键价位</b>${escapeHtml(key)}<b>买卖点复核</b>${escapeHtml(a.pointReview||'当前未形成最优买卖点，先按观察处理')}<b>趋势判断</b>${escapeHtml(a.trend||'证据不足，先观察')}<b>操作计划</b>${escapeHtml(a.action||'不强行交易')}<br>买入：${escapeHtml(a.buyPlan||'等待低位确认')}<br>卖出：${escapeHtml(a.sellPlan||'等待高位确认')}<b>失效条件</b>${escapeHtml(a.invalidation||'跌破/突破关键价后重新评估')}<b>多角色研判</b>${agents.map(escapeHtml).join('<br>')||'暂无多角色返回'}<p class="sub">模型：${escapeHtml(data.model||'Gemini')}。该观点30分钟内会同步给监控观察员参考。</p>`;loadRealtime()}catch(e){body.textContent='Gemini 分析超时或网络不可达：'+(e.message||e)}}
 function formatPathForecast(v){if(!v)return '证据不足，暂按震荡处理';if(typeof v==='string')return v;const map={mostLikely:'主路径',alternative:'备选路径',bullish:'偏多路径',bearish:'偏空路径',neutral:'震荡路径'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
 function formatKeyPrices(v){if(!v)return '等待确认';if(typeof v==='string')return v;const map={support:'支撑位',resistance:'压力位',vwap:'黄线均价',buyLow:'低吸区',sellHigh:'高抛区',stopLoss:'止损位',takeProfit:'止盈位'};return Object.entries(v).map(([k,val])=>`${map[k]||k}：${val}`).join('｜')}
-function liveSpark(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0);const c=Number(row.change)>=0?'#ec5f6b':'#35b978';if(series.length<2)return '<svg class="live-chart" viewBox="0 0 420 132"><line x1="14" y1="62" x2="406" y2="62" stroke="#d7dde2" stroke-width="2"/><text x="210" y="72" text-anchor="middle" fill="#94a3af" font-size="12" font-weight="900">等待分时数据</text></svg>';const step=Math.max(1,Math.floor(series.length/120));const points=series.filter((_,i)=>i%step===0);const values=points.map(x=>Number(x.price));const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);const pad=rawSpan*.16;const min=rawMin-pad,max=rawMax+pad,span=Math.max(max-min,.01);const yOf=v=>94-((Number(v)-min)/span)*82;const xy=points.map((p,i)=>({x:18+(i/(points.length-1))*384,y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const avg=Number(row.avg||0);const avgLine=avg>0?`<line x1="18" y1="${yOf(avg).toFixed(1)}" x2="402" y2="${yOf(avg).toFixed(1)}" stroke="#f3c545" stroke-width="1.5" stroke-dasharray="5 4"/><text x="22" y="${Math.max(13,yOf(avg)-4).toFixed(1)}" fill="#c18a00" font-size="10" font-weight="900">黄线 ${avg.toFixed(2)}</text>`:'';const b2=rawMin+rawSpan*.10,b1=rawMin+rawSpan*.24,s1=rawMax-rawSpan*.24,s2=rawMax-rawSpan*.10;const level=(v,label,color)=>`<line x1="18" y1="${yOf(v).toFixed(1)}" x2="402" y2="${yOf(v).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="3 4" opacity=".75"/><text x="404" y="${Math.max(12,Math.min(94,yOf(v)+3)).toFixed(1)}" fill="${color}" font-size="10" font-weight="950">${label}</text>`;const volSrc=xy.map((p,i)=>p.vol||Math.abs((p.price-(xy[i-1]?.price||p.price)))*1000+.1);const maxVol=Math.max(...volSrc,.1);const bars=xy.map((p,i)=>{const h=Math.max(2,(volSrc[i]/maxVol)*22);const color=i&&p.price>=xy[i-1].price?'#ec5f6b':'#35b978';return `<rect x="${(p.x-1).toFixed(1)}" y="${(124-h).toFixed(1)}" width="2" height="${h.toFixed(1)}" fill="${color}" opacity=".42"/>`}).join('');const norm=t=>String(t||'').replace(':','');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],ty=Math.max(10,Math.min(98,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5.5" fill="${color}" stroke="#fff" stroke-width="2"/><text x="${p.x.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="${color}">${label}</text>`};const sig=String(row.signal||'');const last=xy[xy.length-1];const liveMark=/低吸|买入/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#2563eb" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#2563eb">买</text></g>`:(/高抛|卖出/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#ec5f6b" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#ec5f6b">卖</text></g>`:'');return `<svg class="live-chart" viewBox="0 0 420 132"><rect x="0" y="0" width="420" height="132" fill="transparent"/><line x1="18" y1="94" x2="402" y2="94" stroke="#edf1f3"/><line x1="18" y1="12" x2="402" y2="12" stroke="#edf1f3"/><line x1="18" y1="124" x2="402" y2="124" stroke="#edf1f3"/>${level(s2,'卖2','#ec5f6b')}${level(s1,'卖1','#f59e0b')}${avgLine}${level(b1,'买1','#2563eb')}${level(b2,'买2','#0ea5e9')}<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${bars}${mark(row.buyTime,'买','#2563eb',-9)}${mark(row.sellTime,'卖','#ec5f6b',15)}${liveMark}</svg><div class="chart-note"><span>蓝=低吸买点</span><span>红=高抛卖点</span><span>黄=分时均价</span><span>底部=量能</span></div>`}
+function realtimeSeries(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0).map(x=>Object.assign({},x));const latestPrice=Number(row.price||0),latestTime=String(row.time||'');if(latestPrice>0&&latestTime&&latestTime!=='--:--'){const latest={time:latestTime,price:latestPrice,volume:Number(row.volume||0),amount:Number(row.amount||0),realtime:true};if(series.length&&String(series[series.length-1].time||'')===latestTime){series[series.length-1]=Object.assign(series[series.length-1],latest)}else{series.push(latest)}}return series}
+function sampledPoints(indexed,limit){const step=Math.max(1,Math.floor(indexed.length/limit));const points=indexed.filter((_,i)=>i%step===0);const last=indexed[indexed.length-1];if(last&&points.length&&points[points.length-1]._i!==last._i)points.push(last);return points}
+function liveSpark(row){const series=realtimeSeries(row);const c=Number(row.change)>=0?'#ec5f6b':'#35b978';if(series.length<2)return '<svg class="live-chart" viewBox="0 0 420 132"><line x1="14" y1="62" x2="406" y2="62" stroke="#d7dde2" stroke-width="2"/><text x="210" y="72" text-anchor="middle" fill="#94a3af" font-size="12" font-weight="900">等待分时数据</text></svg>';const indexed=series.map((p,i)=>Object.assign({_i:i},p));const points=sampledPoints(indexed,120);const values=points.map(x=>Number(x.price));const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);const pad=rawSpan*.16;const min=rawMin-pad,max=rawMax+pad,span=Math.max(max-min,.01);const yOf=v=>94-((Number(v)-min)/span)*82;const xy=points.map((p,i)=>({x:18+(i/(points.length-1))*384,y:yOf(p.price),price:Number(p.price),time:p.time,vol:Number(p.volume||p.vol||0)}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const avg=Number(row.avg||0);const avgLine=avg>0?`<line x1="18" y1="${yOf(avg).toFixed(1)}" x2="402" y2="${yOf(avg).toFixed(1)}" stroke="#f3c545" stroke-width="1.5" stroke-dasharray="5 4"/><text x="22" y="${Math.max(13,yOf(avg)-4).toFixed(1)}" fill="#c18a00" font-size="10" font-weight="900">黄线 ${avg.toFixed(2)}</text>`:'';const b2=rawMin+rawSpan*.10,b1=rawMin+rawSpan*.24,s1=rawMax-rawSpan*.24,s2=rawMax-rawSpan*.10;const level=(v,label,color)=>`<line x1="18" y1="${yOf(v).toFixed(1)}" x2="402" y2="${yOf(v).toFixed(1)}" stroke="${color}" stroke-width="1" stroke-dasharray="3 4" opacity=".75"/><text x="404" y="${Math.max(12,Math.min(94,yOf(v)+3)).toFixed(1)}" fill="${color}" font-size="10" font-weight="950">${label}</text>`;const volSrc=xy.map((p,i)=>p.vol||Math.abs((p.price-(xy[i-1]?.price||p.price)))*1000+.1);const maxVol=Math.max(...volSrc,.1);const bars=xy.map((p,i)=>{const h=Math.max(2,(volSrc[i]/maxVol)*22);const color=i&&p.price>=xy[i-1].price?'#ec5f6b':'#35b978';return `<rect x="${(p.x-1).toFixed(1)}" y="${(124-h).toFixed(1)}" width="2" height="${h.toFixed(1)}" fill="${color}" opacity=".42"/>`}).join('');const norm=t=>String(t||'').replace(':','');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],ty=Math.max(10,Math.min(98,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5.5" fill="${color}" stroke="#fff" stroke-width="2"/><text x="${p.x.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="${color}">${label}</text>`};const sig=String(row.signal||'');const last=xy[xy.length-1];const liveMark=/低吸|买入/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#2563eb" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#2563eb">买</text></g>`:(/高抛|卖出/.test(sig)?`<g><circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="6" fill="#ec5f6b" stroke="#fff" stroke-width="2"/><text x="${last.x.toFixed(1)}" y="${Math.max(11,last.y-10).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="950" fill="#ec5f6b">卖</text></g>`:'');return `<svg class="live-chart" viewBox="0 0 420 132"><rect x="0" y="0" width="420" height="132" fill="transparent"/><line x1="18" y1="94" x2="402" y2="94" stroke="#edf1f3"/><line x1="18" y1="12" x2="402" y2="12" stroke="#edf1f3"/><line x1="18" y1="124" x2="402" y2="124" stroke="#edf1f3"/>${level(s2,'卖2','#ec5f6b')}${level(s1,'卖1','#f59e0b')}${avgLine}${level(b1,'买1','#2563eb')}${level(b2,'买2','#0ea5e9')}<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${bars}${mark(row.buyTime,'买','#2563eb',-9)}${mark(row.sellTime,'卖','#ec5f6b',15)}${liveMark}</svg><div class="chart-note"><span>蓝=低吸买点</span><span>红=高抛卖点</span><span>黄=分时均价</span><span>底部=量能</span></div>`}
 function liveSparkBig(row){
-  const series=(row.prices||[]).filter(x=>Number(x.price)>0);
+  const series=realtimeSeries(row);
   if(series.length<2){
     return '<svg class="live-chart" viewBox="0 0 1180 430"><rect x="0" y="0" width="1180" height="430" fill="transparent"/><text x="590" y="220" text-anchor="middle" fill="#94a3af" font-size="20" font-weight="900">等待分时数据</text></svg>';
   }
@@ -6221,8 +6252,7 @@ function liveSparkBig(row){
   const totalVolume=Number(row.volume||row.vol||0)||Math.max(0,monotonicVol?rawVols[rawVols.length-1]:volDeltas.reduce((a,b)=>a+Math.max(0,b),0));
   const lastPrice=Number(row.price||series[series.length-1]?.price||0);
   const totalAmount=Number(row.amount||0)||Math.max(0,monotonicAmount?rawAmounts[rawAmounts.length-1]:amountDeltas.reduce((a,b)=>a+Math.max(0,b),0))||(totalVolume*lastPrice*100);
-  const step=Math.max(1,Math.floor(indexed.length/170));
-  const points=indexed.filter((_,i)=>i%step===0);
+  const points=sampledPoints(indexed,170);
   const values=points.map(x=>Number(x.price));
   const rawMin=Math.min(...values),rawMax=Math.max(...values),rawSpan=Math.max(rawMax-rawMin,.01);
   const pad=rawSpan*.22;
@@ -6260,11 +6290,13 @@ function liveSparkBig(row){
     if(!time||time==='--:--')return '';
     const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;
     const p=xy[idx],boxY=above?Math.max(T+6,p.y-48):Math.min(T+CH-34,p.y+20);
-    return `<g><line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${p.x.toFixed(1)}" y2="${(boxY+(above?30:0)).toFixed(1)}" stroke="${color}" stroke-width="1.4"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="7" fill="${color}" stroke="#fff" stroke-width="3"/><rect x="${(p.x-38).toFixed(1)}" y="${boxY.toFixed(1)}" width="76" height="28" rx="7" fill="#fff" stroke="${color}"/><text x="${p.x.toFixed(1)}" y="${(boxY+19).toFixed(1)}" text-anchor="middle" fill="${color}" font-size="13" font-weight="950">${label}</text></g>`;
+    return `<g><line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${p.x.toFixed(1)}" y2="${(boxY+(above?30:0)).toFixed(1)}" stroke="${color}" stroke-width="1.4"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="7" fill="${color}" stroke="#fff" stroke-width="3"/><rect x="${(p.x-46).toFixed(1)}" y="${boxY.toFixed(1)}" width="92" height="28" rx="7" fill="#fff" stroke="${color}"/><text x="${p.x.toFixed(1)}" y="${(boxY+19).toFixed(1)}" text-anchor="middle" fill="${color}" font-size="13" font-weight="950">${label}</text></g>`;
   };
   const sig=String(row.signal||'');
   const last=xy[xy.length-1];
-  const liveBadge=/低吸|买入/.test(sig)?badge(last.time,'买入信号','#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,'卖出信号','#ef4444',true):'');
+  const buyLabel=`买 ${priceText(row.buyPrice||row.price)}`;
+  const sellLabel=`卖 ${priceText(row.sellPrice||row.price)}`;
+  const liveBadge=/低吸|买入/.test(sig)?badge(last.time,buyLabel,'#10b981',false):(/高抛|卖出/.test(sig)?badge(last.time,sellLabel,'#ef4444',true):'');
   const times=`<text x="${L}" y="${T+CH+28}" fill="#475569" font-size="14">09:30</text><text x="${L+(W-L-R)*.33}" y="${T+CH+28}" fill="#475569" font-size="14">10:30</text><text x="${L+(W-L-R)*.55}" y="${T+CH+28}" fill="#475569" font-size="14">11:30/13:00</text><text x="${W-R-30}" y="${T+CH+28}" fill="#475569" font-size="14">15:00</text>`;
   const dateText=new Date().toLocaleDateString('zh-CN').replaceAll('/','-');
   const statusText=String(row.marketStatus||'已收盘');
@@ -6281,7 +6313,7 @@ function liveSparkBig(row){
     <path d="M ${pts.replaceAll(' ', ' L ')} L ${W-R} ${T+CH} L ${L} ${T+CH} Z" fill="url(#lineFade${row.code||''})"/>
     ${prevLine}${level(s2,'压力位','#ef4444','#fff5f5',s2LabelY)}${level(s1,'卖点位','#ef4444','#fff5f5',s1LabelY)}${avgLine}${level(b1,'支撑位','#10b981','#f0fdf4',b1LabelY)}${level(b2,'买点位','#10b981','#f0fdf4',b2LabelY)}
     <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".82"/>
-    ${badge(row.buyTime,'买入信号','#10b981',false)}${badge(row.sellTime,'卖出信号','#ef4444',true)}${liveBadge}
+    ${badge(row.buyTime,buyLabel,'#10b981',false)}${badge(row.sellTime,sellLabel,'#ef4444',true)}${liveBadge}
     ${times}<line x1="${L}" y1="${VTop+VH}" x2="${W-R}" y2="${VTop+VH}" stroke="#e5e7eb"/>${volumeText}${bars}
   </svg><div class="chart-note"><span>红线=价格走势</span><span>黄线=分时均价</span><span>绿色=支撑/买点</span><span>红色=压力/卖点</span><span>底部=量能</span></div>`;
 }
