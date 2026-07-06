@@ -4076,14 +4076,16 @@ ADMIN_LOGIN_HTML = r"""<!doctype html>
 <script>
 async function submitAdmin(){
   const msg=document.getElementById('msg');msg.textContent='正在验证...';msg.className='msg';
+  const emailEl=document.getElementById('email');
+  const passwordEl=document.getElementById('password');
   try{
-    const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value.trim(),password:password.value})});
+    const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value.trim(),password:passwordEl.value})});
     const data=await res.json();
     if(!data.ok){msg.textContent=data.message||'登录失败';msg.className='msg bad';return}
     location.href='/admin';
-  }catch(e){msg.textContent='服务异常，请稍后再试。';msg.className='msg bad'}
+  }catch(e){msg.textContent='登录请求失败：'+(e.message||'请确认服务已启动');msg.className='msg bad'}
 }
-password.addEventListener('keydown',e=>{if(e.key==='Enter')submitAdmin()});
+document.getElementById('password').addEventListener('keydown',e=>{if(e.key==='Enter')submitAdmin()});
 </script>
 </body>
 </html>"""
@@ -4150,7 +4152,11 @@ document.getElementById('switchLink').textContent=isRegister?'已有账号？登
 document.getElementById('switchLink').href=(isRegister?'/login':'/register')+(next?('?next='+encodeURIComponent(next)):'');
 async function submitAuth(){
   const msg=document.getElementById('msg');msg.textContent='正在处理...';msg.className='msg';
-  const payload={email:email.value.trim(),password:password.value,nickname:nickname.value.trim()};
+  const payload={
+    email:document.getElementById('email').value.trim(),
+    password:document.getElementById('password').value,
+    nickname:document.getElementById('nickname').value.trim()
+  };
   try{
     const res=await fetch(isRegister?'/api/register':'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const data=await res.json();
