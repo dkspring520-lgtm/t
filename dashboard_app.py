@@ -223,9 +223,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(payload)
             return
         if path == "/api/admin/login":
-            payload = admin_login_payload(self, self._read_json())
-            if payload is not None:
-                self._send_json(payload)
+            try:
+                payload = admin_login_payload(self, self._read_json())
+                if payload is not None:
+                    self._send_json(payload)
+            except Exception as exc:
+                self._send_json({"ok": False, "message": f"管理员登录接口异常：{exc}"}, status=500)
             return
         if path == "/api/logout":
             logout_payload(self)
@@ -4080,7 +4083,11 @@ async function submitAdmin(){
   const passwordEl=document.getElementById('password');
   try{
     const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value.trim(),password:passwordEl.value})});
-    const data=await res.json();
+    const raw=await res.text();
+    let data={};
+    try{data=raw?JSON.parse(raw):{}}
+    catch(_){data={ok:false,message:`接口返回异常（HTTP ${res.status}）：${raw.slice(0,120)||'空响应'}`}}
+    if(!raw){data={ok:false,message:`接口空响应（HTTP ${res.status}），请确认服务器已更新并重启。`}}
     if(!data.ok){msg.textContent=data.message||'登录失败';msg.className='msg bad';return}
     location.href='/admin';
   }catch(e){msg.textContent='登录请求失败：'+(e.message||'请确认服务已启动');msg.className='msg bad'}
