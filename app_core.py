@@ -473,11 +473,13 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"><link rel="stylesheet" href="/assets/app-navigation.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"><link rel="stylesheet" href="/assets/app-navigation.css?v=1"><link rel="stylesheet" href="/assets/layout-unified.css?v=1"></head>', 1)
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
             html = html.replace("</body>", '<script src="/assets/app-navigation.js?v=1"></script></body>', 1)
+        if "/assets/layout-unified.js" not in html:
+            html = html.replace("</body>", '<script src="/assets/layout-unified.js?v=1"></script></body>', 1)
         data = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")

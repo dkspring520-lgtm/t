@@ -1,0 +1,22 @@
+/* Shared layout layer: keeps the existing Rabbit UI while normalising page proportions. */
+:root{--rq-layout-sidebar:clamp(184px,11vw,208px);--rq-layout-gap:10px;--rq-layout-rail:clamp(288px,20vw,340px)}
+html,body{min-width:0;overflow-x:hidden}
+html body.rq-cute-console{--rq72-nav:var(--rq-layout-sidebar);--rq72-gap:var(--rq-layout-gap)}
+html body.rq-cute-console .side-nav{min-width:var(--rq-layout-sidebar)!important}
+html body.rq-cute-console .app-navigation{margin-top:2px!important}
+html body.rq-cute-console .monitor-dashboard,html body.rq-cute-console .rqf-layout,html body.rq-cute-console .rqf-body,html body.rq-cute-console .rqf-shell{grid-template-columns:minmax(0,1fr) var(--rq-layout-rail)!important;gap:var(--rq-layout-gap)!important}
+html body.rq-page-market-radar .layout{grid-template-columns:var(--rq-layout-sidebar) minmax(0,1fr)!important;gap:0!important}
+html body.rq-page-market-radar .side{min-width:var(--rq-layout-sidebar)!important}
+html body.rq-page-market-radar .radar-shell{min-width:0!important;overflow:auto!important}
+html body.rq-page-research .research-shell,html body.rq-page-simulation .sim-shell{min-width:0!important}
+html body.rq-page-research .research-shell .shell{transform:none!important;transform-origin:initial!important}
+html body.rq-page-simulation .controls{align-items:start!important}
+html body.rq-page-simulation .sim-cost-settings{max-width:100%!important}
+html body.rq-page-simulation .sim-cost-grid{grid-template-columns:repeat(4,minmax(145px,1fr))!important;gap:10px!important}
+html body.rq-page-simulation .run-actions{display:flex!important;gap:10px!important;flex-wrap:wrap!important}
+.rq-layout-toggle{height:26px!important;padding:0 9px!important;border:1px solid #efd8c3!important;border-radius:9px!important;background:#fffaf5!important;color:#9a6c4e!important;font-size:11px!important;font-weight:900!important;cursor:pointer!important}
+.rq-layout-collapsed{max-height:52px!important;min-height:52px!important;overflow:hidden!important}
+.rq-layout-collapsed>*:not(.rq-layout-toggle){opacity:0;pointer-events:none}
+@media(min-width:1180px) and (max-width:1599px){:root{--rq-layout-sidebar:clamp(184px,12vw,192px);--rq-layout-rail:clamp(280px,22vw,310px)}html body.rq-cute-console .premarket{grid-template-columns:205px minmax(0,1fr) 250px!important}}
+@media(min-width:900px) and (max-width:1179px){html body.rq-cute-console .monitor-dashboard,html body.rq-cute-console .rqf-layout,html body.rq-cute-console .rqf-body,html body.rq-cute-console .rqf-shell{grid-template-columns:1fr!important}html body.rq-page-market-radar .radar-body{grid-template-columns:1fr!important}html body.rq-page-simulation .sim-cost-grid{grid-template-columns:repeat(3,minmax(145px,1fr))!important}}
+@media(max-width:899px){html,body{height:auto!important;min-height:100%!important;overflow-x:hidden!important;overflow-y:auto!important}html body.rq-page-market-radar .layout,html body.rq-page-research .research-shell,html body.rq-page-simulation .sim-shell{display:block!important;width:100%!important;height:auto!important;min-height:100vh!important;overflow:visible!important}html body.rq-page-market-radar .main,html body.rq-page-market-radar .radar-shell{width:100%!important;height:auto!important;min-height:0!important;overflow:visible!important}html body.rq-page-market-radar .radar-shell{margin:8px!important;padding:12px!important}html body.rq-page-market-radar .rabbit-zone{display:none!important}html body.rq-page-simulation .sim-cost-grid{grid-template-columns:1fr!important}}
