@@ -1,0 +1,12 @@
+{
+  "mode": "manual",
+  "min_labeled_signals": 60,
+  "min_trading_days": 10,
+  "min_shadow_days": 5,
+  "primary_horizon_bars": 5,
+  "outcome_horizons": [3, 5, 10],
+  "estimated_cycle_cost_rate": 0.001,
+  "bootstrap_probability_threshold": 0.85,
+  "rollback_expectancy_floor": -0.0005,
+  "rollback_max_drawdown": 0.02
+}

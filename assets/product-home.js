@@ -1,0 +1,2 @@
+async function loadAccount(){try{const r=await fetch('/api/account',{cache:'no-store'});const a=await r.json();document.querySelectorAll('[data-account]').forEach(el=>{if(a.loggedIn){el.textContent='会员中心';el.href='/account';el.classList.add('is-logged-in');el.setAttribute('aria-label',(a.nickname||'用户')+'的会员中心')}else{el.textContent='登录 / 注册';el.href='/login';el.classList.remove('is-logged-in')}})}catch(_){}}
+document.addEventListener('DOMContentLoaded',loadAccount);

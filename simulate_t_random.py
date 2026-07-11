@@ -20,6 +20,8 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from auction_direction import evaluate_auction_gate
+
 BASE_DIR = Path(__file__).resolve().parent
 STOCK_POOL_CACHE = BASE_DIR / "a_share_pool_cache.json"
 MINUTE_CACHE_DIR = BASE_DIR / "minute_cache"
@@ -59,6 +61,9 @@ DEFAULT_STRATEGY = {
 ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
 SIM_DAYS = 1
+SMART_T_PROFILE = "balanced"
+SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏"}
+PREV_CLOSE_BY_SYMBOL: dict[str, float] = {}
 LOCAL_STOCK_NAME_MAP = {
     "000630": "铜陵有色",
     "601899": "紫金矿业",
@@ -107,12 +112,15 @@ class Result:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY, SIM_DAYS
+    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    ACTIVE_STRATEGY = load_adaptive_strategy()
+    SMART_T_PROFILE = _arg_value(argv, "--smart-profile", "balanced")
+    if SMART_T_PROFILE not in SMART_T_PROFILE_LABELS:
+        SMART_T_PROFILE = "balanced"
+    ACTIVE_STRATEGY = apply_smart_t_profile(load_adaptive_strategy(), SMART_T_PROFILE)
     sample_size = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 10
     total_cash = _arg_float(argv, "--cash", 100000.0)
     per_trade = _arg_float(argv, "--per-trade", 20000.0)
@@ -164,6 +172,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u5f53\u65e5\u505aT\u6a21\u62df\u3011{today}")
     print(f"\u8d44\u91d1 {total_cash:,.0f}\u5143  \u5355\u7b14 {per_trade:,.0f}\u5143")
+    print(f"智能做T档位 {SMART_T_PROFILE_LABELS[SMART_T_PROFILE]}（正T/反T双向）")
     print(f"\u89e6\u53d1 {len(traded)}/{len(results)}  \u80dc\u7387 {win_rate:.1f}%  \u5e73\u5747 {avg:+.2f}%")
     print(f"\u6a21\u62df\u76c8\u4e8f {total_pnl:+,.2f}\u5143  \u8d44\u91d1\u6536\u76ca {cash_return:+.2f}%")
     print(f"\u6eda\u52a8\u8d44\u91d1 {ending_cash:,.2f}\u5143")
@@ -230,15 +239,22 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
 def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, days: int) -> Result:
     groups = split_bars_by_date(bars)
     if days <= 1 or len(groups) <= 1:
-        return simulate_one(stock, bars, trade_amount)
+        return simulate_one(stock, bars, trade_amount, PREV_CLOSE_BY_SYMBOL.get(stock.symbol))
 
     daily_results: list[tuple[str, Result]] = []
-    for date, day_bars in groups[-days:]:
+    selected_groups = groups[-days:]
+    for group_index, (date, day_bars) in enumerate(selected_groups):
         if len(day_bars) < 30:
             continue
-        daily_results.append((date, simulate_one(stock, day_bars, trade_amount)))
+        previous_close = None
+        absolute_index = groups.index((date, day_bars))
+        if absolute_index > 0 and groups[absolute_index - 1][1]:
+            previous_close = groups[absolute_index - 1][1][-1].price
+        elif group_index == 0:
+            previous_close = PREV_CLOSE_BY_SYMBOL.get(stock.symbol)
+        daily_results.append((date, simulate_one(stock, day_bars, trade_amount, previous_close)))
     if not daily_results:
-        return simulate_one(stock, bars, trade_amount)
+        return simulate_one(stock, bars, trade_amount, PREV_CLOSE_BY_SYMBOL.get(stock.symbol))
 
     traded = [(date, result) for date, result in daily_results if result.action != "\u672a\u89e6\u53d1"]
     if traded:
@@ -545,6 +561,27 @@ def load_adaptive_strategy() -> dict[str, float]:
     strategy["min_trade_quality"] = max(0, min(20, int(strategy.get("min_trade_quality", 9))))
     strategy["second_confirm_enabled"] = max(0, min(1, int(strategy.get("second_confirm_enabled", 1))))
     return strategy
+
+
+def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str, float]:
+    """给模拟测试应用三档有界参数；不修改硬风控与费用。"""
+    out = dict(strategy)
+    if profile == "steady":
+        out["min_trade_quality"] = max(12, int(out.get("min_trade_quality", 9)))
+        out["buy_confirm"] = min(6, max(5, int(out.get("buy_confirm", 5))))
+        out["sell_confirm"] = min(6, max(6, int(out.get("sell_confirm", 6))))
+        out["opening_reverse_strict"] = 1
+        out["second_confirm_enabled"] = 1
+    elif profile == "sensitive":
+        out["min_trade_quality"] = min(7, int(out.get("min_trade_quality", 9)))
+        out["buy_confirm"] = max(3, int(out.get("buy_confirm", 5)) - 1)
+        out["sell_confirm"] = max(3, int(out.get("sell_confirm", 6)) - 1)
+        out["opening_reverse_strict"] = 0
+        out["second_confirm_enabled"] = 1
+    else:
+        out["min_trade_quality"] = max(9, int(out.get("min_trade_quality", 9)))
+        out["second_confirm_enabled"] = 1
+    return out
 
 
 def write_json_result(path: str, results: List[Result], minute_map: dict[str, List[Bar]]) -> None:
@@ -960,7 +997,14 @@ def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
         data = json.loads(_get(url, "utf-8", 10))
     except Exception:
         return []
-    rows = data.get("data", {}).get("trends", []) if isinstance(data, dict) else []
+    result_data = data.get("data", {}) if isinstance(data, dict) else {}
+    rows = result_data.get("trends", []) if isinstance(result_data, dict) else []
+    try:
+        previous_close = float(result_data.get("preClose") or 0)
+        if previous_close > 0:
+            PREV_CLOSE_BY_SYMBOL[symbol] = previous_close
+    except (TypeError, ValueError):
+        pass
     bars: List[Bar] = []
     for row in rows:
         parts = str(row).split(",")
@@ -1012,7 +1056,7 @@ def fetch_minutes_sina(symbol: str) -> List[Bar]:
     return bars
 
 
-def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float) -> Result:
+def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None) -> Result:
     day_low_all = min((b.price for b in bars), default=0.0)
     day_high_all = max((b.price for b in bars), default=0.0)
     day_amp = (day_high_all - day_low_all) / day_low_all * 100.0 if day_low_all > 0 else 0.0
@@ -1044,10 +1088,23 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float) -> Result:
         dev = (bar.price - avg) / avg * 100.0
 
         if buy is None and sell_first is None:
-            if _is_opening_buy_setup(bars, idx, bar, avg, lows, volumes) or _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes):
+            gate = evaluate_auction_gate(
+                pre_close=previous_close or 0,
+                open_price=bars[0].price,
+                current_price=bar.price,
+                average=avg,
+                points=[{"time": item.hm, "price": item.price} for item in bars[: idx + 1]],
+                time_text=bar.hm,
+            )
+            gate_state = str(gate.get("state") or "NEUTRAL")
+            preference = str(gate.get("preferredDirection") or "")
+            opening_wait = gate_state in {"PENDING_CONFIRMATION", "WAIT_DATA"} and bar.hm < "09:45"
+            allow_buy = not opening_wait and not (gate_state == "CONFIRMED" and preference != "BUY_FIRST")
+            allow_sell = not opening_wait and not (gate_state == "CONFIRMED" and preference != "SELL_FIRST")
+            if allow_buy and (_is_opening_buy_setup(bars, idx, bar, avg, lows, volumes) or _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)):
                 buy = bar
                 mode = "正T"
-            elif _is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes) or _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes):
+            elif allow_sell and (_is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes) or _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)):
                 sell_first = bar
                 mode = "反T"
             continue

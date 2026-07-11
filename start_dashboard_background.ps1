@@ -10,17 +10,18 @@ if ($oldPid) {
 $env:DASHBOARD_HOST = "0.0.0.0"
 $env:DASHBOARD_PORT = "8765"
 
-$python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
-if (-not $python) {
-  $fallback = "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe"
-  if (Test-Path $fallback) {
-    $python = $fallback
-  }
-}
+$candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
+    "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe",
+    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python314\python.exe",
+    (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+)
+
+$python = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if (-not $python) {
   throw "python.exe not found. Install Python or add it to PATH."
 }
 
-Start-Process -FilePath $python -ArgumentList "`"$PSScriptRoot\dashboard_app.py`"" -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+Start-Process -FilePath $python -ArgumentList "`"$(Join-Path $PSScriptRoot dashboard_app.py)`"" -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
 Write-Host "Dashboard started: http://127.0.0.1:8765/"

@@ -1,0 +1,52 @@
+:root{--rq-bg:#f8f5f1;--rq-paper:#fffdfa;--rq-paper-2:#fff8f1;--rq-ink:#3f281a;--rq-muted:#8d6d58;--rq-line:#ead9c8;--rq-orange:#ff8750;--rq-orange-2:#ffb277;--rq-green:#20a875;--rq-red:#dc625d;--rq-radius:16px;--rq-shadow:0 14px 36px rgba(105,65,35,.075);--rq-font:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif}
+body.rq-cute-page,body.rq-cute-console,body.rq-page-ranking,body.rq-page-market-radar,body.rq-page-commercial,body.rq-page-forbidden{font-family:var(--rq-font)!important;color:var(--rq-ink)}
+body.rq-cute-page,body.rq-page-ranking,body.rq-page-market-radar,body.rq-page-commercial,body.rq-page-forbidden{background:radial-gradient(circle at 82% 0,rgba(255,199,151,.17),transparent 25%),linear-gradient(180deg,#fffaf5,#f7f8f7)!important}
+body.rq-cute-page button,body.rq-cute-page input,body.rq-cute-page select,body.rq-cute-page textarea,body.rq-cute-console button,body.rq-cute-console input,body.rq-cute-console select,body.rq-cute-console textarea,body.rq-page-ranking button,body.rq-page-market-radar button{font-family:inherit}
+body.rq-cute-page button,body.rq-cute-page .btn,body.rq-page-ranking button,body.rq-page-market-radar button,body.rq-page-commercial .btn{min-height:38px;border-radius:11px!important;font-weight:850;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
+body.rq-cute-page button:hover,body.rq-cute-page .btn:hover,body.rq-page-ranking button:hover,body.rq-page-market-radar button:hover,body.rq-page-commercial .btn:hover{transform:translateY(-1px);box-shadow:0 9px 22px rgba(105,65,35,.09)}
+body.rq-cute-page button:focus-visible,body.rq-cute-page a:focus-visible,body.rq-cute-console button:focus-visible,body.rq-cute-console a:focus-visible,body.rq-page-ranking button:focus-visible,body.rq-page-market-radar button:focus-visible{outline:3px solid rgba(255,135,80,.3)!important;outline-offset:2px}
+body.rq-cute-page input,body.rq-cute-page select,body.rq-cute-page textarea{border-color:var(--rq-line)!important;background:#fff!important;color:var(--rq-ink)!important;border-radius:11px!important}
+body.rq-cute-page input:focus,body.rq-cute-page select:focus,body.rq-cute-page textarea:focus{border-color:#eea776!important;box-shadow:0 0 0 3px rgba(255,135,80,.12)!important;outline:0}
+
+/* Account, authentication, recharge and administration share one product shell. */
+body.rq-page-auth .shell,body.rq-page-account .shell,body.rq-page-recharge .shell,body.rq-page-admin .shell,body.rq-page-admin-login .shell{width:min(1160px,calc(100% - 32px))!important;margin:0 auto!important;padding-block:24px!important}
+body.rq-page-auth .top,body.rq-page-account .top,body.rq-page-recharge .top,body.rq-page-admin .top,body.rq-page-admin-login .top{border:1px solid var(--rq-line)!important;border-radius:18px!important;background:rgba(255,253,250,.92)!important;box-shadow:var(--rq-shadow)!important}
+body.rq-page-auth .card,body.rq-page-account .card,body.rq-page-recharge .card,body.rq-page-admin .card,body.rq-page-admin-login .card{border:1px solid var(--rq-line)!important;border-radius:18px!important;background:var(--rq-paper)!important;box-shadow:0 12px 30px rgba(105,65,35,.055)!important}
+body.rq-page-auth h1,body.rq-page-account h1,body.rq-page-recharge h1,body.rq-page-admin h1,body.rq-page-admin-login h1{letter-spacing:-.025em;color:var(--rq-ink)!important}
+body.rq-page-auth .sub,body.rq-page-account .sub,body.rq-page-recharge .sub,body.rq-page-admin .sub,body.rq-page-admin-login .sub{color:var(--rq-muted)!important}
+body.rq-page-auth button.primary,body.rq-page-recharge button.primary,body.rq-page-account button.primary,body.rq-page-admin button.primary,body.rq-page-admin-login button.primary{background:linear-gradient(135deg,var(--rq-orange-2),var(--rq-orange))!important;border-color:var(--rq-orange)!important;color:#fff!important;box-shadow:0 10px 22px rgba(255,135,80,.2)!important}
+body.rq-page-admin table{border-collapse:separate!important;border-spacing:0!important}body.rq-page-admin th{background:#fff6ec!important;color:#876249!important}body.rq-page-admin th,body.rq-page-admin td{border-color:#f0e2d5!important}
+
+/* Research suite: same navigation rhythm, cards and table language. */
+body.rq-page-simulation .shell,body.rq-page-research .shell,body.rq-page-rps .shell,body.rq-page-longhubang .shell{gap:12px!important;padding:12px!important;background:transparent!important}
+body.rq-page-simulation .suite-side,body.rq-page-research .suite-side,body.rq-page-rps .side,body.rq-page-longhubang .side{border:1px solid var(--rq-line)!important;border-radius:18px!important;background:rgba(255,253,250,.94)!important;box-shadow:var(--rq-shadow)!important}
+body.rq-page-simulation .top,body.rq-page-research .top,body.rq-page-rps .top,body.rq-page-longhubang .top{border:1px solid var(--rq-line)!important;border-radius:16px!important;background:rgba(255,253,250,.94)!important;box-shadow:0 10px 26px rgba(105,65,35,.05)!important}
+body.rq-page-simulation .panel,body.rq-page-research .panel,body.rq-page-rps .panel,body.rq-page-longhubang .panel,body.rq-page-simulation .metric,body.rq-page-research .card,body.rq-page-rps .card,body.rq-page-longhubang .card{border-color:var(--rq-line)!important;border-radius:16px!important;background:var(--rq-paper)!important;box-shadow:0 10px 28px rgba(105,65,35,.045)!important}
+body.rq-page-simulation th,body.rq-page-research th,body.rq-page-rps th,body.rq-page-longhubang th{background:#fff7ef!important;color:#8d6d58!important;font-size:11px!important;letter-spacing:.025em}
+body.rq-page-simulation td,body.rq-page-research td,body.rq-page-rps td,body.rq-page-longhubang td{border-color:#f0e3d7!important}
+body.rq-page-simulation .primary,body.rq-page-research .primary,body.rq-page-rps .refresh,body.rq-page-longhubang .refresh{background:linear-gradient(135deg,var(--rq-orange-2),var(--rq-orange))!important;border-color:var(--rq-orange)!important;color:#fff!important}
+
+/* Ranking and radar now use the same frame as the rest of the product. */
+body.rq-page-ranking .layout,body.rq-page-market-radar .layout{gap:12px!important;padding:12px!important;background:transparent!important}
+body.rq-page-ranking .side,body.rq-page-market-radar .side{border-color:var(--rq-line)!important;border-radius:18px!important;background:rgba(255,253,250,.95)!important;box-shadow:var(--rq-shadow)!important}
+body.rq-page-ranking .top,body.rq-page-market-radar .top{border-color:var(--rq-line)!important;border-radius:16px!important;background:var(--rq-paper)!important;box-shadow:0 10px 26px rgba(105,65,35,.05)!important}
+body.rq-page-ranking .panel,body.rq-page-ranking .stat,body.rq-page-market-radar .card{border-color:var(--rq-line)!important;border-radius:16px!important;background:var(--rq-paper)!important;box-shadow:0 10px 28px rgba(105,65,35,.045)!important}
+body.rq-page-ranking .nav.active,body.rq-page-market-radar .nav.active{background:linear-gradient(135deg,var(--rq-orange-2),var(--rq-orange))!important;color:#fff!important;box-shadow:0 10px 22px rgba(255,135,80,.18)!important}
+body.rq-page-ranking .refresh,body.rq-page-market-radar .refresh{background:linear-gradient(135deg,var(--rq-orange-2),var(--rq-orange))!important;border-color:var(--rq-orange)!important;color:#fff!important}
+body.rq-page-ranking th{background:#fff7ef!important;color:var(--rq-muted)!important}
+
+/* Commercial feature hub inherits the same brand tokens without changing its structure. */
+body.rq-page-commercial .page{width:min(1180px,calc(100% - 32px))!important;margin:auto!important;padding:18px 0 46px!important}
+body.rq-page-commercial .nav,body.rq-page-commercial .hero,body.rq-page-commercial .card,body.rq-page-commercial .preview{border-color:var(--rq-line)!important;background:var(--rq-paper)!important;box-shadow:var(--rq-shadow)!important}
+body.rq-page-commercial .nav,body.rq-page-commercial .hero,body.rq-page-commercial .preview{border-radius:18px!important}
+body.rq-page-commercial .primary{background:linear-gradient(135deg,var(--rq-orange-2),var(--rq-orange))!important;color:#fff!important;border-color:var(--rq-orange)!important}
+
+/* Console: preserve dense trading layout while harmonizing typography and controls. */
+body.rq-cute-console{--rq862-orange:var(--rq-orange)!important;--rq862-green:var(--rq-green)!important;font-family:var(--rq-font)!important}
+body.rq-cute-console .top,body.rq-cute-console .stock-manager,body.rq-cute-console .rqf-hero,body.rq-cute-console .rqf-action,body.rq-cute-console .rqf-chart,body.rq-cute-console .rqf-note,body.rq-cute-console .focus-rail-card{border-color:var(--rq-line)!important}
+body.rq-cute-console button{font-weight:850}body.rq-cute-console .title,body.rq-cute-console h1,body.rq-cute-console h2,body.rq-cute-console h3{letter-spacing:-.015em}
+
+body.rq-page-forbidden{min-height:100vh;display:grid;place-items:center;padding:20px}body.rq-page-forbidden .box{max-width:520px;padding:38px;border:1px solid var(--rq-line);border-radius:20px;background:var(--rq-paper);box-shadow:var(--rq-shadow);text-align:center}body.rq-page-forbidden a{display:inline-flex;margin-top:12px;padding:10px 18px;border-radius:11px;background:var(--rq-orange);color:#fff;text-decoration:none;font-weight:900}
+
+@media(max-width:900px){body.rq-cute-page .shell,body.rq-page-commercial .page{width:min(100% - 20px,1180px)!important}body.rq-page-ranking .layout,body.rq-page-market-radar .layout{padding:8px!important}.rq-page-ranking .stats{grid-template-columns:repeat(2,1fr)!important}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}

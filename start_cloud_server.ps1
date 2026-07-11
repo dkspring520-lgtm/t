@@ -1,19 +1,21 @@
 $ErrorActionPreference = "Stop"
-Set-Location -Path $PSScriptRoot
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location -Path $root
 
 $env:DASHBOARD_HOST = "0.0.0.0"
 $env:DASHBOARD_PORT = "8765"
 
-$python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
-if (-not $python) {
-  $fallback = "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe"
-  if (Test-Path $fallback) {
-    $python = $fallback
-  }
-}
+$candidates = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
+    "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe",
+    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python314\python.exe",
+    (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+)
+
+$python = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if (-not $python) {
-  throw "python.exe not found. Install Python or add it to PATH."
+  throw "python.exe not found. Install Python 3.14+ and ensure PATH is available."
 }
 
-& $python "$PSScriptRoot\dashboard_app.py"
+& $python (Join-Path $root "dashboard_app.py")

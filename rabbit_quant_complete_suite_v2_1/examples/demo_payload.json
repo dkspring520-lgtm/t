@@ -1,0 +1,81 @@
+{
+  "version": "2.1.0",
+  "symbol": "601899",
+  "auction_radar": {
+    "available": true,
+    "stage": "OPEN_VALIDATED",
+    "data_level": "完整",
+    "gap": {
+      "percent": 0.62
+    },
+    "prediction": {
+      "label": "高开低走倾向",
+      "code": "HIGH_OPEN_FADE",
+      "probability": 68,
+      "confidence_label": "中等"
+    },
+    "reasons": [
+      "竞价尾段价格走弱",
+      "未匹配卖盘占优",
+      "所属板块竞价偏弱",
+      "开盘接近日线压力"
+    ],
+    "validation": {
+      "label": "部分符合，继续观察"
+    },
+    "strategy_action": "等待冲高回落确认后再考虑反T",
+    "risk_note": "09:35未确认前不得直接作为买卖指令。"
+  },
+  "big_trend": {
+    "current": {
+      "label": "上升趋势",
+      "score": 76,
+      "trend_strength": 78
+    },
+    "forecasts": {
+      "20d": {
+        "label": "震荡偏强",
+        "score": 66,
+        "probabilities": {
+          "up": 64,
+          "range": 24,
+          "down": 12
+        }
+      }
+    },
+    "confidence_label": "中等",
+    "levels": {
+      "support_reference": 27.25,
+      "resistance_reference": 29.1,
+      "trend_invalidation_reference": 27.05
+    },
+    "model_status": "试运行",
+    "as_of": "2026-07-10"
+  },
+  "preopen": {
+    "label": "偏强开盘",
+    "score": 64,
+    "confidence_label": "中等",
+    "version": "竞价版"
+  },
+  "intraday": {
+    "label": "震荡偏强",
+    "score": 62,
+    "confidence_label": "中等"
+  },
+  "smart_t_context": {
+    "label": "等待冲高确认",
+    "score": 70,
+    "action": "大趋势向上，但竞价存在高开低走风险；先观察，不直接卖出。",
+    "mode": "WAIT"
+  },
+  "summary": "大趋势向上，集合竞价偏弱，等待09:35确认后再决定做T方向。",
+  "learning": {
+    "version": "v2.0.1",
+    "sample_count": 42,
+    "status": "影子测试中",
+    "recent_net_win_rate": 63,
+    "finding": "上涨趋势中过早卖出偏多",
+    "candidate_change": "卖出确认门槛 +2分"
+  }
+}

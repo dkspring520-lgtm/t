@@ -1,0 +1,109 @@
+:root{--modern-bg:#f7f7f6;--modern-paper:#fff;--modern-ink:#29231f;--modern-muted:#7c716a;--modern-line:#e9e5e1;--modern-orange:#ff8750;--modern-shadow:0 1px 2px rgba(38,29,23,.025),0 12px 30px rgba(38,29,23,.055)}
+body.rq-cute-page,body.rq-page-ranking,body.rq-page-market-radar,body.rq-page-commercial,body.rq-page-forbidden{color:var(--modern-ink)!important;background:radial-gradient(circle at 86% 0,rgba(255,183,128,.12),transparent 28%),var(--modern-bg)!important}
+body.rq-cute-page .card,body.rq-cute-page .panel,body.rq-page-ranking .card,body.rq-page-ranking .panel,body.rq-page-ranking .stat,body.rq-page-market-radar .card,body.rq-page-commercial .card{background:var(--modern-paper)!important;border-color:var(--modern-line)!important;box-shadow:var(--modern-shadow)!important}
+body.rq-cute-page button.primary,body.rq-page-ranking .refresh,body.rq-page-market-radar .refresh,body.rq-page-commercial .primary{background:var(--modern-orange)!important;border-color:var(--modern-orange)!important;color:#fff!important;box-shadow:0 8px 18px rgba(255,135,80,.18)!important}
+body.rq-cute-page .top,body.rq-page-ranking .top,body.rq-page-market-radar .top,body.rq-page-commercial .nav{background:rgba(255,255,255,.86)!important;border-color:var(--modern-line)!important;backdrop-filter:blur(16px)}
+body.rq-page-simulation th,body.rq-page-research th,body.rq-page-rps th,body.rq-page-longhubang th,body.rq-page-ranking th,body.rq-page-admin th{background:#faf8f6!important;color:#746b65!important}
+body.rq-page-simulation tr:hover td,body.rq-page-research tr:hover td,body.rq-page-rps tr:hover td,body.rq-page-longhubang tr:hover td,body.rq-page-ranking tr:hover td{background:#fffaf6!important}
+body.rq-cute-console .rqf-hero,body.rq-cute-console .rqf-action,body.rq-cute-console .rqf-chart,body.rq-cute-console .rqf-note,body.rq-cute-console .focus-rail-card{background:#fff!important;border-color:var(--modern-line)!important;box-shadow:0 1px 2px rgba(38,29,23,.025),0 8px 22px rgba(38,29,23,.045)!important}
+body.rq-cute-console .side-nav,body.rq-cute-console .top,body.rq-cute-console .stock-manager{background:rgba(255,255,255,.91)!important;backdrop-filter:blur(16px)}
+body.rq-cute-console button:not(.active):not(.primary){box-shadow:none!important}
+
+/* Homepage-only refinements; selectors match the product homepage structure. */
+body:not([class]){--bg:#f8f7f5;--paper:#fff;--ink:#29231f;--muted:#7c716a;--line:#e9e5e1;--shadow:0 1px 2px rgba(38,29,23,.03),0 18px 48px rgba(38,29,23,.075);background:radial-gradient(circle at 85% 3%,rgba(255,181,125,.15),transparent 26%),linear-gradient(180deg,#fbfaf8 0,#fff 38%,#f6f8f6 100%)}
+body:not([class])>.nav{background:rgba(255,255,255,.82);border-color:rgba(233,229,225,.88)}
+body:not([class]) .btn.primary{background:#ff8750;box-shadow:0 10px 22px rgba(255,135,80,.2)}
+body:not([class]) .card{box-shadow:0 1px 2px rgba(38,29,23,.02),0 10px 26px rgba(38,29,23,.04)}
+body:not([class]) .section.alt{background:#faf8f5;border-color:#eee9e4}
+body:not([class]) .product{background:rgba(255,255,255,.82);border-color:#e9e5e1;transform:none}
+body:not([class]) .window-top,body:not([class]) .side,body:not([class]) .rail{background:#faf8f5}
+body:not([class]) .main{background:#fff}
+
+/* Round 2: spacing, hierarchy, navigation and data-density consistency. */
+body.rq-cute-page,body.rq-page-ranking,body.rq-page-market-radar,body.rq-page-commercial{font-size:14px!important;line-height:1.55!important}
+body.rq-cute-page h1,body.rq-cute-page h2,body.rq-cute-page h3,body.rq-page-ranking .title,body.rq-page-market-radar .title,body.rq-page-commercial h1,body.rq-page-commercial h2{letter-spacing:-.025em!important;text-wrap:balance}
+body.rq-cute-page .sub,body.rq-cute-page .muted,body.rq-page-ranking .sub,body.rq-page-market-radar .sub,body.rq-page-commercial .sub{color:var(--modern-muted)!important}
+body.rq-cute-page .top,body.rq-page-ranking .top,body.rq-page-market-radar .top{min-height:64px!important;padding-inline:20px!important}
+body.rq-cute-page .card,body.rq-cute-page .panel,body.rq-page-ranking .card,body.rq-page-ranking .panel,body.rq-page-ranking .stat,body.rq-page-market-radar .card{border-radius:18px!important}
+body.rq-cute-page .side button,body.rq-cute-page .suite-side button,body.rq-page-ranking .nav,body.rq-page-market-radar .nav{min-height:40px!important;border-radius:11px!important;font-weight:850!important}
+body.rq-cute-page .side button:hover,body.rq-cute-page .suite-side button:hover,body.rq-page-ranking .nav:hover,body.rq-page-market-radar .nav:hover{background:#fff6ef!important;color:#b95a2e!important}
+body.rq-cute-page .side button.active,body.rq-cute-page .suite-side button.active,body.rq-page-ranking .nav.active,body.rq-page-market-radar .nav.active{background:var(--modern-orange)!important;color:#fff!important}
+body.rq-cute-page table,body.rq-page-ranking table{font-variant-numeric:tabular-nums}
+body.rq-cute-page th,body.rq-page-ranking th{height:42px!important;padding-block:10px!important;text-transform:none!important}
+body.rq-cute-page td,body.rq-page-ranking td{padding-block:11px!important}
+body.rq-cute-page .tag,body.rq-cute-page .badge,body.rq-page-ranking .tag,body.rq-page-market-radar .status{border-radius:999px!important;font-weight:850!important}
+body.rq-cute-page .empty,body.rq-page-ranking .empty{min-height:140px;color:var(--modern-muted)!important;background:linear-gradient(180deg,#fff,#fcfaf8)!important}
+body.rq-cute-page ::-webkit-scrollbar,body.rq-cute-console ::-webkit-scrollbar,body.rq-page-ranking ::-webkit-scrollbar,body.rq-page-market-radar ::-webkit-scrollbar{width:9px;height:9px}
+body.rq-cute-page ::-webkit-scrollbar-thumb,body.rq-cute-console ::-webkit-scrollbar-thumb,body.rq-page-ranking ::-webkit-scrollbar-thumb,body.rq-page-market-radar ::-webkit-scrollbar-thumb{background:#d9d3ce;border:2px solid transparent;border-radius:999px;background-clip:padding-box}
+body.rq-cute-page ::-webkit-scrollbar-track,body.rq-cute-console ::-webkit-scrollbar-track,body.rq-page-ranking ::-webkit-scrollbar-track,body.rq-page-market-radar ::-webkit-scrollbar-track{background:transparent}
+
+/* Auth and member pages: focused forms instead of oversized marketing panels. */
+body.rq-page-auth .field,body.rq-page-recharge .field,body.rq-page-admin-login .field{margin-bottom:15px!important}
+body.rq-page-auth label,body.rq-page-recharge label,body.rq-page-admin-login label{display:block;margin-bottom:6px;color:#5e554f!important;font-size:12px!important;font-weight:850!important}
+body.rq-page-auth input,body.rq-page-recharge input,body.rq-page-admin-login input{height:44px!important;padding-inline:13px!important}
+body.rq-page-auth .hero,body.rq-page-recharge .hero{background:linear-gradient(145deg,#fffaf6,#fff)!important}
+body.rq-page-account .cards,body.rq-page-admin .cards{gap:12px!important}
+body.rq-page-account .card,body.rq-page-admin .card{padding:18px!important}
+
+/* Research surfaces: keep filters compact and give results visual priority. */
+body.rq-page-simulation .controls,body.rq-page-research .controls,body.rq-page-research .single-bar{gap:9px!important}
+body.rq-page-simulation .metrics,body.rq-page-research .metrics{gap:10px!important}
+body.rq-page-simulation .metric,body.rq-page-research .metric{padding:14px 16px!important}
+body.rq-page-simulation .metric b,body.rq-page-research .metric b{font-size:22px!important;letter-spacing:-.02em}
+body.rq-page-research .status,body.rq-page-simulation .status{border-radius:12px!important}
+
+/* Console keeps its density, but uses clearer primary/secondary emphasis. */
+body.rq-cute-console .rqf-price,body.rq-cute-console .rqf-metric b,body.rq-cute-console .gauge-score{font-variant-numeric:tabular-nums}
+body.rq-cute-console .rqf-title,body.rq-cute-console .title{color:var(--modern-ink)!important}
+body.rq-cute-console .rqf-sub,body.rq-cute-console .sub,body.rq-cute-console .muted{color:var(--modern-muted)!important}
+body.rq-cute-console .rqf-action{background:linear-gradient(90deg,#fff8f2,#fff)!important}
+body.rq-cute-console .tag.active,body.rq-cute-console .side-menu button.active{background:var(--modern-orange)!important;border-color:var(--modern-orange)!important;color:#fff!important}
+body.rq-cute-console .top-actions #status{background:#ecfaf4!important;color:#16835d!important}
+
+@media(max-width:1180px){body.rq-cute-page .top,body.rq-page-ranking .top,body.rq-page-market-radar .top{padding-inline:14px!important}body.rq-cute-page .card,body.rq-cute-page .panel{border-radius:15px!important}}
+@media(max-width:700px){body.rq-cute-page,body.rq-page-ranking,body.rq-page-market-radar{font-size:13px!important}body.rq-cute-page .top,body.rq-page-ranking .top,body.rq-page-market-radar .top{min-height:58px!important}body.rq-page-account .cards,body.rq-page-admin .cards{grid-template-columns:1fr 1fr!important}}
+
+/* Preserve the original high-impact Rabbit homepage as the brand hero. */
+.legacy-home{position:relative;width:min(1520px,calc(100% - 32px));aspect-ratio:1672/806;margin:20px auto 0;border:1px solid #ece6e0;border-radius:28px;background:#fff8f1;box-shadow:0 18px 50px rgba(77,48,29,.09);overflow:hidden}
+.legacy-home>img{position:absolute;inset:0 auto auto 0;display:block;width:100%;height:auto;transform:translateY(-14.35%);user-select:none;-webkit-user-drag:none}
+.legacy-hotspot{position:absolute;z-index:2;display:block;border-radius:999px;outline:0;transition:background .16s ease,box-shadow .16s ease,transform .16s ease}
+.legacy-hotspot:hover{background:rgba(255,135,80,.055);box-shadow:0 0 0 3px rgba(255,135,80,.16),0 12px 28px rgba(255,135,80,.15);transform:translateY(-1px)}
+.legacy-hotspot:focus-visible{background:rgba(255,135,80,.08);box-shadow:0 0 0 4px rgba(255,135,80,.28)}
+.legacy-home .hs-start{left:5.5%;top:44.7%;width:14%;height:7.2%}.legacy-home .hs-demo{left:21.5%;top:44.7%;width:10.2%;height:7.2%}
+.modern-home-nav{position:sticky!important;top:0!important}.modern-home-nav .nav-inner{height:68px}.modern-home-nav .btn{height:40px;min-width:110px;border-radius:12px;padding:0 17px;box-shadow:none}.modern-home-nav .btn.primary{min-width:126px}.modern-home-nav .account-btn.is-logged-in{color:#16835d;border-color:#cfeadf;background:#effaf5}.legacy-home~main>.hero{display:none}.legacy-home~main>.section:first-of-type{padding-top:72px}
+@media(max-width:900px){.legacy-home{width:calc(100% - 20px);aspect-ratio:980/620;border-radius:20px;overflow:hidden}.legacy-home>img{width:1280px;max-width:none;left:50%;transform:translate(-50%,-14.35%)}.legacy-home .legacy-hotspot{display:none}.legacy-home~main>.section:first-of-type{padding-top:52px}}
+
+/* Navigation repair: every product category stays visible and uses one rhythm. */
+html body button[onclick*="/rps"],html body button[onclick*="/longhubang"],html body a[href="/rps"],html body a[href="/longhubang"]{display:inline-flex!important}
+body.rq-cute-console .side-menu button,body.rq-page-research .side-menu button,body.rq-page-simulation .side-menu button,body.rq-page-rps .suite-side>button,body.rq-page-longhubang .suite-side>button{width:100%!important;height:40px!important;min-height:40px!important;max-height:40px!important;padding:0 10px!important;border-radius:11px!important;font-size:13px!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:8px!important}
+body.rq-cute-console .side-menu button small,body.rq-page-research .side-menu button small,body.rq-page-simulation .side-menu button small,body.rq-page-rps .suite-side>button small,body.rq-page-longhubang .suite-side>button small{width:24px!important;min-width:24px!important;height:24px!important;min-height:24px!important;margin:0!important;border-radius:8px!important;display:grid!important;place-items:center!important}
+body.rq-page-rps .suite-side button[onclick*="/rps"],body.rq-page-longhubang .suite-side button[onclick*="/longhubang"]{background:var(--modern-orange)!important;border-color:var(--modern-orange)!important;color:#fff!important;box-shadow:0 8px 18px rgba(255,135,80,.16)!important}
+body.rq-page-rps .suite-side button[onclick*="/rps"] small,body.rq-page-longhubang .suite-side button[onclick*="/longhubang"] small{color:#fff!important;border-color:rgba(255,255,255,.35)!important;background:rgba(255,255,255,.16)!important}
+.radar-nav small{font-size:10px!important;color:#df7440!important;background:#fff7ef!important;border-color:#f0d7be!important}
+
+/* Button system: navigation, standard actions and compact tools no longer compete. */
+body.rq-cute-page button,body.rq-cute-page a.btn,body.rq-page-ranking button,body.rq-page-market-radar button{height:38px!important;min-height:38px!important;padding:0 14px!important;border-radius:11px!important;font-size:13px!important;line-height:1!important;display:inline-flex;align-items:center;justify-content:center;gap:7px}
+body.rq-cute-page .top .actions button,body.rq-cute-page .top .actions a.btn,body.rq-page-ranking .top button,body.rq-page-market-radar .top button{height:38px!important;min-width:96px!important}
+body.rq-cute-page button.primary,body.rq-cute-page a.btn.primary{min-width:104px!important}
+body.rq-cute-page button.icon,body.rq-cute-page button[title="关闭"],body.rq-cute-page .rq-avatar-close{width:34px!important;min-width:34px!important;height:34px!important;min-height:34px!important;padding:0!important}
+body.rq-cute-page .cat{height:36px!important;min-height:36px!important;padding:0 12px!important;border-radius:10px!important}
+
+/* Softer route change: short entrance motion keeps category jumps from feeling abrupt. */
+@keyframes rqPageIn{from{opacity:.35;transform:translateY(4px)}to{opacity:1;transform:none}}
+body.rq-cute-page>*,body.rq-cute-console .panel,body.rq-page-ranking .layout,body.rq-page-market-radar .layout{animation:rqPageIn .18s ease-out both}
+@media(prefers-reduced-motion:reduce){body.rq-cute-page>*,body.rq-cute-console .panel,body.rq-page-ranking .layout,body.rq-page-market-radar .layout{animation:none!important}}
+
+/* Brand identity: one compact Rabbit logo everywhere; user avatars stay untouched. */
+img[data-rabbit-site-logo="1"]{display:block!important;object-fit:cover!important;object-position:center!important;padding:0!important;border:1px solid #f0dfd1!important;border-radius:12px!important;background:#fff8f2!important;box-shadow:0 6px 16px rgba(255,135,80,.12)!important}
+.side-brand img[data-rabbit-site-logo="1"],.suite-brand img[data-rabbit-site-logo="1"],.brand img[data-rabbit-site-logo="1"],.app-logo[data-rabbit-site-logo="1"]{width:42px!important;min-width:42px!important;height:42px!important;min-height:42px!important}
+body.rq-cute-console .side-brand img[data-rabbit-site-logo="1"]{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}
+body.rq-page-ranking .brand img[data-rabbit-site-logo="1"],body.rq-page-market-radar .brand img[data-rabbit-site-logo="1"]{width:46px!important;height:46px!important}
+.modern-home-nav .brand img{width:42px!important;height:42px!important;object-fit:cover!important;border-radius:12px!important}
+
+/* Interaction states and brand lockups shared by all product pages. */
+body.rq-cute-page button:disabled,body.rq-cute-console button:disabled,body.rq-page-ranking button:disabled,body.rq-page-market-radar button:disabled{cursor:not-allowed!important;opacity:.58!important;transform:none!important;box-shadow:none!important;filter:saturate(.65)!important}
+body.rq-cute-page button:not(:disabled):active,body.rq-cute-console button:not(:disabled):active,body.rq-page-ranking button:not(:disabled):active,body.rq-page-market-radar button:not(:disabled):active{transform:translateY(1px)!important}
+body.rq-cute-page a.btn,body.rq-page-commercial a.btn,.modern-home-nav a.btn{text-decoration:none!important}
+body.rq-cute-page .actions,body.rq-page-ranking .actions,body.rq-page-market-radar .actions{display:flex!important;align-items:center!important;gap:8px!important;flex-wrap:wrap}
+body.rq-cute-page .status,body.rq-cute-console #status,body.rq-page-market-radar .status{font-variant-numeric:tabular-nums}
+.side-brand,.suite-brand,.brand,.app-brand{align-items:center!important}.side-brand>div,.suite-brand>div,.brand>div,.app-brand>div{min-width:0}.side-brand b,.suite-brand b,.brand b,.app-brand b,.side-brand span,.suite-brand span,.brand span,.app-brand span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

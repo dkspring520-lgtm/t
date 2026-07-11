@@ -21,6 +21,8 @@ monitor_data.jsonl
 simulation_history.jsonl
 screener_history.json
 last_sim_result.json
+auto_t_state.json
+market_radar_history.json
 last_signal.txt
 signal_log.json
 decision_log.json
@@ -95,3 +97,18 @@ hermes_keepalive.log
 Thumbs.db
 .vscode/
 .idea/
+
+# Local visual QA and historical release notes
+preview_*.png
+final_preview*.png
+screens*.png
+screens_*/
+RABBIT_V*.md
+RABBIT_V*.txt
+README_v*.txt
+README_START_HERE.txt
+START_HERE.bat
+start_local_dashboard.bat
+start_rabbit_v*.bat
+network_repair.ps1
+network_repair_result.txt
