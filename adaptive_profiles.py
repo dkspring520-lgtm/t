@@ -44,20 +44,31 @@ def _service(database_path: Path, profile: str):
 
 def _bar_frame(row: dict):
     pd, _, _, _ = _dependencies()
-    date = datetime.now().strftime("%Y-%m-%d")
     records = []
     index = []
-    previous_volume = 0.0
     for item in row.get("prices") or []:
         time_text = str(item.get("time") or "")[:5]
         price = float(item.get("price") or 0)
-        if len(time_text) != 5 or price <= 0:
+        date = str(item.get("date") or row.get("date") or "")[:10]
+        # Learning only accepts complete, source-dated increment bars.  Old
+        # price-only result snapshots cannot yield a truthful VWAP or volume
+        # ratio and are excluded instead of being filled with fake volume.
+        if (
+            len(time_text) != 5
+            or len(date) != 10
+            or price <= 0
+            or item.get("dataQuality") not in {None, "full"}
+            or item.get("volumeDelta") is None
+            or item.get("amountDelta") is None
+        ):
             continue
-        total_volume = float(item.get("volume") or 0)
-        minute_volume = max(0.0, total_volume - previous_volume) if total_volume >= previous_volume else max(0.0, total_volume)
-        previous_volume = total_volume
+        try:
+            minute_volume = max(0.0, float(item.get("volumeDelta")))
+            minute_amount = max(0.0, float(item.get("amountDelta")))
+        except (TypeError, ValueError):
+            continue
         index.append(pd.Timestamp(f"{date} {time_text}"))
-        records.append({"open": price, "high": price, "low": price, "close": price, "volume": minute_volume})
+        records.append({"open": price, "high": price, "low": price, "close": price, "volume": minute_volume, "amount": minute_amount})
     if not records:
         return pd.DataFrame()
     frame = pd.DataFrame(records, index=pd.DatetimeIndex(index))
@@ -69,7 +80,7 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
     pd, _, _, _ = _dependencies()
     service = _service(database_path, profile)
     recorded_signals = recorded_trades = labeled = 0
-    today = datetime.now().strftime("%Y-%m-%d")
+    skipped_price_only = 0
     expanded_rows = []
     for row in stocks:
         cycles = row.get("cycles") if isinstance(row.get("cycles"), list) else []
@@ -87,8 +98,10 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         entry_price = float(row.get("sellPrice") if direction == "SELL_FIRST" else row.get("buyPrice") or 0)
         exit_price = float(row.get("buyPrice") if direction == "SELL_FIRST" else row.get("sellPrice") or 0)
         bars = _bar_frame(row)
-        timestamp = pd.Timestamp(f"{today} {entry_time}") if len(entry_time) == 5 else None
-        if timestamp is None or timestamp not in bars.index or entry_price <= 0:
+        matching = bars.index[bars.index.strftime("%H:%M") == entry_time] if len(entry_time) == 5 and not bars.empty else []
+        timestamp = matching[-1] if len(matching) else None
+        if timestamp is None or entry_price <= 0:
+            skipped_price_only += 1
             continue
         history = bars.loc[:timestamp]
         close = history["close"]
@@ -101,7 +114,8 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         volume_ma = float(volume.tail(20).mean() or 0)
         volume_ratio = float(volume.iloc[-1] / volume_ma) if volume_ma > 0 else 1.0
         total_volume = float(volume.sum())
-        learned_vwap = float((close * volume).sum() / total_volume) if total_volume > 0 else entry_price
+        total_amount = float(history["amount"].sum())
+        learned_vwap = total_amount / (total_volume * 100.0) if total_volume > 0 and total_amount > 0 else entry_price
         atr14 = float(close.diff().abs().ewm(alpha=1 / 14, adjust=False).mean().iloc[-1] or 0)
         recent = close.tail(20)
         position = float((entry_price - recent.min()) / max(float(recent.max() - recent.min()), 1e-9))
@@ -124,11 +138,12 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         }], index=pd.DatetimeIndex([timestamp]))
         trade_frame = pd.DataFrame()
         if len(exit_time) == 5 and exit_price > 0:
+            trade_date = timestamp.strftime("%Y-%m-%d")
             trade_frame = pd.DataFrame([{
-                "date": today,
+                "date": trade_date,
                 "direction": direction,
-                "entry_time": f"{today}T{entry_time}:00",
-                "exit_time": f"{today}T{exit_time}:00",
+                "entry_time": f"{trade_date}T{entry_time}:00",
+                "exit_time": f"{trade_date}T{exit_time}:00",
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "net_return": float(row.get("pnl") or 0) / 100.0,
@@ -150,6 +165,7 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         "recordedSignals": recorded_signals,
         "recordedTrades": recorded_trades,
         "labeledSignalsThisRun": labeled,
+        "skippedPriceOnly": skipped_price_only,
         "proposal": proposal.to_dict(),
         "review": review.to_dict(),
         "manualPromotionOnly": True,

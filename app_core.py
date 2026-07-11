@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, urlparse
 from rabbit_market_radar import calculate_market_radar, update_radar_history
 from auction_direction import evaluate_auction_gate
 from adaptive_profiles import profile_status, promote_profile, record_profile_run, rollback_profile, runtime_profile_params
-from smart_t_policy import evaluate_smart_t
+from smart_t_policy import evaluate_trade_decision
 
 BASE_DIR = Path(__file__).resolve().parent
 HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
@@ -473,7 +473,7 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"><link rel="stylesheet" href="/assets/app-navigation.css?v=1"><link rel="stylesheet" href="/assets/layout-unified.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
@@ -2478,7 +2478,7 @@ def demo_realtime_payload(email: str | None = None, error: str = "") -> dict:
         row["auctionRadar"] = auction_gate
         if isinstance(row.get("opening"), dict):
             row["opening"]["auctionGate"] = auction_gate
-        row["smartT"] = evaluate_smart_t(
+        row["smartT"] = evaluate_trade_decision(
             profile=smart_profile,
             time_text=row.get("time"),
             price=row.get("price"),
@@ -2598,7 +2598,7 @@ def realtime_payload(email: str | None = None) -> dict:
                 int(getattr(signal, "score", 0) or 0) if signal else 0,
                 round(float(reminder_view.get("score") or 0) / 10) if reminder_is_confirmed else 0,
             )
-            smart_t = evaluate_smart_t(
+            smart_t = evaluate_trade_decision(
                 profile=smart_profile,
                 time_text=quote_time,
                 price=quote.price if quote else 0,
@@ -5224,6 +5224,8 @@ def save_strategy_options(options: dict, email: str | None = None) -> None:
         incoming["strategy_mode"] = str(options.get("strategyMode") or "官方默认策略")[:32]
     if "customStrategy" in options:
         incoming["custom_strategy_note"] = str(options.get("customStrategy") or "")[:2200]
+    if str(options.get("strategyMode") or "") == "自定义策略":
+        incoming.update(custom_strategy_overrides(str(options.get("customStrategy") or "")))
     if not incoming:
         return
     try:
@@ -5239,6 +5241,46 @@ def save_strategy_options(options: dict, email: str | None = None) -> None:
         account_strategy_path(email).write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+    # Profile files contain adaptive deltas, but explicit user settings must
+    # win over old snapshots so live monitoring and simulation remain aligned.
+    for profile in ("steady", "balanced", "sensitive", "quantbrain"):
+        path = account_profile_strategy_path(email, profile)
+        try:
+            profile_data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(profile_data, dict):
+                profile_data = {}
+            profile_data.update(incoming)
+            profile_data["last_updated"] = current["last_updated"]
+            path.write_text(json.dumps(profile_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            continue
+
+
+def custom_strategy_overrides(note: str) -> dict:
+    """Convert a small, auditable Chinese strategy template to bounded knobs.
+
+    This is intentionally not a script runner: text can only adjust the same
+    validated thresholds exposed by the UI.
+    """
+    text = str(note or "")[:2200]
+    rules = (
+        (r"(?:低吸|买入|正T)[^\d-]{0,12}(-?\d+(?:\.\d+)?)%?", "buy_min_dev", -1.20, -3.00, -0.50),
+        (r"(?:高抛|卖出|反T)[^\d-]{0,12}(\d+(?:\.\d+)?)%?", "sell_min_dev", 1.40, 0.50, 3.00),
+        (r"(?:每天|单日).{0,8}?(\d+)\s*(?:次|轮)", "max_daily_cycles", 3, 1, 5),
+        (r"(?:冷却|间隔).{0,8}?(\d+)\s*(?:分钟|分)", "cycle_cooldown_minutes", 5, 3, 30),
+    )
+    out: dict = {}
+    for pattern, key, default, low, high in rules:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        value = clamp_float(match.group(1), default, low, high)
+        out[key] = int(value) if isinstance(default, int) else value
+    if "buy_min_dev" in out:
+        out["buy_max_dev"] = min(float(out["buy_min_dev"]) - 0.55, -1.60)
+    if "sell_min_dev" in out:
+        out["sell_max_dev"] = max(float(out["sell_min_dev"]) + 0.55, 1.80)
+    return out
 
 
 def clamp_float(value: object, default: float, low: float, high: float) -> float:
@@ -7382,8 +7424,11 @@ def rabbit_v72_polish_html(html: str) -> str:
         ) + "</div>"
         html = re.sub(r'<div class="side-menu">.*?</div>', '<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
     if "rq-page-market-radar" in html or "radar-shell" in html:
-        html = re.sub(r'<button class="nav"[^>]*>.*?</button>', '', html, flags=re.S)
-        html = re.sub(r'(<div class="brand">.*?</div>)', r'\1<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
+        # The radar template has an inner text <div> inside .brand.  Match the
+        # outer closing tag as well, otherwise the shared nav is inserted into
+        # the logo block and the legacy active button remains visible.
+        html = re.sub(r'<button\b[^>]*\bclass="[^"]*\bnav\b[^"]*"[^>]*>.*?</button>', '', html, flags=re.S)
+        html = re.sub(r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)', r'\1<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
     html = html.replace("<strong>${escapeHtml(s.name)}</strong><em>${escapeHtml(s.code)}</em>", "<strong>${escapeHtml(s.name)}</strong>")
     html = html.replace(
         '<img src="/assets/rabbit-avatar.png"',
@@ -15764,7 +15809,8 @@ const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false
 async function loadAccountBadge(){try{const res=await fetch('/api/account',{cache:'no-store'});const data=await res.json();const account=data.account||{};const nick=account.nickname||account.email||account.userId||'用户';const plan=account.plan||'体验版';const logged=!!data.loggedIn;document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent=logged?nick:'未登录');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent=logged?`${plan} · 点击进入个人中心`:'未登录 · 点击登录');document.querySelectorAll('#sideAvatar,.side-avatar,.suite-avatar').forEach(el=>el.textContent=String(nick).trim().slice(0,1).toUpperCase()||'兔')}catch(e){document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent='用户');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent='点击进入个人中心')}}
 window.addEventListener('DOMContentLoaded',async()=>{loadAccountBadge();await loadSettings();await syncWatchlistStocks(false);loadHistory();setResultVisible(false,'点击“开始测试”后显示结果。');});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),vwap_take_profit_pct:0.25,normal_take_profit_pct:0.6,late_take_profit_pct:0.45}}
+let simulationStrategy={vwap_take_profit_pct:0.25,normal_take_profit_pct:0.6,late_take_profit_pct:0.45};
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),...simulationStrategy}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name,opts={}){
   setBusy(true);
@@ -15823,7 +15869,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced'}}catch(e){}syncCards();loadAdaptiveStatus()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';simulationStrategy={vwap_take_profit_pct:Number(s.vwap_take_profit_pct||0.25),normal_take_profit_pct:Number(s.normal_take_profit_pct||0.6),late_take_profit_pct:Number(s.late_take_profit_pct||0.45)}}catch(e){}syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';if($('fees'))$('fees').textContent=s.fees||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
@@ -15834,7 +15880,20 @@ async function adaptiveAction(action){const profile=$('simSmartTProfile')?.value
 async function loadAdaptiveStatus(){const profile=$('simSmartTProfile')?.value||'balanced';try{const data=await (await fetch('/api/adaptive/profile?profile='+encodeURIComponent(profile),{cache:'no-store'})).json();if(data.ok)renderReview({}, {}, data)}catch(e){}}
 async function loadHistory(showStatus=true){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const h=data.history||{},runs=data.runs||[];$('history').innerHTML=`<b>总统计</b><div>${h.runs||0} 次模拟，${h.trades||0} 笔交易，总胜率 ${h.winRate||'--'}，总盈亏 ${h.pnl||'--'}</div>`+'<b>最近记录</b>'+(runs.length?runs.map(r=>`<div class="run-item"><b>${esc(r.time||'--')}</b><div class="muted">触发 ${r.triggered||0}/${r.total||0}，盈利 ${r.wins||0}，盈亏 ${Number(r.pnl||0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}元</div><div class="muted">${esc((r.review||{}).headline||'')}</div></div>`).join(''):'<div class="muted">暂无历史。</div>');if(showStatus)$('status').textContent='历史已读取'}catch(e){$('history').textContent='历史读取失败：'+e.message}}
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderRows(latest.stocks||[]);setResultVisible((latest.stocks||[]).length>0);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});$('status').textContent='已恢复最近一次模拟'}}catch(e){}}
-function chart(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '),placed=[];const norm=t=>String(t||'').replace(/\D/g,'').slice(-4);const mark=(time,label,color,side,order)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],near=placed.filter(x=>Math.abs(x-p.x)<30&&x.side===side).length,shift=(near%2?1:-1)*Math.ceil(near/2)*20,tx=Math.max(18,Math.min(402,p.x+shift)),ty=side==='buy'?(10+(order%2)*11):(78-(order%2)*11),w=label.length>1?24:20;placed.push({x:tx,side});return `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${(ty+(side==='buy'?4:-4)).toFixed(1)}" stroke="${color}" stroke-width="1" opacity=".55"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}" stroke="#fff" stroke-width="2"/><rect x="${(tx-w/2).toFixed(1)}" y="${(ty-9).toFixed(1)}" width="${w}" height="13" rx="6.5" fill="#fff" stroke="${color}"/><text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="8" font-weight="900" fill="${color}">${label}</text>`};const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);const tradeMarks=cycles.map((x,i)=>mark(x.buyTime,`买${cycles.length>1?i+1:''}`,'#2563eb','buy',i)+mark(x.sellTime,`卖${cycles.length>1?i+1:''}`,'#ec5f6b','sell',i)).join('');return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${tradeMarks}</svg>`}
+function chart(row){
+  const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';
+  if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';
+  const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));
+  const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);
+  const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));
+  const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '),placed=[];
+  const norm=t=>String(t||'').replace(/\D/g,'').slice(-4);
+  const mark=(time,label,color,side,order)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],near=placed.filter(x=>Math.abs(x-p.x)<42&&x.side===side).length,shift=(near%2?1:-1)*Math.ceil(near/2)*46,tx=Math.max(28,Math.min(392,p.x+shift)),ty=side==='buy'?(12+(order%2)*12):(74-(order%2)*12),w=Math.max(34,label.length*9+10);placed.push({x:tx,side});return `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${(ty+(side==='buy'?5:-5)).toFixed(1)}" stroke="${color}" stroke-width="1" opacity=".55"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}" stroke="#fff" stroke-width="2"/><rect x="${(tx-w/2).toFixed(1)}" y="${(ty-9).toFixed(1)}" width="${w}" height="14" rx="7" fill="#fff" stroke="${color}"/><text x="${tx.toFixed(1)}" y="${(ty+.5).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="900" fill="${color}">${label}</text>`};
+  const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);
+  // Each closed T-cycle enters at an oversold point and exits at an overbought point.
+  const signalMarks=cycles.map((x,i)=>mark(x.buyTime,`超卖·买${cycles.length>1?i+1:''}`,'#0e9f9a','buy',i)+mark(x.sellTime,`超买·卖${cycles.length>1?i+1:''}`,'#f59e0b','sell',i)).join('');
+  return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${signalMarks}</svg>`
+}
 function clearView(){setResultVisible(false,'已清空。点击“开始测试”后再显示结果。');renderReview({},{});$('status').textContent='已清空'}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>

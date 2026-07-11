@@ -1,7 +1,44 @@
-.app-navigation{display:flex;flex-direction:column;gap:8px;width:100%;padding-top:4px}
-.app-nav-item{display:flex;align-items:center;gap:9px;width:100%;height:42px;min-height:42px;padding:0 12px;border:1px solid transparent;border-radius:14px;color:#6d4b35;text-decoration:none;font-size:14px;font-weight:900;transition:background .18s,border-color .18s,transform .18s}
-.app-nav-item:hover{background:#fff5e9;border-color:#f1dbc2;transform:translateX(2px)}
-.app-nav-item.is-active{color:#fff;background:linear-gradient(135deg,#ffb067,#ff7f36);border-color:#ffa464;box-shadow:0 12px 24px rgba(255,125,50,.2)}
-.app-nav-icon{display:grid;place-items:center;width:26px;height:26px;border:1px solid #ffe1c5;border-radius:9px;background:#fff8ee;color:#ef8f58;font-size:13px;line-height:1}
-.app-nav-item.is-active .app-nav-icon{background:rgba(255,255,255,.24);border-color:rgba(255,255,255,.4);color:#fff}
-@media(max-width:1000px){.app-navigation{gap:6px}.app-nav-item{height:40px;min-height:40px}}
+/* Shared navigation for the four active Rabbit Quant work pages. */
+:root { --rq-nav-height: 42px; --rq-nav-gap: 8px; --rq-nav-radius: 14px; }
+
+.app-navigation {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: var(--rq-nav-gap) !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 4px 0 0 !important;
+}
+
+.app-nav-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: var(--rq-nav-height) !important;
+  min-height: var(--rq-nav-height) !important;
+  padding: 0 12px !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--rq-nav-radius) !important;
+  background: transparent !important;
+  color: #6d4b35 !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+  font: 900 14px/1 "Microsoft YaHei UI", "Segoe UI", sans-serif !important;
+  white-space: nowrap !important;
+  transition: background .18s ease, border-color .18s ease, transform .18s ease !important;
+}
+.app-nav-item:hover { background:#fff5e9 !important; border-color:#f1dbc2 !important; transform:translateX(2px); }
+.app-nav-item.is-active { color:#fff !important; background:linear-gradient(135deg,#ffb067,#ff7f36) !important; border-color:#ffa464 !important; box-shadow:0 12px 24px rgba(255,125,50,.2) !important; }
+.app-nav-icon { display:grid !important; place-items:center !important; flex:0 0 26px !important; width:26px !important; height:26px !important; border:1px solid #ffe1c5 !important; border-radius:9px !important; background:#fff8ee !important; color:#ef8f58 !important; font-size:13px !important; line-height:1 !important; }
+.app-nav-item.is-active .app-nav-icon { background:rgba(255,255,255,.24) !important; border-color:rgba(255,255,255,.4) !important; color:#fff !important; }
+
+/* The old script created a second fixed navigation on smaller screens. */
+.app-navigation-mobile { display:none !important; }
+
+@media (min-width:900px) and (max-width:1179px) {
+  .app-nav-item { justify-content:center !important; padding:0 !important; }
+  .app-nav-item > span:last-child { display:none !important; }
+  .app-nav-icon { flex-basis:28px !important; width:28px !important; height:28px !important; }
+}

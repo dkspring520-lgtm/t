@@ -17,7 +17,14 @@ class AdaptiveProfileTests(unittest.TestCase):
     def test_simulation_is_recorded_but_not_auto_promoted(self):
         with tempfile.TemporaryDirectory() as folder:
             prices = [
-                {"time": f"09:{30 + index:02d}", "price": 10 + index * 0.03, "volume": (index + 1) * 100}
+                {
+                    "time": f"09:{30 + index:02d}",
+                    "price": 10 + index * 0.03,
+                    "volumeDelta": 100,
+                    "amountDelta": (10 + index * 0.03) * 100 * 100,
+                    "date": "2026-07-10",
+                    "dataQuality": "full",
+                }
                 for index in range(16)
             ]
             payload = record_profile_run(Path(folder) / "balanced.sqlite3", "balanced", [{

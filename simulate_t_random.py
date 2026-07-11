@@ -22,6 +22,7 @@ from typing import Iterable, List, Optional
 
 from auction_direction import evaluate_auction_gate
 from services.trade_engine import PositionState, TradeCostModel
+from smart_t_policy import evaluate_trade_decision
 
 BASE_DIR = Path(__file__).resolve().parent
 STOCK_POOL_CACHE = BASE_DIR / "a_share_pool_cache.json"
@@ -117,9 +118,9 @@ class Result:
         if self.action == "未触发":
             return "99:99"
         if self.cycles:
-            entries = [str(item.get("sellTime") if str(item.get("action") or "").startswith("反T") else item.get("buyTime") or "99:99") for item in self.cycles]
+            entries = [str(item.get("sellTime") if _is_reverse_action(item.get("action")) else item.get("buyTime") or "99:99") for item in self.cycles]
             return min(entries, default="99:99")
-        if self.action.startswith("反T"):
+        if _is_reverse_action(self.action):
             return self.sell_time
         return self.buy_time
 
@@ -128,9 +129,15 @@ class Result:
         if self.action == "未触发":
             return "99:99"
         if self.cycles:
-            exits = [str(item.get("buyTime") if str(item.get("action") or "").startswith("反T") else item.get("sellTime") or "99:99") for item in self.cycles]
+            exits = [str(item.get("buyTime") if _is_reverse_action(item.get("action")) else item.get("sellTime") or "99:99") for item in self.cycles]
             return max(exits, default="99:99")
-        return self.buy_time if self.action.startswith("反T") else self.sell_time
+        return self.buy_time if _is_reverse_action(self.action) else self.sell_time
+
+
+def _is_reverse_action(action: object) -> bool:
+    # Keep compatibility with historic result records that were written before
+    # the UTF-8 display cleanup.
+    return str(action or "").startswith(("反T", "鍙峊"))
 
 
 def main(argv: list[str]) -> int:
@@ -351,6 +358,10 @@ def clone_result_with_reason(result: Result, stock: Stock, reason: str) -> Resul
 
 
 def history_simulation_candidates(sample_size: int, used_codes: set[str]) -> list[tuple[Stock, List[Bar]]]:
+    # Old history records contain prices only.  They must never be promoted to
+    # tradable bars by inventing a volume value: that would contaminate both
+    # simulation results and adaptive-learning samples.
+    return []
     if sample_size <= 0:
         return []
     try:
@@ -396,6 +407,12 @@ def apply_cash_constraints(results: List[Result], total_cash: float) -> List[Res
     active: list[tuple[int, float]] = []
     for result in sorted(results, key=lambda r: r.entry_time):
         if result.action == "未触发":
+            out.append(result)
+            continue
+        # A reverse-T sells the existing base position before buying it back.
+        # PositionState has already checked sellable shares, so it must not be
+        # rejected merely because another stock is using the cash reserve.
+        if _is_reverse_action(result.action):
             out.append(result)
             continue
         start_min = _hm_to_minutes(result.entry_time)
@@ -695,7 +712,17 @@ def write_json_result(path: str, results: List[Result], minute_map: dict[str, Li
                 "cycles": list(result.cycles),
                 "position": result.position or {},
                 "dailyResults": list(result.daily_results),
-                "prices": [{"time": b.hm, "price": b.price} for b in bars],
+                "prices": [
+                    {
+                        "time": b.hm,
+                        "price": b.price,
+                        "volumeDelta": b.volume_lot,
+                        "amountDelta": b.amount_yuan,
+                        "date": b.date,
+                        "dataQuality": "full",
+                    }
+                    for b in bars
+                ],
             }
         )
     try:
@@ -1046,6 +1073,9 @@ def load_cached_minutes(symbol: str) -> List[Bar]:
 
 
 def load_history_price_bars(symbol: str) -> List[Bar]:
+    # See history_simulation_candidates(): price-only snapshots are display
+    # artifacts, not valid market-data inputs.
+    return []
     code = symbol[2:]
     try:
         lines = SIM_HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-500:]
@@ -1211,6 +1241,58 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
     return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, base_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}；底仓已恢复", payload, total_gross, total_fees, position.snapshot())
 
 
+def _shared_policy_allows(
+    stock: Stock,
+    bars: List[Bar],
+    idx: int,
+    average: float,
+    low: float,
+    high: float,
+    direction: str,
+    confirmation_score: int,
+    auction_gate: dict,
+    trade_amount: float,
+) -> bool:
+    """Apply the exact live execution gate to a causal replay candidate."""
+    bar = bars[idx]
+    shares = max(100, int(trade_amount / max(bar.price, 0.01) / 100) * 100)
+    amount = shares * bar.price
+    fee_pct = 0.0
+    if amount > 0:
+        fee_pct = (
+            SIM_COST_MODEL.fee("buy", amount, stock.code)
+            + SIM_COST_MODEL.fee("sell", amount, stock.code)
+        ) / amount * 100.0
+    decision = evaluate_trade_decision(
+        profile=SMART_T_PROFILE,
+        time_text=bar.hm,
+        price=bar.price,
+        average=average,
+        high=high,
+        low=low,
+        points=[
+            {
+                "time": item.hm,
+                "price": item.price,
+                "volumeDelta": item.volume_lot,
+                "amountDelta": item.amount_yuan,
+            }
+            for item in bars[: idx + 1]
+        ],
+        signal_action=direction,
+        # Local confirmation has five discrete factors.  Map it to the live
+        # ten-point scale instead of treating an unconfirmed setup as a ten.
+        signal_score=min(10, 6 + max(0, confirmation_score)),
+        strict_signal=True,
+        market_status="交易中",
+        auction_direction=auction_gate.get("preferredDirection") or "",
+        auction_state=auction_gate.get("state") or "NEUTRAL",
+        estimated_cycle_cost_pct=fee_pct,
+        slippage_per_side_pct=SIM_COST_MODEL.slippage_bps / 100.0,
+    )
+    return bool(decision.get("confirmed"))
+
+
 def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None) -> Result:
     # Do not inspect end-of-day extrema here: all entry decisions are causal.
     day_amp = 0.0
@@ -1269,10 +1351,18 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 factor_rsi = _causal_rsi(bars, idx)
                 buy_setup = buy_setup and factor_rsi <= 62.0
                 sell_setup = sell_setup and factor_rsi >= 38.0
-            if allow_buy and buy_setup:
+            buy_score = _buy_confirmation_score(bars, idx, lows, volumes) if idx >= 6 else 0
+            sell_score = _sell_confirmation_score(bars, idx, highs, volumes) if idx >= 6 else 0
+            buy_allowed = allow_buy and buy_setup and _shared_policy_allows(
+                stock, bars, idx, avg, observed_low, observed_high, "BUY_FIRST", buy_score, gate, trade_amount
+            )
+            sell_allowed = allow_sell and sell_setup and _shared_policy_allows(
+                stock, bars, idx, avg, observed_low, observed_high, "SELL_FIRST", sell_score, gate, trade_amount
+            )
+            if buy_allowed:
                 buy = bar
                 mode = "正T"
-            elif allow_sell and sell_setup:
+            elif sell_allowed:
                 sell_first = bar
                 mode = "反T"
             continue

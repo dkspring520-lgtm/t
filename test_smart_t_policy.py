@@ -20,7 +20,7 @@ class SmartTPolicyTests(unittest.TestCase):
             high=10.2,
             low=9.8,
             points=points([9.90 + i * 0.003 for i in range(41)]),
-            signal_action="正T低吸",
+            signal_action="BUY_FIRST",
             signal_score=9,
             strict_signal=True,
             market_status="交易中",
@@ -39,13 +39,13 @@ class SmartTPolicyTests(unittest.TestCase):
 
     def test_uptrend_blocks_sell_first(self):
         rising = points([9.80 + i * 0.01 for i in range(41)])
-        result = self.base(points=rising, average=9.9, price=10.2, signal_action="反T高抛")
+        result = self.base(points=rising, average=9.9, price=10.2, signal_action="SELL_FIRST")
         self.assertEqual(market_regime(rising, 9.9, 610), "UPTREND")
         self.assertEqual(result["state"], "TREND_BLOCKED")
 
     def test_confirmed_signal_passes_all_gates(self):
         rising = points([9.80 + i * 0.01 for i in range(41)])
-        result = self.base(points=rising, average=9.9, price=10.0, high=10.25, low=9.75)
+        result = self.base(points=rising, average=10.1, price=10.0, high=10.25, low=9.75)
         self.assertTrue(result["confirmed"])
         self.assertEqual(result["state"], "READY")
 

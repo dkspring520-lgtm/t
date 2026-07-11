@@ -421,21 +421,25 @@ def _analyze(config: StockConfig, include_watch: bool = False) -> List[Signal]:
     strict_min_score = int(strategy.get("strict_min_score", 8))
     if _hm_to_minutes(hm) > int(strategy.get("trade_end_minutes", 840)):
         return []
-    swing_signal = _intraday_swing_signal(
-        config,
-        hm,
-        quote,
-        avg,
-        dev,
-        day_high,
-        day_low,
-        day_range,
-        vol_ratio,
-        include_watch,
-        path_view,
-    )
-    if swing_signal:
-        return [swing_signal]
+    # Swing hints are deliberately observation-only.  A strict execution
+    # evaluation must continue to the multi-factor confirmation below; before
+    # this guard a swing hint could bypass the second-confirmation rules.
+    if include_watch:
+        swing_signal = _intraday_swing_signal(
+            config,
+            hm,
+            quote,
+            avg,
+            dev,
+            day_high,
+            day_low,
+            day_range,
+            vol_ratio,
+            include_watch,
+            path_view,
+        )
+        if swing_signal:
+            return [swing_signal]
     opening_buy = _opening_buy_ready(strategy, hm, prices, quote.price, avg, dev, vol_ratio, momentum_3)
     opening_sell = _opening_sell_ready(strategy, hm, prices, quote.price, avg, dev, vol_ratio, momentum_3)
     if opening_buy and path_view["buy_ok"] and buy_score >= 5 and buy_score >= sell_score:
@@ -509,8 +513,10 @@ def load_adaptive_strategy() -> dict:
 
 
 def _vwap(quote: Quote, minutes: List[MinuteBar]) -> Optional[float]:
-    if minutes and minutes[-1].volume_lot > 0 and minutes[-1].amount_yuan > 0:
-        return minutes[-1].amount_yuan / (minutes[-1].volume_lot * 100.0)
+    total_volume = sum(max(0.0, bar.volume_lot) for bar in minutes)
+    total_amount = sum(max(0.0, bar.amount_yuan) for bar in minutes)
+    if total_volume > 0 and total_amount > 0:
+        return total_amount / (total_volume * 100.0)
     if quote.volume_lot > 0 and quote.amount_wan > 0:
         return quote.amount_wan * 10000.0 / (quote.volume_lot * 100.0)
     return None
@@ -612,17 +618,10 @@ def _intraday_swing_signal(
 
 
 def _minute_volumes(minutes: List[MinuteBar]) -> List[float]:
-    if not minutes:
-        return []
-    out: List[float] = []
-    last = 0.0
-    for bar in minutes:
-        vol = max(bar.volume_lot - last, 0.0)
-        if vol == 0 and bar.volume_lot > 0 and not out:
-            vol = bar.volume_lot
-        out.append(vol)
-        last = max(last, bar.volume_lot)
-    return out
+    # Every adapter normalizes to *per-minute increments*.  In particular,
+    # Sina cumulative ticks are converted in fetch_minutes_sina(), so doing a
+    # second difference here collapses later volume to zero.
+    return [max(0.0, bar.volume_lot) for bar in minutes]
 
 
 def _volume_ratio(volumes: List[float]) -> float:
@@ -633,11 +632,20 @@ def _volume_ratio(volumes: List[float]) -> float:
     return volumes[-1] / avg if avg > 0 else 0.0
 
 
-def _vwap_slope(minutes: List[MinuteBar]) -> float:
+def _cumulative_vwaps(minutes: List[MinuteBar]) -> List[float]:
     avgs: List[float] = []
+    total_volume = 0.0
+    total_amount = 0.0
     for bar in minutes:
-        if bar.volume_lot > 0 and bar.amount_yuan > 0:
-            avgs.append(bar.amount_yuan / (bar.volume_lot * 100.0))
+        total_volume += max(0.0, bar.volume_lot)
+        total_amount += max(0.0, bar.amount_yuan)
+        if total_volume > 0 and total_amount > 0:
+            avgs.append(total_amount / (total_volume * 100.0))
+    return avgs
+
+
+def _vwap_slope(minutes: List[MinuteBar]) -> float:
+    avgs = _cumulative_vwaps(minutes)
     if len(avgs) < 8:
         return 0.0
     old = sum(avgs[-8:-3]) / 5
@@ -646,13 +654,15 @@ def _vwap_slope(minutes: List[MinuteBar]) -> float:
 
 
 def _vwap_devs(minutes: List[MinuteBar], lookback: int = 8) -> List[float]:
-    out: List[float] = []
-    for bar in minutes[-lookback:]:
-        if bar.price > 0 and bar.volume_lot > 0 and bar.amount_yuan > 0:
-            avg = bar.amount_yuan / (bar.volume_lot * 100.0)
-            if avg > 0:
-                out.append((bar.price - avg) / avg * 100.0)
-    return out
+    cumulative: List[tuple[MinuteBar, float]] = []
+    total_volume = 0.0
+    total_amount = 0.0
+    for bar in minutes:
+        total_volume += max(0.0, bar.volume_lot)
+        total_amount += max(0.0, bar.amount_yuan)
+        if bar.price > 0 and total_volume > 0 and total_amount > 0:
+            cumulative.append((bar, total_amount / (total_volume * 100.0)))
+    return [(bar.price - avg) / avg * 100.0 for bar, avg in cumulative[-lookback:] if avg > 0]
 
 
 def _vwap_reclaiming(devs: List[float], min_reclaim: float) -> bool:

@@ -92,7 +92,7 @@ def _quantbrain_features(points: Iterable[Mapping[str, object]]) -> dict:
     return {"rsi": round(rsi, 2), "volatilityPct": round(volatility, 4), "volumeRatio": round(volume_ratio, 3)}
 
 
-def evaluate_smart_t(
+def evaluate_trade_decision(
     *,
     profile: object = "balanced",
     time_text: object,
@@ -112,7 +112,13 @@ def evaluate_smart_t(
     estimated_cycle_cost_pct: float = 0.10,
     slippage_per_side_pct: float = 0.02,
 ) -> dict:
-    """Evaluate an existing signal and return a UI/execution policy payload."""
+    """Single Smart-T decision gate used by live monitoring and replay.
+
+    Callers may build their raw signal from different data adapters, but a
+    candidate cannot execute until it has passed this same direction, auction,
+    trend, score, cost and time gate.  Keeping this function data-source free
+    makes historical replay deterministic and avoids a second policy engine.
+    """
 
     selected = resolve_profile(profile)
     learned = dict(learned_params or {}) if selected.name == "quantbrain" else {}
@@ -132,7 +138,8 @@ def evaluate_smart_t(
     day_low = _number(low, current)
     raw_score = max(0, int(_number(signal_score)))
     action = str(signal_action or "")
-    direction = "BUY_FIRST" if any(word in action for word in ("低吸", "买入", "正T")) else "SELL_FIRST" if any(word in action for word in ("高抛", "卖出", "反T")) else ""
+    action_upper = action.upper()
+    direction = action_upper if action_upper in {"BUY_FIRST", "SELL_FIRST"} else "BUY_FIRST" if any(word in action for word in ("低吸", "买入", "正T")) else "SELL_FIRST" if any(word in action for word in ("高抛", "卖出", "反T")) else ""
     point_list = list(points)
     regime = market_regime(point_list, avg, minute)
     quant_features = _quantbrain_features(point_list) if selected.name == "quantbrain" else {}
@@ -150,9 +157,15 @@ def evaluate_smart_t(
             quant_adjustment -= 1
     effective_score = max(0, raw_score + quant_adjustment)
     required_gross = selected.min_expected_net_pct + max(0.0, estimated_cycle_cost_pct) + 2 * max(0.0, slippage_per_side_pct)
-    day_range = (day_high - day_low) / max(current, 1e-9) * 100.0 if current > 0 and day_high >= day_low else 0.0
-    vwap_space = abs(current - avg) / max(current, 1e-9) * 100.0 if current > 0 and avg > 0 else 0.0
-    available_space = max(vwap_space, day_range * 0.35)
+    # The executable target is the current VWAP reversion, not an optimistic
+    # fraction of today's complete range.  The latter can include a move that
+    # happened before the signal and led to systematically overstated edges.
+    if direction == "BUY_FIRST":
+        available_space = max(0.0, (avg - current) / max(current, 1e-9) * 100.0)
+    elif direction == "SELL_FIRST":
+        available_space = max(0.0, (current - avg) / max(current, 1e-9) * 100.0)
+    else:
+        available_space = 0.0
 
     state = "WAIT_CONFIRMATION"
     reason = "观察状态不直接成交，等待反转确认。"
@@ -226,3 +239,12 @@ def evaluate_smart_t(
         "availableSpreadPct": round(available_space, 3),
         "reason": reason,
     }
+
+
+def evaluate_smart_t(**kwargs: object) -> dict:
+    """Compatibility alias for older callers.
+
+    New code should use :func:`evaluate_trade_decision` so the shared decision
+    boundary is explicit.
+    """
+    return evaluate_trade_decision(**kwargs)
