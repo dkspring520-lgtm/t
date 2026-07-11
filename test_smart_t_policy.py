@@ -71,6 +71,41 @@ class SmartTPolicyTests(unittest.TestCase):
         self.assertEqual(result["state"], "QUANT_FACTOR_BLOCKED")
         self.assertGreaterEqual(result["quantFeatures"]["rsi"], 78)
 
+    def test_strong_market_raises_reverse_t_confirmation_threshold(self):
+        flat = points([10.2] * 41)
+        result = self.base(
+            points=flat,
+            price=10.2,
+            average=10.0,
+            high=10.3,
+            signal_action="SELL_FIRST",
+            signal_score=9,
+            market_radar_score=80,
+        )
+        self.assertEqual(result["marketRadarBand"], "STRONG")
+        self.assertEqual(result["requiredScore"], 10)
+        self.assertEqual(result["state"], "SCORE_BLOCKED")
+
+    def test_weak_market_blocks_aggressive_buy_first(self):
+        result = self.base(market_radar_score=20)
+        self.assertEqual(result["marketRadarBand"], "RISK_OFF")
+        self.assertEqual(result["state"], "RADAR_RISK_OFF_BUY_BLOCKED")
+        self.assertFalse(result["confirmed"])
+
+    def test_overheated_market_requires_pullback_before_reverse_t(self):
+        rising = points([10.05 + i * 0.006 for i in range(40)] + [10.31])
+        result = self.base(
+            points=rising,
+            price=10.31,
+            average=10.0,
+            high=10.35,
+            signal_action="SELL_FIRST",
+            signal_score=10,
+            market_radar_score=90,
+        )
+        self.assertEqual(result["marketRadarBand"], "OVERHEATED")
+        self.assertEqual(result["state"], "RADAR_OVERHEAT_WAIT_PULLBACK")
+
 
 if __name__ == "__main__":
     unittest.main()

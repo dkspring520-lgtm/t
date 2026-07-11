@@ -66,6 +66,7 @@ SIM_DAYS = 1
 SMART_T_PROFILE = "balanced"
 SIM_MODE = "strict"
 SIM_BASE_SHARES = 6000
+SIM_MARKET_RADAR_SCORE: float | None = None
 SIM_COST_MODEL = TradeCostModel()
 ACTIVE_POSITION: PositionState | None = None
 SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}
@@ -141,7 +142,7 @@ def _is_reverse_action(action: object) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_COST_MODEL
+    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_MARKET_RADAR_SCORE, SIM_COST_MODEL
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -159,6 +160,11 @@ def main(argv: list[str]) -> int:
     if SIM_MODE not in {"strict", "scan"}:
         SIM_MODE = "strict"
     SIM_BASE_SHARES = max(0, int(_arg_float(argv, "--base-shares", 6000.0)) // 100 * 100)
+    radar_value = _arg_value(argv, "--market-radar-score", "")
+    try:
+        SIM_MARKET_RADAR_SCORE = max(0.0, min(100.0, float(radar_value))) if radar_value != "" else None
+    except (TypeError, ValueError):
+        SIM_MARKET_RADAR_SCORE = None
     SIM_COST_MODEL = TradeCostModel(
         commission_rate=max(0.0, _arg_float(argv, "--commission-rate", 0.0003)),
         min_commission=max(0.0, _arg_float(argv, "--min-commission", 5.0)),
@@ -1289,6 +1295,7 @@ def _shared_policy_allows(
         auction_state=auction_gate.get("state") or "NEUTRAL",
         estimated_cycle_cost_pct=fee_pct,
         slippage_per_side_pct=SIM_COST_MODEL.slippage_bps / 100.0,
+        market_radar_score=SIM_MARKET_RADAR_SCORE,
     )
     return bool(decision.get("confirmed"))
 

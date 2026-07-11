@@ -92,6 +92,25 @@ def _quantbrain_features(points: Iterable[Mapping[str, object]]) -> dict:
     return {"rsi": round(rsi, 2), "volatilityPct": round(volatility, 4), "volumeRatio": round(volume_ratio, 3)}
 
 
+def _radar_score(value: object) -> float | None:
+    """Return a valid 0-100 market-radar score, or ``None`` when unavailable."""
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(100.0, score))
+
+
+def _has_pullback_confirmation(points: Iterable[Mapping[str, object]], current: float) -> bool:
+    """A reverse-T in an overheated market needs a real turn, not just a high price."""
+    prices = [_number(point.get("price")) for point in points]
+    prices = [price for price in prices if price > 0]
+    if len(prices) < 3 or current <= 0:
+        return False
+    recent_peak = max(prices[-4:-1])
+    return current < recent_peak and prices[-1] <= prices[-2]
+
+
 def evaluate_trade_decision(
     *,
     profile: object = "balanced",
@@ -111,6 +130,7 @@ def evaluate_trade_decision(
     learned_params: Mapping[str, object] | None = None,
     estimated_cycle_cost_pct: float = 0.10,
     slippage_per_side_pct: float = 0.02,
+    market_radar_score: object = None,
 ) -> dict:
     """Single Smart-T decision gate used by live monitoring and replay.
 
@@ -156,6 +176,38 @@ def evaluate_trade_decision(
         elif volume_ratio < _number(learned.get("min_volume_ratio"), 0.18):
             quant_adjustment -= 1
     effective_score = max(0, raw_score + quant_adjustment)
+    radar_score = _radar_score(market_radar_score)
+    radar_band = "UNAVAILABLE"
+    radar_adjustment = 0
+    radar_block = ""
+    if radar_score is not None:
+        if radar_score >= 88:
+            radar_band = "OVERHEATED"
+            if direction == "BUY_FIRST" and current >= avg:
+                radar_block = "RADAR_OVERHEAT_NO_CHASE"
+            elif direction == "SELL_FIRST":
+                radar_adjustment = 2
+                if not _has_pullback_confirmation(point_list, current):
+                    radar_block = "RADAR_OVERHEAT_WAIT_PULLBACK"
+            elif direction == "BUY_FIRST":
+                radar_adjustment = 1
+        elif radar_score >= 75:
+            radar_band = "STRONG"
+            if direction == "SELL_FIRST":
+                radar_adjustment = 2
+        elif radar_score >= 45:
+            radar_band = "RANGE"
+        elif radar_score >= 25:
+            radar_band = "WEAK"
+            if direction == "BUY_FIRST":
+                radar_adjustment = 2
+        else:
+            radar_band = "RISK_OFF"
+            if direction == "BUY_FIRST":
+                radar_block = "RADAR_RISK_OFF_BUY_BLOCKED"
+            elif direction == "SELL_FIRST":
+                radar_adjustment = 2
+    required_score = min(10, selected.confirmed_score + radar_adjustment)
     required_gross = selected.min_expected_net_pct + max(0.0, estimated_cycle_cost_pct) + 2 * max(0.0, slippage_per_side_pct)
     # The executable target is the current VWAP reversion, not an optimistic
     # fraction of today's complete range.  The latter can include a move that
@@ -199,7 +251,13 @@ def evaluate_trade_decision(
         state, reason = "QUANT_FACTOR_BLOCKED", "量化学习档识别到RSI极度过热，拦截追高正T。"
     elif selected.name == "quantbrain" and direction == "SELL_FIRST" and _number(quant_features.get("rsi"), 50) <= 22:
         state, reason = "QUANT_FACTOR_BLOCKED", "量化学习档识别到RSI极度超卖，拦截低位反T。"
-    elif effective_score < selected.confirmed_score:
+    elif radar_block == "RADAR_RISK_OFF_BUY_BLOCKED":
+        state, reason = radar_block, "市场雷达低于25，禁止激进正T；等待强确认反T或继续观察。"
+    elif radar_block == "RADAR_OVERHEAT_NO_CHASE":
+        state, reason = radar_block, "市场过热时禁止追高正T，必须等待回踩黄线后的确认。"
+    elif radar_block == "RADAR_OVERHEAT_WAIT_PULLBACK":
+        state, reason = radar_block, "市场过热，反T需先出现真实回落确认，避免强势行情卖飞。"
+    elif effective_score < required_score:
         suffix = f"；多因子修正{quant_adjustment:+d}" if selected.name == "quantbrain" else ""
         state, reason = "SCORE_BLOCKED", f"信号{effective_score}分，未达到{selected.label}档{selected.confirmed_score}分门槛{suffix}。"
     elif regime == "OBSERVE":
@@ -220,6 +278,9 @@ def evaluate_trade_decision(
             factor_text = f"，RSI {quant_features.get('rsi', 50):.0f}、量比 {quant_features.get('volumeRatio', 1):.2f}、经验修正{quant_adjustment:+d}"
         reason = f"{selected.label}档确认：{style}，预估毛价差{available_space:.2f}%{factor_text}，覆盖费用后再执行。"
 
+    if state == "SCORE_BLOCKED" and radar_score is not None and radar_adjustment:
+        reason = f"信号{effective_score}分；市场雷达{radar_score:.0f}分，确认门槛提高至{required_score}分。"
+
     return {
         "profile": asdict(selected),
         "regime": regime,
@@ -232,7 +293,11 @@ def evaluate_trade_decision(
         "forceClose": force_close,
         "rawScore": raw_score,
         "effectiveScore": effective_score,
+        "requiredScore": required_score,
         "score": min(100, effective_score * 10),
+        "marketRadarScore": round(radar_score, 1) if radar_score is not None else None,
+        "marketRadarBand": radar_band,
+        "radarScoreAdjustment": radar_adjustment,
         "quantFeatures": quant_features,
         "experienceVersion": str(learned.get("version_id") or "初始经验") if selected.name == "quantbrain" else "",
         "requiredGrossSpreadPct": round(required_gross, 3),

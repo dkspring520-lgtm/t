@@ -48,6 +48,7 @@ ADMIN_CREDENTIALS_PATH = BASE_DIR / "admin_credentials.json"
 LAST_GEMINI_ERROR = ""
 MARKET_CONTEXT_CACHE: dict = {"ts": 0.0, "data": {}}
 MARKET_BREADTH_CACHE: dict = {"ts": 0.0, "rows": [], "error": ""}
+MARKET_RADAR_POLICY_CACHE: dict = {"ts": 0.0, "score": None, "band": "UNAVAILABLE", "loading": False}
 GEMINI_INTRADAY_CACHE: dict[str, dict] = {}
 URGENT_NEWS_CACHE: dict[str, dict] = {}
 INTRADAY_REMINDER_STATE: dict[str, dict] = {}
@@ -2511,6 +2512,7 @@ def realtime_payload(email: str | None = None) -> dict:
     smart_settings = load_profit_strategy_settings(email)
     smart_profile = str(smart_settings.get("smartTProfile") or "balanced")
     smart_experience = runtime_profile_params(profile_learning_path(email, smart_profile), smart_profile)
+    radar_policy = market_radar_policy_snapshot(email)
     for stock in dashboard_watchlist(email)[: account_watch_limit(email)]:
         try:
             quote = fetch_quote(stock.symbol)
@@ -2614,6 +2616,7 @@ def realtime_payload(email: str | None = None) -> dict:
                 auction_direction=auction_gate.get("preferredDirection"),
                 auction_state=auction_gate.get("state"),
                 learned_params=smart_experience,
+                market_radar_score=radar_policy.get("score"),
             )
             raw_display_signal, raw_display_reason = display_signal, display_reason
             if (strict_signal or reminder_is_confirmed) and not smart_t.get("confirmed"):
@@ -2764,7 +2767,44 @@ def market_radar_payload(email: str | None = None) -> dict:
             "dataError": fetch_error or str(MARKET_BREADTH_CACHE.get("error") or ""),
         })
     payload["updatedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return update_radar_history(payload, user_data_path(email, "market_radar_history.json"))
+    result = update_radar_history(payload, user_data_path(email, "market_radar_history.json"))
+    score = _auto_t_number(result.get("score"), -1)
+    if score >= 0:
+        MARKET_RADAR_POLICY_CACHE.update(ts=time_mod.time(), score=round(score, 1), band=str(result.get("state") or "UNAVAILABLE"))
+    return result
+
+
+def _refresh_market_radar_policy(email: str | None = None) -> None:
+    try:
+        market_radar_payload(email)
+    finally:
+        MARKET_RADAR_POLICY_CACHE["loading"] = False
+
+
+def market_radar_policy_snapshot(email: str | None = None) -> dict:
+    """Return the latest full-market radar score without delaying stock quotes.
+
+    A first dashboard refresh starts an asynchronous full-market collection.  A
+    subsequent refresh uses the score as a hard Smart-T gate; stale or missing
+    breadth data deliberately yields ``None`` rather than inventing a score.
+    """
+    now = time_mod.time()
+    cache = MARKET_RADAR_POLICY_CACHE
+    if now - _auto_t_number(cache.get("ts")) <= 180 and cache.get("score") is not None:
+        return {"score": cache.get("score"), "band": cache.get("band") or "UNAVAILABLE", "ready": True}
+    rows = list(MARKET_BREADTH_CACHE.get("rows") or [])
+    if rows and now - _auto_t_number(MARKET_BREADTH_CACHE.get("ts")) <= 180:
+        try:
+            radar = calculate_market_radar(rows)
+            score = round(_auto_t_number(radar.get("score")), 1)
+            cache.update(ts=now, score=score, band=str(radar.get("state") or "UNAVAILABLE"))
+            return {"score": score, "band": cache["band"], "ready": True}
+        except Exception:
+            pass
+    if not cache.get("loading"):
+        cache["loading"] = True
+        threading.Thread(target=_refresh_market_radar_policy, args=(email,), daemon=True).start()
+    return {"score": None, "band": "PREPARING", "ready": False}
 
 
 PREMARKET_FUTURES = [
@@ -5164,6 +5204,13 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
                 cmd[2] = str(sample)
         if stocks:
             cmd.extend(["--stocks", stocks])
+        # A one-day replay represents today's intraday execution.  Feed it the
+        # same full-market gate as the console; multi-day replay intentionally
+        # omits today's score rather than contaminating historic days.
+        if name == "simulate":
+            radar_score = market_radar_policy_snapshot(REQUEST_EMAIL.get("")).get("score")
+            if radar_score is not None:
+                cmd.extend(["--market-radar-score", str(radar_score)])
         if name == "simulate5":
             days = clamp_int(options.get("days"), 5, 1, 60)
             cmd.extend(["--days", str(days)])
@@ -15795,6 +15842,7 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
     <label class="field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
     <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards();loadAdaptiveStatus()"><option value="steady">稳健｜少交易 · 2轮</option><option value="balanced" selected>平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option></select></label>
+    <label class="field"><span>策略模式</span><select id="simStrategyMode" onchange="syncCards()"><option value="官方默认策略">官方默认策略</option><option value="自定义策略">自定义策略｜同步控制台</option><option value="AI复核优先">AI复核优先</option></select></label>
     <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
     <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
     <details class="sim-cost-settings"><summary>底仓与成交成本</summary><div class="sim-cost-grid">
@@ -15843,7 +15891,8 @@ async function loadAccountBadge(){try{const res=await fetch('/api/account',{cach
 window.addEventListener('DOMContentLoaded',async()=>{loadAccountBadge();await loadSettings();await syncWatchlistStocks(false);loadHistory();setResultVisible(false,'点击“开始测试”后显示结果。');});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
 let simulationStrategy={vwap_take_profit_pct:0.25,normal_take_profit_pct:0.6,late_take_profit_pct:0.45};
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),...simulationStrategy}}
+let simulationStrategyContext={strategyMode:'官方默认策略',customStrategy:''};
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',strategyMode:$('simStrategyMode')?.value||simulationStrategyContext.strategyMode||'官方默认策略',customStrategy:simulationStrategyContext.customStrategy||'',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),...simulationStrategy}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name,opts={}){
   setBusy(true);
@@ -15861,10 +15910,15 @@ async function runSim(name,opts={}){
       await syncWatchlistStocks(false);
     }
     const payload=options();
-    if(opts.random){payload.stocks='';payload.random=true;}
+    if(opts.random){
+      // Random sampling is intentionally one trading day: it is a quick
+      // smoke test, not a hidden multi-day backtest that appears unresponsive.
+      payload.stocks='';payload.random=true;payload.days=1;
+      $('status').textContent='正在随机抽取当日分时样本…';
+    }
     const days=Math.max(1,Math.min(60,Number(payload.days||1)));
     payload.days=days;
-    const task=days>1?'simulate5':'simulate';
+    const task=opts.random?'simulate':(days>1?'simulate5':'simulate');
     saveSettings();
     const ctrl=new AbortController();
     const timer=setTimeout(()=>ctrl.abort(),45000);
@@ -15902,7 +15956,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';simulationStrategy={vwap_take_profit_pct:Number(s.vwap_take_profit_pct||0.25),normal_take_profit_pct:Number(s.normal_take_profit_pct||0.6),late_take_profit_pct:Number(s.late_take_profit_pct||0.45)}}catch(e){}syncCards();loadAdaptiveStatus()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';simulationStrategyContext={strategyMode:s.strategyMode||'官方默认策略',customStrategy:s.customStrategy||''};if($('simStrategyMode'))$('simStrategyMode').value=simulationStrategyContext.strategyMode;simulationStrategy={vwap_take_profit_pct:Number(s.vwap_take_profit_pct||0.25),normal_take_profit_pct:Number(s.normal_take_profit_pct||0.6),late_take_profit_pct:Number(s.late_take_profit_pct||0.45)}}catch(e){}syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';if($('fees'))$('fees').textContent=s.fees||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
