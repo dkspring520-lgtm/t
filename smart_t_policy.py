@@ -227,6 +227,7 @@ def evaluate_trade_decision(
     auction_preference = str(auction_direction or "")
     auction_gate_state = str(auction_state or "NEUTRAL").upper()
     auction_confirmed = auction_gate_state == "CONFIRMED" and auction_preference in {"BUY_FIRST", "SELL_FIRST"}
+    opening_trial = 9 * 60 + 35 <= minute <= 10 * 60
 
     if quote_stale or current <= 0 or avg <= 0:
         state, reason = "DATA_RISK", "行情延迟或价格数据不完整，暂停开启新循环。"
@@ -238,6 +239,8 @@ def evaluate_trade_decision(
         state, reason = "AUCTION_WAIT_CONFIRMATION", "集合竞价方向尚未满足两项确认条件，继续等待。"
     elif minute < 9 * 60 + 45 and not auction_confirmed:
         state, reason = "OPENING_OBSERVE", "竞价方向未确认，09:45前继续观察开盘噪声。"
+    elif opening_trial and not auction_confirmed:
+        state, reason = "OPENING_TRIAL_WAIT", "\u5f00\u76d8\u8bd5\u63a2T\u9700\u7ade\u4ef7\u65b9\u5411\u786e\u8ba4\uff1b\u672a\u786e\u8ba4\u5219\u7b49\u5f8510:00\u540e\u8f6c\u5165\u5f53\u524d\u7b56\u7565\u3002"
     elif force_close:
         state, reason = "FORCE_CLOSE", "14:50后只恢复T仓状态，不开启新循环。"
     elif minute >= 14 * 60 + 30:
@@ -262,9 +265,9 @@ def evaluate_trade_decision(
         state, reason = "SCORE_BLOCKED", f"信号{effective_score}分，未达到{selected.label}档{selected.confirmed_score}分门槛{suffix}。"
     elif regime == "OBSERVE":
         state, reason = "REGIME_OBSERVE", "已完成5分钟K线不足，暂不判断趋势。"
-    elif regime == "UPTREND" and direction != "BUY_FIRST":
+    elif regime == "UPTREND" and direction != "BUY_FIRST" and not opening_trial:
         state, reason = "TREND_BLOCKED", "上涨趋势只允许回踩正T，不逆势先卖。"
-    elif regime == "DOWNTREND" and direction != "SELL_FIRST":
+    elif regime == "DOWNTREND" and direction != "SELL_FIRST" and not opening_trial:
         state, reason = "TREND_BLOCKED", "弱势趋势只允许冲高反T，不逆势加仓。"
     elif available_space + 1e-9 < required_gross:
         state, reason = "EDGE_BLOCKED", f"预估毛价差{available_space:.2f}%不足，至少需要{required_gross:.2f}%。"
@@ -288,6 +291,8 @@ def evaluate_trade_decision(
         "direction": direction,
         "auctionDirection": auction_preference,
         "auctionState": auction_gate_state,
+        "openingTrial": opening_trial and auction_confirmed,
+        "positionFraction": (1.0 / 6.0) if opening_trial and auction_confirmed else 1.0,
         "confirmed": confirmed,
         "newCycleAllowed": new_cycle_allowed,
         "forceClose": force_close,

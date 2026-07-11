@@ -30,9 +30,10 @@
   transition: background .18s ease, border-color .18s ease, transform .18s ease !important;
 }
 .app-nav-item:hover { background:#fff5e9 !important; border-color:#f1dbc2 !important; transform:translateX(2px); }
-.app-nav-item.is-active { color:#fff !important; background:linear-gradient(135deg,#ffb067,#ff7f36) !important; border-color:#ffa464 !important; box-shadow:0 12px 24px rgba(255,125,50,.2) !important; }
+.app-nav-item.is-active { position:relative !important; color:#c96534 !important; background:#fff1e5 !important; border-color:#efd2b8 !important; box-shadow:0 5px 14px rgba(190,109,57,.09) !important; }
+.app-nav-item.is-active::before { content:""; position:absolute; left:-1px; top:8px; bottom:8px; width:3px; border-radius:0 3px 3px 0; background:#e9844e; }
 .app-nav-icon { display:grid !important; place-items:center !important; flex:0 0 26px !important; width:26px !important; height:26px !important; border:1px solid #ffe1c5 !important; border-radius:9px !important; background:#fff8ee !important; color:#ef8f58 !important; font-size:13px !important; line-height:1 !important; }
-.app-nav-item.is-active .app-nav-icon { background:rgba(255,255,255,.24) !important; border-color:rgba(255,255,255,.4) !important; color:#fff !important; }
+.app-nav-item.is-active .app-nav-icon { background:#fff8f1 !important; border-color:#f0cba9 !important; color:#d87542 !important; }
 
 /* The old script created a second fixed navigation on smaller screens. */
 .app-navigation-mobile { display:none !important; }

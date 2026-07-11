@@ -33,6 +33,22 @@ class SmartTPolicyTests(unittest.TestCase):
         self.assertEqual(result["state"], "OPENING_OBSERVE")
         self.assertFalse(result["confirmed"])
 
+    def test_opening_trial_requires_auction_and_uses_one_sixth(self):
+        waiting = self.base(time_text="09:50")
+        self.assertEqual(waiting["state"], "OPENING_TRIAL_WAIT")
+
+        result = self.base(
+            time_text="09:50",
+            average=10.1,
+            price=10.0,
+            high=10.25,
+            auction_direction="BUY_FIRST",
+            auction_state="CONFIRMED",
+        )
+        self.assertTrue(result["confirmed"])
+        self.assertTrue(result["openingTrial"])
+        self.assertAlmostEqual(result["positionFraction"], 1 / 6)
+
     def test_observation_never_becomes_trade(self):
         result = self.base(strict_signal=False, signal_action="低位机会")
         self.assertEqual(result["state"], "WAIT_CONFIRMATION")

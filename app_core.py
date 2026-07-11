@@ -474,7 +474,7 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=20260711c"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=20260712a"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.css" not in html:
@@ -576,6 +576,14 @@ def run_task(name: str, options: dict | None = None) -> dict:
     stocks = parse_sim_stocks(raw) if name in {"simulate", "simulate5"} else []
     if json_path:
         merge_sim_chart_data(stocks, json_path)
+    if name in {"simulate", "simulate5"} and not stocks and (not raw.strip() or "分时数据不足" in raw):
+        return {
+            "ok": False,
+            "summary": "暂无可用于模拟的日内行情数据。请在开盘时段重试，或选择近5日复盘。",
+            "detail": raw,
+            "stats": {},
+            "stocks": [],
+        }
     if name in {"simulate", "simulate5"} and stats:
         stats["review"] = build_sim_review(stocks)
         persist_rolling_cash(options or {}, stats, email)
@@ -7474,45 +7482,6 @@ def rabbit_v72_polish_html(html: str) -> str:
             for key, icon, label, path in shell_items
         ) + "</div>"
         html = re.sub(r'<div class="side-menu">.*?</div>', '<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
-    if "rq-page-market-radar" in html or "radar-shell" in html:
-        # The radar template historically shipped its own button.nav menu.
-        # Replace the complete legacy-menu region on the server, rather than
-        # relying on client-side cleanup after the page has painted.
-        radar_side_pattern = (
-            r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)'
-            r'.*?(<div class="side-foot">)'
-        )
-        html, radar_nav_replacements = re.subn(
-            radar_side_pattern,
-            r'\1<nav class="app-navigation" data-app-navigation></nav>\2',
-            html,
-            count=1,
-            flags=re.S,
-        )
-        if not radar_nav_replacements:
-            html = re.sub(
-                r'<button\b[^>]*\bclass="[^"]*\bnav\b[^"]*"[^>]*>.*?</button>',
-                '',
-                html,
-                flags=re.S,
-            )
-            html = re.sub(
-                r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)',
-                r'\1<nav class="app-navigation" data-app-navigation></nav>',
-                html,
-                count=1,
-                flags=re.S,
-            )
-        # Guard against a cached/legacy template response: old buttons must
-        # never paint beside the shared navigation.
-        if 'rq-radar-navigation-fallback' not in html:
-            html = html.replace(
-                '</head>',
-                '<style id="rq-radar-navigation-fallback">'
-                '.side > button.nav{display:none!important}'
-                '</style></head>',
-                1,
-            )
     html = html.replace("<strong>${escapeHtml(s.name)}</strong><em>${escapeHtml(s.code)}</em>", "<strong>${escapeHtml(s.name)}</strong>")
     html = html.replace(
         '<img src="/assets/rabbit-avatar.png"',
@@ -7836,19 +7805,35 @@ html body.rq-page-research .grid{grid-template-columns:minmax(0,1fr)!important}
     if "rq-page-simulation" in html and "simulation-controls-grid-final" not in html:
         controls_css = r'''
 <style id="simulation-controls-grid-final">
-html body.rq-page-simulation .controls{display:grid!important;grid-template-columns:repeat(5,minmax(120px,1fr)) minmax(220px,1.5fr)!important;grid-auto-flow:row!important;align-items:end!important;gap:10px!important;width:100%!important;min-height:0!important;height:auto!important;padding:14px 16px!important;overflow:visible!important;}
-html body.rq-page-simulation .controls .field,html body.rq-page-simulation .controls>button,html body.rq-page-simulation .run-actions{min-width:0!important;width:100%!important;margin:0!important;}
+html body.rq-page-simulation .sim-config-bar{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;flex-wrap:wrap!important;padding:2px 0!important;}
+html body.rq-page-simulation .sim-mode-selector,html body.rq-page-simulation .sim-source-field{display:flex!important;align-items:center!important;gap:6px!important;padding:6px!important;margin:0!important;border:1px solid #f1dfd0!important;border-radius:14px!important;background:#fffaf6!important;max-width:100%!important;}
+html body.rq-page-simulation .sim-config-label{padding:0 6px!important;color:#8a654e!important;font-size:12px!important;font-weight:900!important;white-space:nowrap!important;}
+html body.rq-page-simulation .sim-mode-selector button{height:34px!important;padding:0 12px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:#87624d!important;box-shadow:none!important;white-space:nowrap!important;}
+html body.rq-page-simulation .sim-mode-selector button.is-active{color:#fff!important;background:linear-gradient(135deg,#ff9b67,#f46e4b)!important;}
+html body.rq-page-simulation .sim-source-field select{height:34px!important;min-width:148px!important;padding:0 28px 0 10px!important;border:0!important;border-radius:9px!important;background:#fff!important;color:#765541!important;font-weight:850!important;}
+html body.rq-page-simulation .controls{display:grid!important;grid-template-columns:repeat(3,minmax(150px,1fr))!important;grid-auto-flow:row!important;align-items:end!important;gap:12px!important;width:100%!important;min-height:0!important;height:auto!important;padding:16px!important;overflow:visible!important;}
+html body.rq-page-simulation .controls .field,html body.rq-page-simulation .controls>button,html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions{min-width:0!important;width:100%!important;margin:0!important;}
+html body.rq-page-simulation #simSmartTProfile,html body.rq-page-simulation #simStrategyMode{display:none!important;}
 html body.rq-page-simulation .controls .field input,html body.rq-page-simulation .controls .field select,html body.rq-page-simulation .controls .field.wide input{width:100%!important;min-width:0!important;max-width:none!important;}
-html body.rq-page-simulation .run-actions{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important;}
-html body.rq-page-simulation .run-actions button{width:100%!important;min-width:0!important;}
-html body.rq-page-simulation .controls #status{grid-column:1/-1!important;width:100%!important;min-height:32px!important;justify-content:flex-start!important;}
-@media(max-width:1500px){html body.rq-page-simulation .controls{grid-template-columns:repeat(4,minmax(130px,1fr))!important;}html body.rq-page-simulation .run-actions{grid-column:span 2!important;}}
-@media(max-width:900px){html body.rq-page-simulation .controls{grid-template-columns:repeat(2,minmax(0,1fr))!important;}html body.rq-page-simulation .run-actions,html body.rq-page-simulation .controls #status{grid-column:1/-1!important;}}
-@media(max-width:560px){html body.rq-page-simulation .controls{grid-template-columns:1fr!important;}html body.rq-page-simulation .run-actions,html body.rq-page-simulation .controls #status{grid-column:1!important;}}
+html body.rq-page-simulation .controls .field.wide{grid-column:span 2!important;}
+html body.rq-page-simulation .sim-cost-settings{grid-column:1/-1!important;min-width:0!important;}
+html body.rq-page-simulation .sim-cost-settings summary{cursor:pointer!important;font-weight:900!important;color:#7b5945!important;}
+html body.rq-page-simulation .run-actions{grid-column:span 2!important;display:flex!important;gap:8px!important;align-items:center!important;}
+html body.rq-page-simulation .run-actions button{width:auto!important;min-width:168px!important;}
+html body.rq-page-simulation .controls #status{grid-column:1/-1!important;width:100%!important;min-height:28px!important;justify-content:flex-start!important;padding:0 2px!important;}
+html body.rq-page-simulation .sim-system-field,html body.rq-page-simulation #simRetryButton[hidden]{display:none!important;}
+html body.rq-page-simulation .metrics .metric:nth-child(2),html body.rq-page-simulation .metrics .metric:nth-child(7){display:none!important;}
+html body.rq-page-simulation .metrics{grid-template-columns:repeat(5,minmax(0,1fr))!important;}
+html body.rq-page-simulation .sim-head{display:none!important;}
+html body.rq-page-simulation .sim-table{min-width:0!important;width:100%!important;}
+html body.rq-page-simulation .sim-row{display:grid!important;grid-template-columns:160px minmax(300px,1fr) 118px minmax(220px,.72fr)!important;grid-template-areas:"stock chart status reason" "stock chart pnl reason"!important;gap:10px 18px!important;min-height:142px!important;padding:16px 18px!important;}
+html body.rq-page-simulation .sim-row>div:nth-child(1){grid-area:stock!important;}html body.rq-page-simulation .sim-row>div:nth-child(2){grid-area:status!important;}html body.rq-page-simulation .sim-row>div:nth-child(3){grid-area:chart!important;}html body.rq-page-simulation .sim-row>div:nth-child(4){display:none!important;}html body.rq-page-simulation .sim-row>div:nth-child(5){grid-area:pnl!important;}html body.rq-page-simulation .sim-row>div:nth-child(6){grid-area:reason!important;max-height:96px!important;}html body.rq-page-simulation .sim-row .chart{width:100%!important;min-width:0!important;height:96px!important;}
+@media(max-width:1050px){html body.rq-page-simulation .sim-config-bar{align-items:stretch!important;flex-direction:column!important;}html body.rq-page-simulation .sim-mode-selector,html body.rq-page-simulation .sim-source-field{width:100%!important;overflow:auto!important;}html body.rq-page-simulation .controls{grid-template-columns:repeat(2,minmax(0,1fr))!important;}html body.rq-page-simulation .run-actions{grid-column:1/-1!important;}}
+@media(max-width:560px){html body.rq-page-simulation .controls{grid-template-columns:1fr!important;}html body.rq-page-simulation .controls .field.wide,html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions,html body.rq-page-simulation .controls #status{grid-column:1!important;}html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions{flex-wrap:wrap!important;justify-content:flex-start!important;}html body.rq-page-simulation .run-actions button,html body.rq-page-simulation .sim-utility-actions button{flex:1 1 140px!important;}}
 /* The simulation now has a mode selector, so it must not inherit the legacy
    fixed five-row grid. Keep every section in normal vertical document flow. */
 html body.rq-page-simulation .page{display:flex!important;flex-direction:column!important;height:auto!important;min-height:calc(100vh - 32px)!important;overflow:visible!important;gap:10px!important;}
-html body.rq-page-simulation .page>.top,html body.rq-page-simulation .page>.sim-mode-selector,html body.rq-page-simulation .page>.controls,html body.rq-page-simulation .page>.bar,html body.rq-page-simulation .page>.progress,html body.rq-page-simulation .page>.metrics{flex:0 0 auto!important;min-height:0!important;}
+html body.rq-page-simulation .page>.top,html body.rq-page-simulation .page>.sim-config-bar,html body.rq-page-simulation .page>.controls,html body.rq-page-simulation .page>.bar,html body.rq-page-simulation .page>.progress,html body.rq-page-simulation .page>.metrics{flex:0 0 auto!important;min-height:0!important;}
 html body.rq-page-simulation .layout{flex:1 0 520px!important;min-height:520px!important;}
 @media(max-width:1180px){html body.rq-page-simulation .layout{flex-basis:auto!important;min-height:420px!important;}}
 </style>
@@ -15845,22 +15830,28 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     </div>
   </aside>
 <div class="page">
-  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控股票、日内曲线、买卖点、历史复盘</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
-  <div class="sim-mode-selector" id="simModeSelector" role="group" aria-label="测试模式">
-    <button type="button" data-sim-mode="strict-day" class="is-active">当日严格测试</button>
-    <button type="button" data-sim-mode="review-5d">近5日复盘</button>
-    <button type="button" data-sim-mode="scan">机会扫描</button>
+  <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控股票、日内曲线、买卖点、历史复盘</div></div></div>
+  <div class="sim-config-bar">
+    <div class="sim-mode-selector" id="simModeSelector" role="group" aria-label="测试模式">
+      <span class="sim-config-label">测试模式</span>
+      <button type="button" data-sim-mode="strict-day" class="is-active">当日严格测试</button>
+      <button type="button" data-sim-mode="review-5d">近5日复盘</button>
+      <button type="button" data-sim-mode="scan">随机机会扫描</button>
+    </div>
+    <label class="sim-source-field" for="simStockSource">
+      <span class="sim-config-label">股票来源</span>
+      <select id="simStockSource" aria-label="股票来源"><option value="watchlist" selected>监控股票</option><option value="random">随机股票测试</option><option value="custom">自定义股票</option></select>
+    </label>
   </div>
   <div class="controls" data-simulation-controls>
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
-    <label class="field sim-system-field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
+    <label class="field sim-sample-size" id="simSampleSize" hidden><span>随机测试股数</span><select id="sampleInput" aria-label="随机测试股数" onchange="syncCards()"><option value="5">5只</option><option value="10" selected>10只</option><option value="20">20只</option><option value="30">30只</option></select></label>
     <label class="field sim-system-field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
-    <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards();loadAdaptiveStatus()"><option value="steady">稳健｜少交易 · 2轮</option><option value="balanced" selected>平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option></select></label>
-    <label class="field"><span>策略模式</span><select id="simStrategyMode" onchange="syncCards()"><option value="官方默认策略">官方默认策略</option><option value="自定义策略">自定义策略｜同步控制台</option><option value="AI复核优先">AI复核优先</option></select></label>
-    <label class="field"><span>股票来源</span><select id="simStockSource"><option value="watchlist" selected>监控股票</option><option value="random">随机抽测</option><option value="custom">自定义股票</option></select></label>
+    <label class="field"><span>做T方案</span><select id="simPlan"><option value="balanced">平衡策略｜默认 · 3轮</option><option value="steady">稳健策略｜少交易 · 2轮</option><option value="sensitive">灵敏策略｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option><option value="custom">自定义策略｜同步控制台</option><option value="ai-review">AI复核优先</option></select></label>
+    <select id="simSmartTProfile" aria-hidden="true" tabindex="-1"><option value="steady">稳健</option><option value="balanced" selected>平衡</option><option value="sensitive">灵敏</option><option value="quantbrain">量化学习</option></select>
+    <select id="simStrategyMode" aria-hidden="true" tabindex="-1"><option value="官方默认策略">官方默认策略</option><option value="自定义策略">自定义策略</option><option value="AI复核优先">AI复核优先</option></select>
     <label class="field wide" id="simCustomStocks"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
-    <button type="button" id="simSyncWatchlist">同步监控股票</button>
     <details class="sim-cost-settings"><summary>底仓与成交成本</summary><div class="sim-cost-grid">
       <label class="field"><span>昨仓可卖股数</span><input id="baseSharesInput" type="number" min="0" step="100" value="6000" /></label>
       <label class="field"><span>回测口径</span><select id="simMode"><option value="strict" selected>严格随机</option><option value="scan">机会扫描</option></select></label>
@@ -15874,8 +15865,6 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
       <button type="button" id="simStartButton" class="primary" data-sim-run data-busy="0">开始模拟测试</button>
       <button type="button" id="simRetryButton" data-sim-run data-busy="0" hidden>重新测试</button>
     </div>
-    <button type="button" id="simRefreshHistory">刷新历史</button>
-    <button type="button" id="simClearView">清空</button>
     <div id="status" class="sub">就绪</div>
   </div>
   <div id="loading" class="bar"></div>
@@ -15980,7 +15969,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';simulationStrategyContext={strategyMode:s.strategyMode||'官方默认策略',customStrategy:s.customStrategy||''};if($('simStrategyMode'))$('simStrategyMode').value=simulationStrategyContext.strategyMode;simulationStrategy={vwap_take_profit_pct:Number(s.vwap_take_profit_pct||0.25),normal_take_profit_pct:Number(s.normal_take_profit_pct||0.6),late_take_profit_pct:Number(s.late_take_profit_pct||0.45)}}}catch(e){}syncCards();loadAdaptiveStatus()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';simulationStrategyContext={strategyMode:s.strategyMode||'官方默认策略',customStrategy:s.customStrategy||''};if($('simStrategyMode'))$('simStrategyMode').value=simulationStrategyContext.strategyMode;simulationStrategy={vwap_take_profit_pct:Number(s.vwap_take_profit_pct||0.25),normal_take_profit_pct:Number(s.normal_take_profit_pct||0.6),late_take_profit_pct:Number(s.late_take_profit_pct||0.45)}}}catch(e){}window.syncSimulationPlan?.();syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';if($('fees'))$('fees').textContent=s.fees||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
@@ -16001,8 +15990,7 @@ function chart(row){
   const norm=t=>String(t||'').replace(/\D/g,'').slice(-4);
   const mark=(time,label,color,side,order)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],near=placed.filter(x=>Math.abs(x-p.x)<42&&x.side===side).length,shift=(near%2?1:-1)*Math.ceil(near/2)*46,tx=Math.max(28,Math.min(392,p.x+shift)),ty=side==='buy'?(12+(order%2)*12):(74-(order%2)*12),w=Math.max(34,label.length*9+10);placed.push({x:tx,side});return `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${(ty+(side==='buy'?5:-5)).toFixed(1)}" stroke="${color}" stroke-width="1" opacity=".55"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}" stroke="#fff" stroke-width="2"/><rect x="${(tx-w/2).toFixed(1)}" y="${(ty-9).toFixed(1)}" width="${w}" height="14" rx="7" fill="#fff" stroke="${color}"/><text x="${tx.toFixed(1)}" y="${(ty+.5).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="900" fill="${color}">${label}</text>`};
   const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);
-  // Each closed T-cycle enters at an oversold point and exits at an overbought point.
-  const signalMarks=cycles.map((x,i)=>mark(x.buyTime,`超卖·买${cycles.length>1?i+1:''}`,'#0e9f9a','buy',i)+mark(x.sellTime,`超买·卖${cycles.length>1?i+1:''}`,'#f59e0b','sell',i)).join('');
+  const signalMarks=cycles.map((x,i)=>{const reverse=String(x.action||row.action||'').startsWith('反T'),suffix=cycles.length>1?` ${i+1}`:'';return reverse?mark(x.sellTime,`反T·卖${suffix}`,'#f59e0b','sell',i)+mark(x.buyTime,`反T·买回${suffix}`,'#0e9f9a','buy',i):mark(x.buyTime,`正T·买${suffix}`,'#0e9f9a','buy',i)+mark(x.sellTime,`正T·卖${suffix}`,'#f59e0b','sell',i)}).join('');
   return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${signalMarks}</svg>`
 }
 function clearView(){setResultVisible(false,'已清空。点击“开始测试”后再显示结果。');renderReview({},{});$('status').textContent='已清空'}
@@ -17585,7 +17573,7 @@ loadRanking();setInterval(loadRanking,5000);
 </script></body></html>"""
 
 
-MARKET_RADAR_HTML = r"""<!doctype html>
+LEGACY_MARKET_RADAR_HTML = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>牛市雷达 · 做T神器</title><style>
 :root{--ink:#603a28;--muted:#a27964;--line:#f1d8c9;--paper:#fffaf6;--coral:#ff7f7f;--green:#36b96b;--yellow:#f1ad3f;--red:#df665f}*{box-sizing:border-box}html,body{margin:0;min-height:100%;font:14px/1.55 "Microsoft YaHei UI",Segoe UI,sans-serif;color:var(--ink);background:radial-gradient(circle at 78% 18%,#fff0df 0,transparent 30%),linear-gradient(145deg,#fffaf4,#fff2e7)}button{font:inherit;cursor:pointer}.layout{min-height:100vh;display:grid;grid-template-columns:218px minmax(0,1fr);gap:12px;padding:12px}.side{display:flex;flex-direction:column;gap:8px;padding:16px 13px;border:1px solid var(--line);border-radius:24px;background:rgba(255,253,249,.96);box-shadow:0 18px 44px rgba(110,70,38,.08)}.brand{display:flex;align-items:center;gap:11px;padding:4px 5px 18px}.brand img{width:52px;height:52px;object-fit:cover;border-radius:17px}.brand b{display:block;font-size:17px}.brand span,.side-foot{color:var(--muted);font-size:11px}.nav{height:44px;padding:0 12px;border:1px solid transparent;border-radius:14px;background:transparent;color:#6d4c36;text-align:left;font-weight:900}.nav:hover{background:#fff5e9}.nav.active{color:#fff;background:linear-gradient(135deg,#ffad68,#f08042);box-shadow:0 12px 24px rgba(240,128,66,.22)}.side-foot{margin-top:auto;padding:12px;border-top:1px solid #f1e3d5}.main{min-width:0}.top{min-height:66px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:11px 22px;border:1px solid var(--line);border-radius:22px;background:rgba(255,253,249,.9)}.title{font-size:25px;font-weight:950}.sub{color:var(--muted);font-size:12px}.refresh{flex:0 0 auto;height:38px;padding:0 16px;border:1px solid #f1c09b;border-radius:12px;background:#fff6ed;color:#9b542e;font-weight:900}.radar-shell{position:relative;max-width:1120px;min-height:650px;margin:12px auto 0;padding:28px 30px 22px;overflow:hidden;border:2px solid rgba(255,255,255,.94);border-radius:42px;background:linear-gradient(145deg,rgba(255,253,249,.98),rgba(255,247,242,.96));box-shadow:0 24px 60px rgba(149,87,57,.15),inset 0 0 0 1px #f4d8c9}.radar-shell:before{content:"";position:absolute;inset:145px auto auto 70px;width:390px;height:390px;border:1px dashed #f7d8ca;border-radius:50%;opacity:.7}.radar-title{position:relative;display:flex;align-items:center;gap:14px;margin-bottom:22px;font-size:38px;font-weight:950;letter-spacing:.03em}.radar-title .bunny{display:grid;width:55px;height:55px;place-items:center;border-radius:20px;background:#ffe1db;font-size:34px}.radar-title .wave{color:#ff9e9b;font-size:31px}.radar-body{position:relative;z-index:1;display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px}.panel{padding:28px;border:1px solid #f2d9cd;border-radius:34px;background:rgba(255,252,249,.84);box-shadow:inset 0 0 30px rgba(255,225,210,.22)}.score-row{display:flex;align-items:center;gap:32px;margin-bottom:22px}.score{min-width:210px;font-size:104px;line-height:.9;font-weight:980;letter-spacing:-.06em;color:#ff7777;text-shadow:0 7px 18px rgba(255,117,117,.14)}.score small{font-size:28px;letter-spacing:0}.status{display:inline-flex;align-items:center;gap:12px;padding:14px 26px;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ff9c9b,#ff777f);box-shadow:0 12px 22px rgba(255,119,127,.24);font-size:24px;font-weight:950}.status:before{content:"🐂"}.status.bear:before{content:"🐻"}.status.neutral:before{content:"◌"}.signal-list{display:grid;gap:9px}.metric{display:grid;grid-template-columns:52px 88px minmax(40px,1fr) 36px 88px;align-items:center;gap:12px;min-height:72px;padding:9px 20px;border:1px solid #f4dfd4;border-radius:28px;background:rgba(255,255,255,.76);box-shadow:0 7px 18px rgba(112,68,39,.05)}.metric-icon{display:grid;width:46px;height:46px;place-items:center;border-radius:16px;background:#ffe6e1;font-size:24px}.metric-name{font-size:21px;font-weight:950}.metric-line{height:0;border-top:2px dashed #f2d9cd}.light{width:33px;height:33px;border-radius:50%;border:6px solid #fff;box-shadow:0 0 0 1px #e9d8cb,0 5px 12px rgba(88,55,34,.14)}.light.green{background:radial-gradient(circle at 35% 28%,#eaffbe,#55d74a 62%,#22a83f)}.light.yellow{background:radial-gradient(circle at 35% 28%,#fff4b7,#ffbd43 64%,#dd8f26)}.light.red{background:radial-gradient(circle at 35% 28%,#ffd0ca,#ed6e68 64%,#c84b4b)}.metric-state{font-size:19px;font-weight:950}.metric-state.green{color:#2eae59}.metric-state.yellow{color:#e79a26}.metric-state.red{color:#d95b57}.conclusion{display:flex;align-items:center;gap:15px;margin-top:12px;padding:16px 20px;border:1px solid #f3ddd1;border-radius:24px;background:#fff9f5;font-size:19px;font-weight:900}.conclusion:before{content:"☑";display:grid;width:42px;height:42px;place-items:center;border-radius:15px;color:#fff;background:#ff8585;font-size:24px}.conclusion b{color:#ff6f70}.rabbit-zone{position:relative;display:flex;align-items:flex-end;justify-content:center;min-height:450px}.rabbit-zone:before{content:"★  ·  ♡";position:absolute;right:20px;top:20px;color:#efb9a2;font-size:26px;letter-spacing:20px}.rabbit{width:350px;height:410px;object-fit:cover;object-position:50% 50%;mix-blend-mode:multiply;-webkit-mask-image:radial-gradient(ellipse 58% 56% at 50% 53%,#000 58%,transparent 78%);mask-image:radial-gradient(ellipse 58% 56% at 50% 53%,#000 58%,transparent 78%);filter:drop-shadow(0 22px 20px rgba(130,76,48,.14))}.meta{position:relative;z-index:2;display:grid;grid-template-columns:auto minmax(170px,1fr) minmax(260px,1.5fr);align-items:center;gap:18px;margin-top:16px;padding:14px 18px;border-top:1px solid #f1d9cc;color:var(--muted);font-size:13px}.change b{color:var(--ink);font-size:16px}.trend-box{display:flex;align-items:center;gap:8px}.trend-box svg{width:150px;height:44px}.breadth{font-weight:800}.error{padding:50px;text-align:center;color:#b34b46}.loading{display:grid;min-height:430px;place-items:center;color:var(--muted);font-size:18px}@media(max-width:1000px){.layout{display:block}.side{display:none}.radar-body{grid-template-columns:1fr}.rabbit-zone{min-height:230px}.rabbit{width:270px;height:270px}.meta{grid-template-columns:1fr}.top{border-radius:0}.radar-shell{border-radius:28px}.score-row{flex-wrap:wrap}}@media(max-width:600px){.radar-shell{padding:20px 14px}.panel{padding:18px 12px}.radar-title{font-size:28px}.score{font-size:76px;min-width:auto}.status{font-size:18px}.metric{grid-template-columns:44px 60px 1fr 30px 60px;padding:8px}.metric-name,.metric-state{font-size:16px}.rabbit-zone{display:none}}
@@ -17597,6 +17585,25 @@ function iconFor(index){return ['↗','◉','▥'][index]||'•'}
 async function loadRadar(){const content=document.getElementById('content');try{const response=await fetch('/api/market_radar?_='+Date.now(),{cache:'no-store'});const data=await response.json();if(!data.ok)throw new Error(data.message||'雷达暂不可用');const score=Number(data.score||0),status=document.getElementById('status');document.getElementById('score').textContent=score;status.textContent=data.status;status.className='status '+(score>=58?'bull':score<42?'bear':'neutral');document.getElementById('conclusion').textContent=data.conclusion||'结构信号尚不明确';document.getElementById('updated').textContent=`更新 ${data.updatedAt} · ${data.dataSource||'行情快照'} · 样本 ${data.sampleSize} 只${data.coverage==='degraded'?' · 降级模式':''}${data.demo?' · 演示行情':''}`;document.getElementById('change').textContent=data.dayChange==null?'首次记录':`${data.dayChange>=0?'+':''}${data.dayChange} 分`;document.getElementById('metrics').innerHTML=(data.metrics||[]).map((m,i)=>`<article class="metric"><span class="metric-icon">${iconFor(i)}</span><span class="metric-name">${esc(i===1?'资金':i===2?'个股':m.name)}</span><i class="metric-line"></i><span class="light ${esc(m.light)}"></span><b class="metric-state ${esc(m.light)}">${metricState(m,i)}</b></article>`).join('');const b=data.breadth||{};document.getElementById('breadth').textContent=`上涨 ${b.up??'--'} · 平盘 ${b.flat??'--'} · 下跌 ${b.down??'--'}｜${data.coverageMessage||''}`;drawTrend(data.history)}catch(error){content.innerHTML=`<div class="error">市场雷达读取失败：${esc(error.message||error)}<br><button class="refresh" onclick="location.reload()">重新加载</button></div>`}}
 document.addEventListener('DOMContentLoaded',loadRadar);
 </script></body></html>"""
+
+
+# The radar is intentionally delivered as its final V2 document.  Keeping the
+# structure server-rendered prevents the old radar from flashing before a
+# client script can rebuild it.
+MARKET_RADAR_HTML = r"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>市场雷达 · 做T神器</title>
+<link rel="stylesheet" href="/assets/radar-compact.css?v=20260712a"></head>
+<body><main class="layout"><aside class="side"><div class="brand"><img src="/assets/rabbit-quant-logo.png" alt="做T神器"><div><b>做T神器</b><span>AI智能做T助手</span></div></div><nav class="app-navigation" data-app-navigation></nav><div class="side-foot">基于全A股市场快照计算，不构成投资建议。</div></aside>
+<section class="main"><header class="top"><div><div class="title">市场雷达</div><div class="sub" id="updated">正在读取全市场状态…</div></div><button class="refresh" type="button" id="radarRefresh">刷新数据</button></header>
+<section id="content" class="rq-radar-page" aria-live="polite">
+  <section class="rq-radar-hero"><div><p class="rq-radar-kicker" id="radarDataState">正在读取全市场快照</p><h1 class="rq-radar-state" id="radarState">当前市场：等待数据</h1><p class="rq-radar-human" id="radarSummary">数据加载后将展示市场判断与做T门槛说明。</p></div><div class="rq-radar-score"><b id="radarScore">--<small>分</small></b><span id="radarChange">较上次：等待数据</span></div></section>
+  <div class="rq-radar-grid"><section class="rq-radar-card"><h2>四维市场判断</h2><div class="rq-radar-dimensions" id="radarDimensions"></div></section><aside class="rq-radar-card"><h2>兔兔操作建议</h2><div class="rq-radar-advice"><article class="rq-radar-action buy"><h3>🐰 买兔 · 正T</h3><p id="radarBuyAdvice">等待雷达数据。</p></article><article class="rq-radar-action sell"><h3>🐰 卖兔 · 反T</h3><p id="radarSellAdvice">等待雷达数据。</p></article><div class="rq-radar-position" id="radarPosition">仓位建议：等待数据。</div></div></aside></div>
+  <section class="rq-radar-card rq-radar-trend"><h2>市场温度变化</h2><svg id="radarTrend" viewBox="0 0 540 94" role="img" aria-label="市场雷达历史趋势"></svg><div class="rq-radar-trend-note" id="radarTrendNote">展示已保存的近7次全市场快照，不把日内波动误作趋势。</div></section>
+  <div class="rq-radar-lower"><section class="rq-radar-card"><h2>市场结构</h2><div class="rq-radar-structure" id="radarStructure"></div></section><section class="rq-radar-card"><h2>当前风险</h2><ul class="rq-radar-risks" id="radarRisks"></ul></section></div>
+  <details class="rq-radar-card rq-radar-evidence"><summary>查看完整依据</summary><div class="rq-radar-evidence-content" id="radarEvidence">雷达会在数据加载后说明各维度判断依据。</div></details>
+  <section class="rq-radar-card rq-radar-error" id="radarError" hidden><strong>市场雷达暂时无法读取</strong><p id="radarErrorMessage">请稍后重新测试。</p><button class="refresh" type="button" id="radarRetry">重新测试</button></section>
+</section></section></main><script src="/assets/radar-page.js?v=20260712a"></script></body></html>"""
 
 
 LANDING_HTML = r"""<!doctype html>

@@ -449,11 +449,16 @@ def apply_cash_constraints(results: List[Result], total_cash: float) -> List[Res
 
 
 def apply_daily_trade_limit(results: List[Result], max_trades: int) -> List[Result]:
-    min_quality = int((ACTIVE_STRATEGY or DEFAULT_STRATEGY).get("min_trade_quality", 0))
     traded = [r for r in results if r.action != "未触发"]
-    allowed_traded = [r for r in traded if _trade_quality_score(r) >= min_quality]
-    if max_trades > 0 and len(allowed_traded) > max_trades:
-        allowed_traded = sorted(allowed_traded, key=_trade_quality_key, reverse=True)[:max_trades]
+    # Candidate structure and the shared Smart-T policy have already applied
+    # direction, auction, trend, cost and profile gates.  Applying the legacy
+    # presentation-quality score here silently turned valid closed cycles into
+    # “not triggered”, which is why an entire simulation could show zero
+    # trades.  Quality remains useful for ranking when a caller explicitly
+    # caps daily trades; it is not a second execution veto.
+    allowed_traded = traded
+    if max_trades > 0 and len(traded) > max_trades:
+        allowed_traded = sorted(traded, key=_trade_quality_key, reverse=True)[:max_trades]
     allowed = {id(r) for r in allowed_traded}
     out: List[Result] = []
     for result in results:
@@ -471,7 +476,7 @@ def apply_daily_trade_limit(results: List[Result], max_trades: int) -> List[Resu
                     0.0,
                     0.0,
                     0,
-                    f"信号质量不足：质量{quality}/{min_quality}，不为了凑交易次数强行做T",
+                    f"超过当日测试交易上限：候选质量{quality}，未计入本次模拟",
                 )
             )
         else:
@@ -1219,13 +1224,16 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
     position = PositionState(SIM_BASE_SHARES)
     ACTIVE_POSITION = position
     entry_after = ""
+    opening_legs_used = 0
     last_result: Result | None = None
     for _ in range(limit):
-        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after, position)
+        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after, position, opening_legs_used)
         last_result = result
         if result.action == "未触发":
             break
         cycles.append(result)
+        if "开盘试探T" in result.reason and result.entry_time <= "10:00":
+            opening_legs_used += 1
         end_time = result.buy_time if result.action.startswith("反T") else result.sell_time
         end_minute = _hm_to_minutes(end_time)
         if end_minute >= _hm_to_minutes(str(strategy.get("trade_end_hm") or "14:00")):
@@ -1261,6 +1269,7 @@ def _shared_policy_allows(
 ) -> bool:
     """Apply the exact live execution gate to a causal replay candidate."""
     bar = bars[idx]
+    opening_trial = _is_opening_trade_window(bar.hm)
     shares = max(100, int(trade_amount / max(bar.price, 0.01) / 100) * 100)
     amount = shares * bar.price
     fee_pct = 0.0
@@ -1286,9 +1295,11 @@ def _shared_policy_allows(
             for item in bars[: idx + 1]
         ],
         signal_action=direction,
-        # Local confirmation has five discrete factors.  Map it to the live
-        # ten-point scale instead of treating an unconfirmed setup as a ten.
-        signal_score=min(10, 6 + max(0, confirmation_score)),
+        # A normal candidate already passed its price, VWAP, momentum and
+        # second-turn checks.  One additional local confirmation is enough to
+        # submit it to the shared profile gate; demanding two here caused a
+        # duplicate confirmation filter and zero-trigger replays.
+        signal_score=8 if opening_trial else min(10, 7 + max(0, confirmation_score)),
         strict_signal=True,
         market_status="交易中",
         auction_direction=auction_gate.get("preferredDirection") or "",
@@ -1300,7 +1311,7 @@ def _shared_policy_allows(
     return bool(decision.get("confirmed"))
 
 
-def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None) -> Result:
+def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None, opening_legs_used: int = 0) -> Result:
     # Do not inspect end-of-day extrema here: all entry decisions are causal.
     day_amp = 0.0
     # Full-day range is a reporting value only; never gate an intraday decision with future bars.
@@ -1313,6 +1324,8 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
     buy: Optional[Bar] = None
     sell_first: Optional[Bar] = None
     mode = ""
+    active_trade_amount = trade_amount
+    entry_note = ""
     lows: List[float] = []
     highs: List[float] = []
     avg_prices: List[float] = []
@@ -1349,11 +1362,27 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             )
             gate_state = str(gate.get("state") or "NEUTRAL")
             preference = str(gate.get("preferredDirection") or "")
+            opening_trial = _is_opening_trade_window(bar.hm)
             opening_wait = gate_state in {"PENDING_CONFIRMATION", "WAIT_DATA"} and bar.hm < "09:45"
             allow_buy = not opening_wait and not (gate_state == "CONFIRMED" and preference != "BUY_FIRST")
             allow_sell = not opening_wait and not (gate_state == "CONFIRMED" and preference != "SELL_FIRST")
-            buy_setup = _is_opening_buy_setup(bars, idx, bar, avg, lows, volumes) or _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)
-            sell_setup = _is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes) or _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
+            if opening_trial:
+                # The opening layer is shared by every profile.  It must follow
+                # a confirmed auction direction and uses only one sixth size;
+                # normal profile entries begin after 10:00.
+                if opening_legs_used >= 2:
+                    buy_setup = sell_setup = False
+                elif opening_legs_used == 0:
+                    buy_setup = gate_state == "CONFIRMED" and preference == "BUY_FIRST" and _is_opening_buy_setup(bars, idx, bar, avg, lows, volumes)
+                    sell_setup = gate_state == "CONFIRMED" and preference == "SELL_FIRST" and _is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes)
+                else:
+                    buy_setup = gate_state == "CONFIRMED" and preference == "BUY_FIRST" and _is_opening_buy_add_setup(bars, idx, bar, avg)
+                    sell_setup = gate_state == "CONFIRMED" and preference == "SELL_FIRST" and _is_opening_reverse_add_setup(bars, idx, bar, avg)
+                candidate_trade_amount = trade_amount / 6.0
+            else:
+                buy_setup = _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)
+                sell_setup = _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
+                candidate_trade_amount = trade_amount
             if int(ACTIVE_STRATEGY.get("quantbrain_enabled", 0)):
                 factor_rsi = _causal_rsi(bars, idx)
                 buy_setup = buy_setup and factor_rsi <= 62.0
@@ -1361,17 +1390,21 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             buy_score = _buy_confirmation_score(bars, idx, lows, volumes) if idx >= 6 else 0
             sell_score = _sell_confirmation_score(bars, idx, highs, volumes) if idx >= 6 else 0
             buy_allowed = allow_buy and buy_setup and _shared_policy_allows(
-                stock, bars, idx, avg, observed_low, observed_high, "BUY_FIRST", buy_score, gate, trade_amount
+                stock, bars, idx, avg, observed_low, observed_high, "BUY_FIRST", buy_score, gate, candidate_trade_amount
             )
             sell_allowed = allow_sell and sell_setup and _shared_policy_allows(
-                stock, bars, idx, avg, observed_low, observed_high, "SELL_FIRST", sell_score, gate, trade_amount
+                stock, bars, idx, avg, observed_low, observed_high, "SELL_FIRST", sell_score, gate, candidate_trade_amount
             )
             if buy_allowed:
                 buy = bar
                 mode = "正T"
+                active_trade_amount = candidate_trade_amount
+                entry_note = ("；开盘试探T，首次确认，仅使用计划资金的1/6" if opening_legs_used == 0 else "；开盘试探T，回踩确认后第二次，仅使用计划资金的1/6") if opening_trial else ""
             elif sell_allowed:
                 sell_first = bar
                 mode = "反T"
+                active_trade_amount = candidate_trade_amount
+                entry_note = ("；开盘试探T，首次确认，仅使用昨仓可卖部分的1/6" if opening_legs_used == 0 else "；开盘试探T，跌破开盘价反抽失败后第二次，仅使用昨仓可卖部分的1/6") if opening_trial else ""
             continue
 
         if mode == "正T" and buy is not None:
@@ -1394,16 +1427,16 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= 12 and pnl >= fast_take_profit)
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
-                return _trade_result(stock, "正T止盈", buy, bar, trade_amount, "右侧低吸确认后达到目标，已拉开时间间隔")
+                return _trade_result(stock, "正T止盈", buy, bar, active_trade_amount, "右侧低吸确认后达到目标，已拉开时间间隔" + entry_note)
             if pnl <= emergency_stop or (
                 hold_minutes >= min_stop
                 and pnl <= -0.55
                 and idx >= 2
                 and bar.price < min(bars[idx - 1].price, bars[idx - 2].price)
             ):
-                return _trade_result(stock, "正T止损", buy, bar, trade_amount, "确认破位后止损")
+                return _trade_result(stock, "正T止损", buy, bar, active_trade_amount, "确认破位后止损" + entry_note)
             if hold_minutes >= hold_limit and sell_dev >= 0.7 and pnl > 0:
-                return _trade_result(stock, "正T高抛", buy, bar, trade_amount, "回到均价上方")
+                return _trade_result(stock, "正T高抛", buy, bar, active_trade_amount, "回到均价上方" + entry_note)
 
         if mode == "反T" and sell_first is not None:
             hold_minutes = _minutes_between(sell_first.hm, bar.hm)
@@ -1425,23 +1458,23 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= 12 and pnl >= fast_take_profit)
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
-                return _reverse_t_result(stock, "反T买回", sell_first, bar, trade_amount, "高抛确认后回落买回，已拉开时间间隔")
+                return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "高抛确认后回落买回，已拉开时间间隔" + entry_note)
             if pnl <= emergency_stop or (
                 hold_minutes >= min_stop
                 and pnl <= -0.55
                 and idx >= 2
                 and bar.price > max(bars[idx - 1].price, bars[idx - 2].price)
             ):
-                return _reverse_t_result(stock, "反T止损", sell_first, bar, trade_amount, "确认继续走强后止损")
+                return _reverse_t_result(stock, "反T止损", sell_first, bar, active_trade_amount, "确认继续走强后止损" + entry_note)
             if hold_minutes >= hold_limit and buy_dev <= -0.3 and pnl > 0:
-                return _reverse_t_result(stock, "反T买回", sell_first, bar, trade_amount, "回落到均价下方")
+                return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "回落到均价下方" + entry_note)
 
     if buy is not None:
         end = _last_before(bars, "14:30") or bars[-1]
-        return _trade_result(stock, "正T尾盘处理", buy, end, trade_amount, "未到止盈止损")
+        return _trade_result(stock, "正T尾盘处理", buy, end, active_trade_amount, "未到止盈止损" + entry_note)
     if sell_first is not None:
         end = _last_before(bars, "14:30") or bars[-1]
-        return _reverse_t_result(stock, "反T尾盘买回", sell_first, end, trade_amount, "未到买回目标")
+        return _reverse_t_result(stock, "反T尾盘买回", sell_first, end, active_trade_amount, "未到买回目标" + entry_note)
 
     day_low = min(b.price for b in bars)
     day_high = max(b.price for b in bars)
@@ -1492,10 +1525,10 @@ def _no_trigger_reason(bars: List[Bar], day_low: float, day_high: float) -> str:
     notes = [f"日内振幅{amp:.1f}%"]
     if not buy_ok and not sell_ok:
         notes.append(f"VWAP偏离不足：低位{best_buy['dev']:.2f}%，高位{best_sell['dev']:.2f}%")
-    elif buy_ok and best_buy["score"] < _sim_required_confirm("buy"):
-        notes.append(f"低吸未确认：{best_buy['hm']} 偏离{best_buy['dev']:.2f}%，拐头确认{best_buy['score']}/{_sim_required_confirm('buy')}")
-    elif sell_ok and best_sell["score"] < _sim_required_confirm("sell"):
-        notes.append(f"反T未确认：{best_sell['hm']} 偏离{best_sell['dev']:.2f}%，回落确认{best_sell['score']}/{_sim_required_confirm('sell')}")
+    elif buy_ok and best_buy["score"] < 2:
+        notes.append(f"低吸候选确认不足：{best_buy['hm']} 偏离{best_buy['dev']:.2f}%，拐头确认{best_buy['score']}/2")
+    elif sell_ok and best_sell["score"] < 2:
+        notes.append(f"反T候选确认不足：{best_sell['hm']} 偏离{best_sell['dev']:.2f}%，回落确认{best_sell['score']}/2")
     else:
         notes.append("有波动但买卖闭合空间或风控条件不足")
     notes.append(sm)
@@ -1592,9 +1625,13 @@ def _is_better_buy_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not _is_low_buy_window(bar.hm):
         return False
-    if dev > float(strategy["buy_min_dev"]) or dev <= float(strategy["buy_max_dev"]):
+    # The learned values are deliberately conservative.  In a replay they
+    # are combined with a completed right-side pattern and the shared
+    # execution gate, so do not require an unusually deep pullback first.
+    buy_min_dev = max(float(strategy["buy_min_dev"]), -0.65)
+    if dev > buy_min_dev or dev <= float(strategy["buy_max_dev"]):
         return False
-    if not _vwap_reclaiming(bars, idx, avg_prices, float(strategy.get("vwap_reclaim_pct", 0.35))):
+    if not _vwap_reclaiming(bars, idx, avg_prices, max(0.30, float(strategy.get("vwap_reclaim_pct", 0.35)) * 0.75)):
         return False
     if not _vwap_not_falling(avg_prices):
         return False
@@ -1626,12 +1663,16 @@ def _is_better_buy_setup(
         return False
     if _roc(prices, idx, 3) <= 0 or _roc(prices, idx, 5) <= 0.05:
         return False
+    normal_turn_up = bar.price > bars[idx - 1].price and bars[idx - 1].price >= bars[idx - 2].price
     if int(strategy.get("second_confirm_enabled", 1)) and not (
-        _second_buy_confirm(bars, idx) or _sharp_reversal_buy(bars, idx)
+        _second_buy_confirm(bars, idx) or _sharp_reversal_buy(bars, idx) or normal_turn_up
     ):
         return False
-    required = _sim_required_confirm("buy") + (1 if _is_opening_first_half(bar.hm) else 0)
-    return _buy_confirmation_score(bars, idx, lows, volumes) >= max(3, required)
+    # This only decides whether a right-side setup is worth submitting to the
+    # shared Smart-T policy. Requiring the full profile score here *and* in
+    # ``_shared_policy_allows`` double-counted confirmation and made normal
+    # VWAP buy/sell points almost impossible to reach in replay.
+    return _buy_confirmation_score(bars, idx, lows, volumes) >= _setup_candidate_score(bar.hm)
 
 
 def _is_better_reverse_t_setup(
@@ -1646,9 +1687,10 @@ def _is_better_reverse_t_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not int(strategy.get("reverse_t_enabled", 0)):
         return False
-    if dev < float(strategy["sell_min_dev"]) or dev >= float(strategy["sell_max_dev"]):
+    sell_min_dev = min(float(strategy["sell_min_dev"]), 0.65)
+    if dev < sell_min_dev or dev >= float(strategy["sell_max_dev"]):
         return False
-    if not _vwap_fading(bars, idx, avg_prices, float(strategy.get("vwap_reclaim_pct", 0.35))):
+    if not _vwap_fading(bars, idx, avg_prices, max(0.30, float(strategy.get("vwap_reclaim_pct", 0.35)) * 0.75)):
         return False
     if abs(dev) > 8:
         return False
@@ -1679,12 +1721,12 @@ def _is_better_reverse_t_setup(
         return False
     if _roc(prices, idx, 3) >= -0.08 or _roc(prices, idx, 5) >= -0.28:
         return False
+    normal_turn_down = bar.price < bars[idx - 1].price and bars[idx - 1].price <= bars[idx - 2].price
     if int(strategy.get("second_confirm_enabled", 1)) and not (
-        _second_sell_confirm(bars, idx) or _sharp_reversal_sell(bars, idx)
+        _second_sell_confirm(bars, idx) or _sharp_reversal_sell(bars, idx) or normal_turn_down
     ):
         return False
-    required = _sim_required_confirm("sell") + (1 if _is_opening_first_half(bar.hm) else 0)
-    return _sell_confirmation_score(bars, idx, highs, volumes) >= max(3, required)
+    return _sell_confirmation_score(bars, idx, highs, volumes) >= _setup_candidate_score(bar.hm)
 
 
 def _is_opening_buy_setup(
@@ -1700,29 +1742,15 @@ def _is_opening_buy_setup(
         return False
     prices = [b.price for b in bars]
     open_price = prices[0]
-    low = min(lows)
-    drop_from_open = (low - open_price) / open_price * 100.0 if open_price > 0 else 0.0
-    reclaim = (bar.price - low) / low * 100.0 if low > 0 else 0.0
-    dev = (bar.price - avg) / avg * 100.0
-    low_pos = lows.index(low) if low in lows else 0
-    low_open_reclaim = (
-        low_pos <= max(8, idx // 2)
-        and reclaim >= 0.25
-        and -1.6 <= dev <= 0.45
-        and bar.price >= avg * 0.996
-    )
-    panic_reclaim = drop_from_open <= float(strategy.get("opening_drop_pct", -1.8))
-    if not (panic_reclaim or low_open_reclaim):
-        return False
-    if reclaim < (0.25 if low_open_reclaim else float(strategy.get("opening_reclaim_pct", 0.45))):
-        return False
-    if dev < -2.7 or dev > (0.55 if low_open_reclaim else 0.35):
-        return False
-    if _volume_ratio(volumes) < (0.70 if low_open_reclaim else 0.85):
-        return False
-    breaks_recent = bar.price > max(bars[idx - 1].price, bars[idx - 2].price)
-    momentum_ok = _roc(prices, idx, 3) > (-0.03 if low_open_reclaim else 0)
-    return breaks_recent and momentum_ok
+    # Low-gap first leg: five minutes without a fresh low, a higher secondary
+    # low, and two completed one-minute bars above both open and VWAP.
+    recent_low = min(prices[max(0, idx - 4): idx + 1])
+    earlier_low = min(prices[: max(1, idx - 4)])
+    no_fresh_low = recent_low > earlier_low * 1.0005
+    higher_secondary_low = min(prices[-3:]) > earlier_low * 1.0005
+    two_above = all(item.price > open_price and item.price > avg for item in bars[idx - 1: idx + 1])
+    vwap_rising = len(prices) >= 4 and avg >= sum(prices[-4:-1]) / 3.0 * 0.998
+    return no_fresh_low and higher_secondary_low and two_above and vwap_rising and _volume_ratio(volumes) >= 0.70
 
 
 def _second_buy_confirm(bars: List[Bar], idx: int) -> bool:
@@ -1765,26 +1793,31 @@ def _is_opening_reverse_setup(
         return False
     prices = [b.price for b in bars]
     open_price = prices[0]
-    high = max(highs)
-    spike = (high - open_price) / open_price * 100.0 if open_price > 0 else 0.0
-    fade = (high - bar.price) / high * 100.0 if high > 0 else 0.0
-    dev = (bar.price - avg) / avg * 100.0
-    if spike < float(strategy.get("opening_spike_pct", 2.4)):
+    # High-gap first leg: three minutes cannot make a new high (or a lower
+    # secondary high), two closes under VWAP, then a failed VWAP retest or a
+    # close below the opening price.
+    high_before = max(prices[: max(1, idx - 2)])
+    no_new_high = max(prices[-3:]) < high_before * 0.9995
+    lower_secondary_high = max(prices[-2:]) < max(prices[-5:-2]) * 0.9995
+    two_below_vwap = all(item.price < avg for item in bars[idx - 1: idx + 1])
+    failed_retest = max(prices[-3:]) < avg or bar.price < open_price
+    return (no_new_high or lower_secondary_high) and two_below_vwap and failed_retest and _volume_ratio(volumes) >= 0.70
+
+
+def _is_opening_buy_add_setup(bars: List[Bar], idx: int, bar: Bar, avg: float) -> bool:
+    """Second low-gap leg: VWAP retest holds and price turns up again."""
+    if idx < 8 or avg <= 0:
         return False
-    if fade < float(strategy.get("opening_fade_pct", 0.65)):
+    recent = [item.price for item in bars[idx - 3: idx + 1]]
+    return min(recent[:-1]) >= avg * 0.998 and bar.price > recent[-2] and bar.price > bars[0].price and bar.price > avg
+
+
+def _is_opening_reverse_add_setup(bars: List[Bar], idx: int, bar: Bar, avg: float) -> bool:
+    """Second high-gap leg: below open and a VWAP retest has failed."""
+    if idx < 8 or avg <= 0:
         return False
-    if int(strategy.get("opening_reverse_strict", 1)):
-        if spike < 2.8 or fade < 0.90:
-            return False
-        if _minutes_between(bars[0].hm, bar.hm) < 12:
-            return False
-    if dev < 0.0:
-        return False
-    if _volume_ratio(volumes) < 0.75:
-        return False
-    momentum_turn = _roc(prices, idx, 3) < -0.05 or bar.price < min(bars[idx - 1].price, bars[idx - 2].price)
-    no_new_high = bar.price < high * (1 - float(strategy.get("opening_fade_pct", 0.38)) / 100.0)
-    return momentum_turn and no_new_high
+    recent = [item.price for item in bars[idx - 3: idx + 1]]
+    return bar.price < bars[0].price and max(recent[:-1]) < avg and bar.price < recent[-2]
 
 
 def _second_sell_confirm(bars: List[Bar], idx: int) -> bool:
@@ -1836,6 +1869,19 @@ def _sim_required_confirm(side: str) -> int:
     return max(3, int(strategy[key]) - SIM_RELAX_CONFIRM)
 
 
+def _setup_candidate_score(hm: str) -> int:
+    """Minimum local evidence before the shared policy performs final gating.
+
+    The live policy maps the local 0-6 score onto its ten-point confirmation
+    scale and applies profile, market-radar, auction, trend and edge checks.
+    Outside the volatile opening period, one completed right-side local factor
+    is enough to submit a candidate because the shared policy still applies
+    the profile, trend, auction, radar and cost gates.  Opening candidates
+    remain stricter; neither threshold is an execution order.
+    """
+    return 3 if _is_opening_first_half(hm) else 1
+
+
 def _recent_turns_up(bars: List[Bar], current_index: int) -> bool:
     idx = current_index
     if idx < 3:
@@ -1872,7 +1918,7 @@ def _vwap_reclaiming(bars: List[Bar], idx: int, avg_prices: List[float], min_rec
         return False
     current = devs[-1]
     worst = min(devs[:-1])
-    return worst <= -0.9 and current - worst >= min_reclaim and current >= devs[-2]
+    return worst <= -max(0.55, min_reclaim * 1.5) and current - worst >= min_reclaim and current >= devs[-2]
 
 
 def _vwap_fading(bars: List[Bar], idx: int, avg_prices: List[float], min_fade: float) -> bool:
@@ -1881,7 +1927,7 @@ def _vwap_fading(bars: List[Bar], idx: int, avg_prices: List[float], min_fade: f
         return False
     current = devs[-1]
     best = max(devs[:-1])
-    return best >= 0.9 and best - current >= min_fade and current <= devs[-2]
+    return best >= max(0.55, min_fade * 1.5) and best - current >= min_fade and current <= devs[-2]
 
 
 def _buy_confirmation_score(bars: List[Bar], idx: int, lows: List[float], volumes: List[float]) -> int:
@@ -2025,7 +2071,7 @@ def _is_opening_trade_window(hm: str) -> bool:
     except Exception:
         return False
     now = time(h, m)
-    return time(9, 35) <= now <= time(10, 5)
+    return time(9, 35) <= now <= time(10, 0)
 
 
 def _is_opening_half_hour(hm: str) -> bool:

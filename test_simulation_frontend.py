@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import app_core
+from simulate_t_random import Result, Stock, apply_daily_trade_limit
 
 
 ROOT = Path(__file__).resolve().parent
@@ -52,15 +53,33 @@ class SimulationFrontendTests(unittest.TestCase):
         finally:
             script_path.unlink(missing_ok=True)
 
-    def test_navigation_and_parameter_buttons_are_not_run_buttons(self):
-        for button_id in ("simSyncWatchlist", "simRefreshHistory", "simClearView"):
-            match = re.search(rf'<button\b[^>]*\bid="{button_id}"[^>]*>', self.html)
-            self.assertIsNotNone(match, button_id)
-            self.assertNotIn("data-sim-run", match.group(0))
+    def test_only_primary_run_controls_remain_visible(self):
+        self.assertNotIn('id="simSyncWatchlist"', self.html)
+        self.assertNotIn('id="simRefreshHistory"', self.html)
+        self.assertNotIn('id="simClearView"', self.html)
+        self.assertIn('id="simStockSource"', self.html)
 
-    def test_result_layout_has_list_and_detail_with_explicit_states(self):
-        for token in ("simResultList", "simResultDetail", "已完成闭环", "未触发", "数据不足", "资金不足", "底仓不足", "测试失败"):
-            self.assertIn(token, self.script)
+    def test_random_source_exposes_a_bounded_sample_size(self):
+        self.assertIn('id="simSampleSize"', self.html)
+        self.assertIn('id="sampleInput"', self.html)
+        self.assertIn('value="10">10', self.html)
+        self.assertIn('value="20">20', self.html)
+        self.assertIn('$("simSampleSize").hidden = source !== "random"', self.script)
+
+    def test_native_intraday_chart_renderer_is_not_replaced(self):
+        self.assertIn("function chart(row)", self.html)
+        self.assertIn("正T·买", self.html)
+        self.assertIn("反T·买回", self.html)
+        self.assertNotIn("installResults", self.script)
+        self.assertNotIn("window.renderRows", self.script)
+
+    def test_confirmed_trade_is_not_rewritten_as_not_triggered_without_a_cap(self):
+        result = Result(
+            Stock("测试股", "000001", "sz000001"), "正T卖出", "11:20", 10.0,
+            "11:35", 10.1, 1.0, 100.0, 10000.0, 1000, "VWAP确认",
+        )
+        kept = apply_daily_trade_limit([result], 0)
+        self.assertEqual(kept[0].action, "正T卖出")
 
 
 if __name__ == "__main__":

@@ -54,18 +54,6 @@
     return risks;
   }
 
-  function shell() {
-    const content = $("content");
-    if (!content) return;
-    content.innerHTML = `<div class="rq-radar-page">
-      <section class="rq-radar-hero"><div><p class="rq-radar-kicker" id="radarDataState">正在读取全市场快照</p><h1 class="rq-radar-state" id="radarState">当前市场：等待数据</h1><p class="rq-radar-human" id="radarSummary">数据加载后将展示市场判断与做T门槛说明。</p></div><div class="rq-radar-score"><b id="radarScore">--<small>分</small></b><span id="radarChange">较上次：等待数据</span></div></section>
-      <div class="rq-radar-grid"><section class="rq-radar-card"><h2>四维市场判断</h2><div class="rq-radar-dimensions" id="radarDimensions"></div></section><aside class="rq-radar-card"><h2>兔兔操作建议</h2><div class="rq-radar-advice"><article class="rq-radar-action buy"><h3>🐰 买兔 · 正T</h3><p id="radarBuyAdvice">等待雷达数据。</p></article><article class="rq-radar-action sell"><h3>🐰 卖兔 · 反T</h3><p id="radarSellAdvice">等待雷达数据。</p></article><div class="rq-radar-position" id="radarPosition">仓位建议：等待数据。</div></div></aside></div>
-      <section class="rq-radar-card rq-radar-trend"><h2>市场温度变化</h2><svg id="radarTrend" viewBox="0 0 540 94" role="img" aria-label="市场雷达历史趋势"></svg><div class="rq-radar-trend-note" id="radarTrendNote">展示已保存的近7次全市场快照，不把日内波动误作趋势。</div></section>
-      <div class="rq-radar-lower"><section class="rq-radar-card"><h2>市场结构</h2><div class="rq-radar-structure" id="radarStructure"></div></section><section class="rq-radar-card"><h2>当前风险</h2><ul class="rq-radar-risk" id="radarRisks"></ul></section></div>
-      <details class="rq-radar-card rq-radar-evidence"><summary>查看完整依据</summary><div class="rq-radar-evidence-content" id="radarEvidence"></div></details>
-    </div>`;
-  }
-
   function render(data) {
     const score = Math.max(0, Math.min(100, Number(data.score || 0)));
     const state = profile(score), dimensions = dimensionRows(data), breadth = data.breadth || {};
@@ -88,16 +76,28 @@
     $("updated").textContent = `数据${data.coverage === "degraded" ? "降级" : "正常"} · ${data.updatedAt || "刚刚更新"}`;
   }
 
+  function showError(error) {
+    const panel = $("radarError");
+    const message = $("radarErrorMessage");
+    if (message) message.textContent = `市场雷达读取失败：${error.message || error}`;
+    if (panel) panel.hidden = false;
+  }
+
   async function loadRadar() {
-    const content = $("content");
+    const panel = $("radarError");
+    if (panel) panel.hidden = true;
     try {
       const response = await fetch(`/api/market_radar?_=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (_) {
+        throw new Error("雷达服务返回的数据格式异常");
+      }
       if (!response.ok || !data.ok) throw new Error(data.message || `雷达服务异常（${response.status}）`);
       render(data);
     } catch (error) {
-      if (content) content.innerHTML = `<div class="rq-radar-card rq-radar-error">市场雷达读取失败：${escapeHtml(error.message || error)}<br><button class="refresh" type="button" id="radarRetry">重新加载</button></div>`;
-      $("radarRetry")?.addEventListener("click", () => { shell(); loadRadar(); });
+      showError(error);
     }
   }
 
@@ -107,5 +107,9 @@
     document.removeEventListener("DOMContentLoaded", window.loadRadar);
   }
   window.loadRadar = loadRadar;
-  document.addEventListener("DOMContentLoaded", () => { shell(); $("content") && loadRadar(); });
+  document.addEventListener("DOMContentLoaded", () => {
+    $("radarRefresh")?.addEventListener("click", loadRadar);
+    $("radarRetry")?.addEventListener("click", loadRadar);
+    $("content") && loadRadar();
+  });
 })();
