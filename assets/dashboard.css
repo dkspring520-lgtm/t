@@ -1,0 +1,3 @@
+/* Dashboard-only extension point.
+   Keep monitoring cockpit visual changes here instead of app_core.py. */
+:root { --rq-dashboard-density: 1; }
