@@ -474,9 +474,13 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=20260711c"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
+        if "rq-page-simulation" in html and "/assets/simulation.css" not in html:
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=1"></head>', 1)
+        if "rq-page-simulation" in html and "/assets/simulation.js" not in html:
+            html = html.replace("</body>", '<script src="/assets/simulation.js?v=1"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
             html = html.replace("</body>", '<script src="/assets/app-navigation.js?v=1"></script></body>', 1)
         if "/assets/layout-unified.js" not in html:
@@ -15836,15 +15840,21 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
   </aside>
 <div class="page">
   <div class="top"><div><div class="title">模拟测试</div><div class="sub">随机股票、监控股票、日内曲线、买卖点、历史复盘</div></div><div><button onclick="location.href='/app'">返回监控</button> <button onclick="location.href='/research'">选股研究</button></div></div>
-  <div class="controls">
+  <div class="sim-mode-selector" id="simModeSelector" role="group" aria-label="测试模式">
+    <button type="button" data-sim-mode="strict-day" class="is-active">当日严格测试</button>
+    <button type="button" data-sim-mode="review-5d">近5日复盘</button>
+    <button type="button" data-sim-mode="scan">机会扫描</button>
+  </div>
+  <div class="controls" data-simulation-controls>
     <label class="field"><span>模拟资金</span><input id="cashInput" type="number" min="1000" step="10000" value="100000" oninput="syncTradeAmount()" /></label>
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
-    <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
-    <label class="field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
+    <label class="field sim-system-field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
+    <label class="field sim-system-field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
     <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards();loadAdaptiveStatus()"><option value="steady">稳健｜少交易 · 2轮</option><option value="balanced" selected>平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option></select></label>
     <label class="field"><span>策略模式</span><select id="simStrategyMode" onchange="syncCards()"><option value="官方默认策略">官方默认策略</option><option value="自定义策略">自定义策略｜同步控制台</option><option value="AI复核优先">AI复核优先</option></select></label>
-    <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
-    <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
+    <label class="field"><span>股票来源</span><select id="simStockSource"><option value="watchlist" selected>监控股票</option><option value="random">随机抽测</option><option value="custom">自定义股票</option></select></label>
+    <label class="field wide" id="simCustomStocks"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
+    <button type="button" id="simSyncWatchlist">同步监控股票</button>
     <details class="sim-cost-settings"><summary>底仓与成交成本</summary><div class="sim-cost-grid">
       <label class="field"><span>昨仓可卖股数</span><input id="baseSharesInput" type="number" min="0" step="100" value="6000" /></label>
       <label class="field"><span>回测口径</span><select id="simMode"><option value="strict" selected>严格随机</option><option value="scan">机会扫描</option></select></label>
@@ -15855,11 +15865,11 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
       <label class="field"><span>滑点(bp)</span><input id="slippageBpsInput" type="number" min="0" step="0.5" value="2" /></label>
     </div></details>
     <div class="run-actions" aria-label="模拟测试操作">
-      <button class="primary" onclick="runSim('simulate')">开始测试</button>
-      <button onclick="runSim('simulate',{random:true})">随机抽测</button>
+      <button type="button" id="simStartButton" class="primary" data-sim-run data-busy="0">开始模拟测试</button>
+      <button type="button" id="simRetryButton" data-sim-run data-busy="0" hidden>重新测试</button>
     </div>
-    <button onclick="loadHistory()">刷新历史</button>
-    <button onclick="clearView()">清空</button>
+    <button type="button" id="simRefreshHistory">刷新历史</button>
+    <button type="button" id="simClearView">清空</button>
     <div id="status" class="sub">就绪</div>
   </div>
   <div id="loading" class="bar"></div>
@@ -15893,13 +15903,16 @@ function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(
 let simulationStrategy={vwap_take_profit_pct:0.25,normal_take_profit_pct:0.6,late_take_profit_pct:0.45};
 let simulationStrategyContext={strategyMode:'官方默认策略',customStrategy:''};
 function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',strategyMode:$('simStrategyMode')?.value||simulationStrategyContext.strategyMode||'官方默认策略',customStrategy:simulationStrategyContext.customStrategy||'',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),...simulationStrategy}}
-function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
+function setBusy(on){document.querySelectorAll('[data-sim-run]').forEach(button=>{button.disabled=on;button.dataset.busy=on?'1':'0'});document.querySelector('[data-simulation-controls]')?.setAttribute('data-busy',on?'1':'0')}
 async function runSim(name,opts={}){
+  if(document.querySelector('[data-sim-run][data-busy="1"]'))return;
   setBusy(true);
+  if($('simRetryButton'))$('simRetryButton').hidden=true;
   $('status').textContent='运行中';
   $('loading').classList.add('on');
   setResultVisible(false,'正在运行模拟，请稍等...');
   startProgress();
+  let requestTimer=null;
   try{
     if(opts.random){
       // 随机测试明确走全市场随机池，不继承自定义或监控股票。
@@ -15921,12 +15934,15 @@ async function runSim(name,opts={}){
     const task=opts.random?'simulate':(days>1?'simulate5':'simulate');
     saveSettings();
     const ctrl=new AbortController();
-    const timer=setTimeout(()=>ctrl.abort(),45000);
+    requestTimer=setTimeout(()=>ctrl.abort(),60000);
     const res=await fetch('/api/run/'+task,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctrl.signal});
-    clearTimeout(timer);
+    clearTimeout(requestTimer);requestTimer=null;
     markProgress(3);
     if(res.status===401)throw new Error('登录状态已过期，请重新登录后再测试。');
-    const data=await res.json().catch(()=>({ok:false,error:'服务返回格式异常'}));
+    if(res.status===403)throw new Error('当前账号没有模拟测试权限，请重新登录或检查套餐。');
+    const raw=await res.text();let data;
+    try{data=JSON.parse(raw)}catch(_){throw new Error('服务返回的结果无法解析，请重新测试。')}
+    if(!res.ok)throw new Error(data.error||data.message||`服务错误（${res.status}），请重新测试。`);
     markProgress(4);
     updateStats(data.stats||{});
     renderRows(data.stocks||[]);
@@ -15942,8 +15958,10 @@ async function runSim(name,opts={}){
     if($('rows')){
       setResultVisible(false,'本次没有生成结果：'+msg);
     }
+    if($('simRetryButton'))$('simRetryButton').hidden=false;
     stopProgress();
   }finally{
+    if(requestTimer)clearTimeout(requestTimer);
     $('loading').classList.remove('on');
     setBusy(false);
   }
