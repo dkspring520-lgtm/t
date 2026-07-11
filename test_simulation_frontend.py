@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 import app_core
@@ -37,6 +39,18 @@ class SimulationFrontendTests(unittest.TestCase):
         self.assertIn("JSON.parse(raw)", self.html)
         self.assertIn("!res.ok", self.html)
         self.assertIn("simRetryButton", self.html)
+
+    def test_inline_simulation_script_has_valid_javascript(self):
+        start = self.html.rfind("<script>") + len("<script>")
+        end = self.html.index("</script>", start)
+        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+            handle.write(self.html[start:end])
+            script_path = Path(handle.name)
+        try:
+            check = subprocess.run(["node", "--check", str(script_path)], capture_output=True, text=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+        finally:
+            script_path.unlink(missing_ok=True)
 
     def test_navigation_and_parameter_buttons_are_not_run_buttons(self):
         for button_id in ("simSyncWatchlist", "simRefreshHistory", "simClearView"):
