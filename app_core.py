@@ -7424,11 +7424,44 @@ def rabbit_v72_polish_html(html: str) -> str:
         ) + "</div>"
         html = re.sub(r'<div class="side-menu">.*?</div>', '<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
     if "rq-page-market-radar" in html or "radar-shell" in html:
-        # The radar template has an inner text <div> inside .brand.  Match the
-        # outer closing tag as well, otherwise the shared nav is inserted into
-        # the logo block and the legacy active button remains visible.
-        html = re.sub(r'<button\b[^>]*\bclass="[^"]*\bnav\b[^"]*"[^>]*>.*?</button>', '', html, flags=re.S)
-        html = re.sub(r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)', r'\1<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
+        # The radar template historically shipped its own button.nav menu.
+        # Replace the complete legacy-menu region on the server, rather than
+        # relying on client-side cleanup after the page has painted.
+        radar_side_pattern = (
+            r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)'
+            r'.*?(<div class="side-foot">)'
+        )
+        html, radar_nav_replacements = re.subn(
+            radar_side_pattern,
+            r'\1<nav class="app-navigation" data-app-navigation></nav>\2',
+            html,
+            count=1,
+            flags=re.S,
+        )
+        if not radar_nav_replacements:
+            html = re.sub(
+                r'<button\b[^>]*\bclass="[^"]*\bnav\b[^"]*"[^>]*>.*?</button>',
+                '',
+                html,
+                flags=re.S,
+            )
+            html = re.sub(
+                r'(<aside class="side">.*?<div class="brand">.*?</div>\s*</div>)',
+                r'\1<nav class="app-navigation" data-app-navigation></nav>',
+                html,
+                count=1,
+                flags=re.S,
+            )
+        # Guard against a cached/legacy template response: old buttons must
+        # never paint beside the shared navigation.
+        if 'rq-radar-navigation-fallback' not in html:
+            html = html.replace(
+                '</head>',
+                '<style id="rq-radar-navigation-fallback">'
+                '.side > button.nav{display:none!important}'
+                '</style></head>',
+                1,
+            )
     html = html.replace("<strong>${escapeHtml(s.name)}</strong><em>${escapeHtml(s.code)}</em>", "<strong>${escapeHtml(s.name)}</strong>")
     html = html.replace(
         '<img src="/assets/rabbit-avatar.png"',
