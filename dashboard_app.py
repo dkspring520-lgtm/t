@@ -451,7 +451,7 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"></head>', 1)
         data = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -5093,8 +5093,9 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         profile = str(options.get("smartTProfile") or "balanced")
         if profile not in {"steady", "balanced", "sensitive"}:
             profile = "balanced"
-        profile_cycles = {"steady": 2, "balanced": 3, "sensitive": 5}[profile]
-        max_trades = min(profile_cycles, sample)
+        # Cross-stock capacity is the sample size. Per-stock T-cycle limits are
+        # applied inside the simulator by the selected smart-T profile.
+        max_trades = sample
         cmd = [
             sys.executable,
             "simulate_t_random.py",
@@ -5333,6 +5334,7 @@ def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict]
                     "sellTime",
                     "tradeAmount",
                     "shares",
+                    "cycles",
                 )
             }
             for row in stocks
@@ -5571,6 +5573,7 @@ def merge_sim_chart_data(rows: list[dict], path: Path) -> None:
         row["reason"] = item.get("reason") or row.get("detail", "")
         row["tradeAmount"] = item.get("tradeAmount")
         row["shares"] = item.get("shares")
+        row["cycles"] = item.get("cycles") or []
 
 
 def get_user_env(name: str) -> str:
@@ -7292,6 +7295,27 @@ def rabbit_v72_polish_html(html: str) -> str:
     html = html.replace("兔兔功能中心", "做T神器功能中心")
     html = html.replace("兔兔智能交易助手", "AI智能做T助手")
     html = html.replace("<b>Rabbit Quant</b>", "<b>做T神器</b>")
+    # Keep the primary application shell identical across monitor, research and
+    # simulation pages.  Only the active item changes; page functions stay put.
+    shell_page = ""
+    if "rq-cute-console" in html:
+        shell_page = "app"
+    elif "rq-page-research" in html:
+        shell_page = "research"
+    elif "rq-page-simulation" in html:
+        shell_page = "simulation"
+    if shell_page and '<div class="side-menu">' in html:
+        shell_items = (
+            ("app", "▰", "操盘台", "/app"),
+            ("market-radar", "◉", "市场雷达", "/market-radar"),
+            ("research", "⌕", "选股研究", "/research"),
+            ("simulation", "♙", "模拟测试", "/simulation"),
+        )
+        shell_menu = '<div class="side-menu">' + "".join(
+            f'<button class="{"active" if key == shell_page else ""}" onclick="location.href=\'{path}\'"><small>{icon}</small>{label}</button>'
+            for key, icon, label, path in shell_items
+        ) + "</div>"
+        html = re.sub(r'<div class="side-menu">.*?</div>', shell_menu, html, count=1, flags=re.S)
     html = html.replace("<strong>${escapeHtml(s.name)}</strong><em>${escapeHtml(s.code)}</em>", "<strong>${escapeHtml(s.name)}</strong>")
     html = html.replace(
         '<img src="/assets/rabbit-avatar.png"',
@@ -7542,7 +7566,7 @@ html body.rq-page-longhubang .panel{border-radius:16px!important;}
             count=1,
             flags=re.S,
         )
-    if "rq-page-" in html and "rq-cute-console" not in html and "rq-page-market-radar" not in html and "radar-nav" not in html:
+    if "rq-page-" in html and "rq-cute-console" not in html and "rq-page-market-radar" not in html and 'class="radar-nav"' not in html:
         radar_button = '<button class="radar-nav" onclick="location.href=\'/market-radar\'"><small>雷</small>市场雷达</button>'
         html = re.sub(
             r'(<button[^>]*onclick="location\.href=\'/app\'"[^>]*>.*?</button>)',
@@ -15199,11 +15223,11 @@ html body.rq-cute-console .actions-strip .stock-manager .stock-add-group .stock-
 </html>"""
 HTML = HTML.replace(
     "</head>",
-    '<link rel="stylesheet" href="/assets/rabbit-features.css?v=9" />\n</head>',
+    '<link rel="stylesheet" href="/assets/rabbit-features.css?v=12" />\n</head>',
     1,
 ).replace(
     "</body>",
-    '<script src="/assets/rabbit-features.js?v=9"></script>\n</body>',
+    '<script src="/assets/rabbit-features.js?v=12"></script>\n</body>',
     1,
 )
 SIMULATION_HTML = r"""<!doctype html>
@@ -15735,7 +15759,7 @@ async function adaptiveAction(action){const profile=$('simSmartTProfile')?.value
 async function loadAdaptiveStatus(){const profile=$('simSmartTProfile')?.value||'balanced';try{const data=await (await fetch('/api/adaptive/profile?profile='+encodeURIComponent(profile),{cache:'no-store'})).json();if(data.ok)renderReview({}, {}, data)}catch(e){}}
 async function loadHistory(showStatus=true){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const h=data.history||{},runs=data.runs||[];$('history').innerHTML=`<b>总统计</b><div>${h.runs||0} 次模拟，${h.trades||0} 笔交易，总胜率 ${h.winRate||'--'}，总盈亏 ${h.pnl||'--'}</div>`+'<b>最近记录</b>'+(runs.length?runs.map(r=>`<div class="run-item"><b>${esc(r.time||'--')}</b><div class="muted">触发 ${r.triggered||0}/${r.total||0}，盈利 ${r.wins||0}，盈亏 ${Number(r.pnl||0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}元</div><div class="muted">${esc((r.review||{}).headline||'')}</div></div>`).join(''):'<div class="muted">暂无历史。</div>');if(showStatus)$('status').textContent='历史已读取'}catch(e){$('history').textContent='历史读取失败：'+e.message}}
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderRows(latest.stocks||[]);setResultVisible((latest.stocks||[]).length>0);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});$('status').textContent='已恢复最近一次模拟'}}catch(e){}}
-function chart(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';let idx=xy.findIndex(p=>String(p.time)>=String(time).replace(':',''));if(idx<0)idx=xy.length-1;const p=xy[idx],y=Math.max(10,Math.min(82,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}"/><text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" font-size="10" font-weight="900" fill="${color}">${label}</text>`};return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${mark(row.buyTime,'买','#2563eb',-9)}${mark(row.sellTime,'卖','#ec5f6b',14)}</svg>`}
+function chart(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';let idx=xy.findIndex(p=>String(p.time)>=String(time).replace(':',''));if(idx<0)idx=xy.length-1;const p=xy[idx],y=Math.max(10,Math.min(82,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}"/><text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="900" fill="${color}">${label}</text>`};const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);const tradeMarks=cycles.map((x,i)=>mark(x.buyTime,`买${cycles.length>1?i+1:''}`,'#2563eb',-9)+mark(x.sellTime,`卖${cycles.length>1?i+1:''}`,'#ec5f6b',14)).join('');return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${tradeMarks}</svg>`}
 function clearView(){setResultVisible(false,'已清空。点击“开始测试”后再显示结果。');renderReview({},{});$('status').textContent='已清空'}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>

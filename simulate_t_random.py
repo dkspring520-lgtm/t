@@ -101,14 +101,27 @@ class Result:
     trade_amount: float
     shares: int
     reason: str
+    cycles: tuple[dict, ...] = ()
 
     @property
     def entry_time(self) -> str:
         if self.action == "未触发":
             return "99:99"
+        if self.cycles:
+            entries = [str(item.get("sellTime") if str(item.get("action") or "").startswith("反T") else item.get("buyTime") or "99:99") for item in self.cycles]
+            return min(entries, default="99:99")
         if self.action.startswith("反T"):
             return self.sell_time
         return self.buy_time
+
+    @property
+    def exit_time(self) -> str:
+        if self.action == "未触发":
+            return "99:99"
+        if self.cycles:
+            exits = [str(item.get("buyTime") if str(item.get("action") or "").startswith("反T") else item.get("sellTime") or "99:99") for item in self.cycles]
+            return max(exits, default="99:99")
+        return self.buy_time if self.action.startswith("反T") else self.sell_time
 
 
 def main(argv: list[str]) -> int:
@@ -126,7 +139,7 @@ def main(argv: list[str]) -> int:
     per_trade = _arg_float(argv, "--per-trade", 20000.0)
     days = max(1, min(10, int(_arg_float(argv, "--days", 1.0))))
     SIM_DAYS = days
-    max_trades = int(_arg_float(argv, "--max-trades", 1.0))
+    max_trades = int(_arg_float(argv, "--max-trades", 0.0))
     json_file = _arg_value(argv, "--json-file", "")
     if per_trade <= 0:
         per_trade = max(total_cash / max(sample_size, 1), 1000.0)
@@ -158,6 +171,7 @@ def main(argv: list[str]) -> int:
     results = apply_daily_trade_limit(results, max_trades)
     results = select_display_results(results, sample_size)
     traded = [r for r in results if r.action != "\u672a\u89e6\u53d1"]
+    completed_cycles = sum(len(r.cycles) if r.cycles else 1 for r in traded)
     wins = [r for r in traded if r.pnl_pct > 0]
     avg = sum(r.pnl_pct for r in traded) / len(traded) if traded else 0.0
     total_pnl = sum(r.pnl_yuan for r in traded)
@@ -173,7 +187,7 @@ def main(argv: list[str]) -> int:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u5f53\u65e5\u505aT\u6a21\u62df\u3011{today}")
     print(f"\u8d44\u91d1 {total_cash:,.0f}\u5143  \u5355\u7b14 {per_trade:,.0f}\u5143")
     print(f"智能做T档位 {SMART_T_PROFILE_LABELS[SMART_T_PROFILE]}（正T/反T双向）")
-    print(f"\u89e6\u53d1 {len(traded)}/{len(results)}  \u80dc\u7387 {win_rate:.1f}%  \u5e73\u5747 {avg:+.2f}%")
+    print(f"\u89e6\u53d1 {len(traded)}/{len(results)}  \u5b8c\u6210T\u5faa\u73af {completed_cycles}\u8f6e  \u80dc\u7387 {win_rate:.1f}%  \u5e73\u5747 {avg:+.2f}%")
     print(f"\u6a21\u62df\u76c8\u4e8f {total_pnl:+,.2f}\u5143  \u8d44\u91d1\u6536\u76ca {cash_return:+.2f}%")
     print(f"\u6eda\u52a8\u8d44\u91d1 {ending_cash:,.2f}\u5143")
     print(
@@ -292,6 +306,7 @@ def clone_result_with_reason(result: Result, stock: Stock, reason: str) -> Resul
         result.trade_amount,
         result.shares,
         reason,
+        result.cycles,
     )
 
 
@@ -344,8 +359,7 @@ def apply_cash_constraints(results: List[Result], total_cash: float) -> List[Res
             out.append(result)
             continue
         start_min = _hm_to_minutes(result.entry_time)
-        end_time = result.sell_time if result.action.startswith("正T") else result.buy_time
-        end_min = max(_hm_to_minutes(end_time), start_min + 1)
+        end_min = max(_hm_to_minutes(result.exit_time), start_min + 1)
         active = [(end, amount) for end, amount in active if end > start_min]
         used = sum(amount for _end, amount in active)
         available = total_cash - used
@@ -442,6 +456,23 @@ def _trade_quality_score(result: Result) -> int:
 
 
 def _trade_quality_score_clean(result: Result) -> int:
+    if result.cycles:
+        scores = []
+        for cycle in result.cycles:
+            scores.append(_trade_quality_score_clean(Result(
+                result.stock,
+                str(cycle.get("action") or "未触发"),
+                str(cycle.get("buyTime") or "--:--"),
+                float(cycle.get("buyPrice") or 0),
+                str(cycle.get("sellTime") or "--:--"),
+                float(cycle.get("sellPrice") or 0),
+                float(cycle.get("pnl") or 0),
+                float(cycle.get("money") or 0),
+                result.trade_amount,
+                int(cycle.get("shares") or 0),
+                str(cycle.get("reason") or ""),
+            )))
+        return round(sum(scores) / len(scores)) if scores else 0
     action = result.action
     is_positive_t = action.startswith("\u6b63T")
     is_reverse_t = action.startswith("\u53cdT")
@@ -578,9 +609,16 @@ def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str,
         out["sell_confirm"] = max(3, int(out.get("sell_confirm", 6)) - 1)
         out["opening_reverse_strict"] = 0
         out["second_confirm_enabled"] = 1
+        out["max_daily_cycles"] = 5
+        out["cycle_cooldown_minutes"] = 5
     else:
         out["min_trade_quality"] = max(9, int(out.get("min_trade_quality", 9)))
         out["second_confirm_enabled"] = 1
+        out["max_daily_cycles"] = 3
+        out["cycle_cooldown_minutes"] = 10
+    if profile == "steady":
+        out["max_daily_cycles"] = 2
+        out["cycle_cooldown_minutes"] = 15
     return out
 
 
@@ -600,6 +638,7 @@ def write_json_result(path: str, results: List[Result], minute_map: dict[str, Li
                 "tradeAmount": result.trade_amount,
                 "shares": result.shares,
                 "reason": result.reason,
+                "cycles": list(result.cycles),
                 "prices": [{"time": b.hm, "price": b.price} for b in bars],
             }
         )
@@ -1056,7 +1095,59 @@ def fetch_minutes_sina(symbol: str) -> List[Bar]:
     return bars
 
 
+def _cycle_dict(result: Result) -> dict:
+    return {
+        "action": result.action,
+        "buyTime": result.buy_time,
+        "buyPrice": result.buy_price,
+        "sellTime": result.sell_time,
+        "sellPrice": result.sell_price,
+        "pnl": result.pnl_pct,
+        "money": result.pnl_yuan,
+        "shares": result.shares,
+        "reason": result.reason,
+    }
+
+
+def _minute_text(total: int) -> str:
+    total = max(0, min(23 * 60 + 59, int(total)))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
 def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None) -> Result:
+    """Run several independent closed T cycles while keeping full-day VWAP."""
+    strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
+    limit = max(1, min(5, int(strategy.get("max_daily_cycles", 3))))
+    cooldown = max(3, min(30, int(strategy.get("cycle_cooldown_minutes", 10))))
+    cycles: list[Result] = []
+    entry_after = ""
+    last_result: Result | None = None
+    for _ in range(limit):
+        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after)
+        last_result = result
+        if result.action == "未触发":
+            break
+        cycles.append(result)
+        end_time = result.buy_time if result.action.startswith("反T") else result.sell_time
+        end_minute = _hm_to_minutes(end_time)
+        if end_minute >= _hm_to_minutes(str(strategy.get("trade_end_hm") or "14:00")):
+            break
+        entry_after = _minute_text(end_minute + cooldown)
+    if not cycles:
+        return last_result or Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "无有效循环")
+    payload = tuple(_cycle_dict(item) for item in cycles)
+    if len(cycles) == 1:
+        item = cycles[0]
+        return Result(stock, item.action, item.buy_time, item.buy_price, item.sell_time, item.sell_price, item.pnl_pct, item.pnl_yuan, item.trade_amount, item.shares, item.reason, payload)
+    total_money = sum(item.pnl_yuan for item in cycles)
+    base_amount = max((item.trade_amount for item in cycles), default=trade_amount)
+    total_pct = total_money / base_amount * 100.0 if base_amount > 0 else 0.0
+    first, last = cycles[0], cycles[-1]
+    directions = " / ".join(item.action for item in cycles)
+    return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, base_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}", payload)
+
+
+def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "") -> Result:
     day_low_all = min((b.price for b in bars), default=0.0)
     day_high_all = max((b.price for b in bars), default=0.0)
     day_amp = (day_high_all - day_low_all) / day_low_all * 100.0 if day_low_all > 0 else 0.0
@@ -1084,6 +1175,8 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
         avg = total_amt / (total_vol * 100.0)
         avg_prices.append(avg)
         if avg <= 0 or not _sane_vwap(bar.price, avg) or not _in_trade_window(bar.hm):
+            continue
+        if entry_after and bar.hm <= entry_after:
             continue
         dev = (bar.price - avg) / avg * 100.0
 
