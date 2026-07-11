@@ -473,9 +473,11 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
                 if marker in html and "<body>" in html:
                     html = html.replace("<body>", f'<body class="{page_class}">', 1)
                     break
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/unified-ui.css?v=2"><link rel="stylesheet" href="/assets/modern-ui.css?v=9"><link rel="stylesheet" href="/assets/app-signal-motion.css?v=1"><link rel="stylesheet" href="/assets/radar-compact.css?v=2"><link rel="stylesheet" href="/assets/dashboard.css?v=1"><link rel="stylesheet" href="/assets/app-navigation.css?v=1"></head>', 1)
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
+        if "/assets/app-navigation.js" not in html:
+            html = html.replace("</body>", '<script src="/assets/app-navigation.js?v=1"></script></body>', 1)
         data = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -6032,6 +6034,14 @@ body.rq-page-research .grid>section.panel{position:relative!important;z-index:0!
 body.rq-page-simulation .controls{align-items:center!important;}
 body.rq-page-simulation .run-actions{display:flex!important;gap:8px!important;flex-wrap:wrap!important;}
 body.rq-page-simulation .field input,body.rq-page-simulation .field select{border-radius:14px!important;background:#fffdf8!important;}
+/* Keep the optional cost panel compact when opened; it must not become a tall grid column. */
+body.rq-page-simulation .sim-cost-settings{grid-column:1/-1!important;width:100%!important;min-width:0!important;margin:0!important;padding:0!important;}
+body.rq-page-simulation .sim-cost-settings>summary{display:flex!important;align-items:center!important;min-height:30px!important;padding:5px 10px!important;border:1px solid #ffe1c7!important;border-radius:12px!important;background:#fffaf4!important;color:#8b5d3f!important;font-weight:900!important;cursor:pointer!important;}
+body.rq-page-simulation .sim-cost-grid{display:grid!important;grid-template-columns:repeat(6,minmax(0,1fr))!important;gap:8px!important;margin-top:8px!important;padding:10px!important;border:1px solid #ffe8d5!important;border-radius:14px!important;background:rgba(255,250,244,.72)!important;}
+body.rq-page-simulation .sim-cost-grid .field{min-width:0!important;}
+body.rq-page-simulation .sim-cost-grid .field input,body.rq-page-simulation .sim-cost-grid .field select{width:100%!important;min-width:0!important;}
+@media(max-width:900px){body.rq-page-simulation .sim-cost-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;}}
+@media(max-width:560px){body.rq-page-simulation .sim-cost-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}
 body.rq-page-simulation .rows.empty{display:grid!important;place-items:center!important;min-height:240px!important;}
 body.rq-page-simulation .sim-row .reason{max-height:58px!important;overflow:auto!important;}
 body.rq-page-simulation .sim-table{border-radius:18px!important;overflow:hidden!important;background:#fff!important;}
@@ -7368,7 +7378,10 @@ def rabbit_v72_polish_html(html: str) -> str:
             f'<button class="{"active" if key == shell_page else ""}" onclick="location.href=\'{path}\'"><small>{icon}</small>{label}</button>'
             for key, icon, label, path in shell_items
         ) + "</div>"
-        html = re.sub(r'<div class="side-menu">.*?</div>', shell_menu, html, count=1, flags=re.S)
+        html = re.sub(r'<div class="side-menu">.*?</div>', '<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
+    if "rq-page-market-radar" in html or "radar-shell" in html:
+        html = re.sub(r'<button class="nav"[^>]*>.*?</button>', '', html, flags=re.S)
+        html = re.sub(r'(<div class="brand">.*?</div>)', r'\1<nav class="app-navigation" data-app-navigation></nav>', html, count=1, flags=re.S)
     html = html.replace("<strong>${escapeHtml(s.name)}</strong><em>${escapeHtml(s.code)}</em>", "<strong>${escapeHtml(s.name)}</strong>")
     html = html.replace(
         '<img src="/assets/rabbit-avatar.png"',
@@ -15704,9 +15717,6 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards();loadAdaptiveStatus()"><option value="steady">稳健｜少交易 · 2轮</option><option value="balanced" selected>平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option></select></label>
     <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
     <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
-    <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
-    <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
-    <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
     <details class="sim-cost-settings"><summary>底仓与成交成本</summary><div class="sim-cost-grid">
       <label class="field"><span>昨仓可卖股数</span><input id="baseSharesInput" type="number" min="0" step="100" value="6000" /></label>
       <label class="field"><span>回测口径</span><select id="simMode"><option value="strict" selected>严格随机</option><option value="scan">机会扫描</option></select></label>
@@ -15752,7 +15762,7 @@ const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false
 async function loadAccountBadge(){try{const res=await fetch('/api/account',{cache:'no-store'});const data=await res.json();const account=data.account||{};const nick=account.nickname||account.email||account.userId||'用户';const plan=account.plan||'体验版';const logged=!!data.loggedIn;document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent=logged?nick:'未登录');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent=logged?`${plan} · 点击进入个人中心`:'未登录 · 点击登录');document.querySelectorAll('#sideAvatar,.side-avatar,.suite-avatar').forEach(el=>el.textContent=String(nick).trim().slice(0,1).toUpperCase()||'兔')}catch(e){document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent='用户');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent='点击进入个人中心')}}
 window.addEventListener('DOMContentLoaded',async()=>{loadAccountBadge();await loadSettings();await syncWatchlistStocks(false);loadHistory();setResultVisible(false,'点击“开始测试”后显示结果。');});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),vwap_take_profit_pct:0.25,normal_take_profit_pct:0.6,late_take_profit_pct:0.45}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name,opts={}){
   setBusy(true);
@@ -15811,7 +15821,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards();loadAdaptiveStatus()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced'}}catch(e){}syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';if($('fees'))$('fees').textContent=s.fees||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
