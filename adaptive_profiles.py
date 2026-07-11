@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ def _service(database_path: Path, profile: str):
         "steady": AdaptiveParams(confirmed_score=86, watch_score=55, candidate_score=72, cooldown_bars=7, min_expected_net_rate=0.0050, min_volume_ratio=0.25),
         "balanced": AdaptiveParams(),
         "sensitive": AdaptiveParams(confirmed_score=78, watch_score=48, candidate_score=64, cooldown_bars=3, min_expected_net_rate=0.0025, min_volume_ratio=0.15),
+        "quantbrain": AdaptiveParams(confirmed_score=82, watch_score=50, candidate_score=66, cooldown_bars=5, zone_memory_bars=8, min_expected_net_rate=0.0035, strong_trend_extra_score=6.0, min_volume_ratio=0.18),
     }
     config = LearningConfig(
         mode="manual",
@@ -67,7 +70,14 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
     service = _service(database_path, profile)
     recorded_signals = recorded_trades = labeled = 0
     today = datetime.now().strftime("%Y-%m-%d")
+    expanded_rows = []
     for row in stocks:
+        cycles = row.get("cycles") if isinstance(row.get("cycles"), list) else []
+        if cycles:
+            expanded_rows.extend({**row, **cycle} for cycle in cycles)
+        else:
+            expanded_rows.append(row)
+    for row in expanded_rows:
         action = str(row.get("action") or "")
         if not action or action == "未触发":
             continue
@@ -80,9 +90,31 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         timestamp = pd.Timestamp(f"{today} {entry_time}") if len(entry_time) == 5 else None
         if timestamp is None or timestamp not in bars.index or entry_price <= 0:
             continue
+        history = bars.loc[:timestamp]
+        close = history["close"]
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+        rs = gain / loss.replace(0, float("nan"))
+        rsi14 = float((100 - 100 / (1 + rs)).iloc[-1]) if len(history) > 1 else 50.0
+        volume = history["volume"].clip(lower=0)
+        volume_ma = float(volume.tail(20).mean() or 0)
+        volume_ratio = float(volume.iloc[-1] / volume_ma) if volume_ma > 0 else 1.0
+        total_volume = float(volume.sum())
+        learned_vwap = float((close * volume).sum() / total_volume) if total_volume > 0 else entry_price
+        atr14 = float(close.diff().abs().ewm(alpha=1 / 14, adjust=False).mean().iloc[-1] or 0)
+        recent = close.tail(20)
+        position = float((entry_price - recent.min()) / max(float(recent.max() - recent.min()), 1e-9))
         signal = pd.DataFrame([{
             "close": entry_price,
-            "volume_ratio": 1.0,
+            "atr14": atr14,
+            "vwap": learned_vwap,
+            "vwap_atr_z": (entry_price - learned_vwap) / max(atr14, 1e-9),
+            "rsi14": rsi14,
+            "price_position": position,
+            "volume_ratio": volume_ratio,
+            "ema5": float(close.ewm(span=5, adjust=False).mean().iloc[-1]),
+            "ema13": float(close.ewm(span=13, adjust=False).mean().iloc[-1]),
             "top_score": 85.0 if direction == "SELL_FIRST" else 0.0,
             "bottom_score": 85.0 if direction == "BUY_FIRST" else 0.0,
             "top_trigger": direction == "SELL_FIRST",
@@ -114,7 +146,7 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
     growth.update({
         "ok": True,
         "profile": profile,
-        "profileLabel": {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏"}.get(profile, "平衡"),
+        "profileLabel": {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}.get(profile, "平衡"),
         "recordedSignals": recorded_signals,
         "recordedTrades": recorded_trades,
         "labeledSignalsThisRun": labeled,
@@ -131,7 +163,7 @@ def profile_status(database_path: Path, profile: str) -> dict:
     payload.update({
         "ok": True,
         "profile": profile,
-        "profileLabel": {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏"}.get(profile, "平衡"),
+        "profileLabel": {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}.get(profile, "平衡"),
         "versions": [
             {**item, "params": item["params"].to_dict()}
             for item in service.store.list_versions(limit=20)
@@ -139,6 +171,27 @@ def profile_status(database_path: Path, profile: str) -> dict:
         "manualPromotionOnly": True,
     })
     return payload
+
+
+def runtime_profile_params(database_path: Path, profile: str) -> dict:
+    """Read only the manually promoted champion; never apply a challenger."""
+    if profile != "quantbrain" or not database_path.exists():
+        return {}
+    conn = None
+    try:
+        conn = sqlite3.connect(database_path)
+        row = conn.execute(
+            "SELECT version_id,params_json FROM parameter_versions WHERE status='champion' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return {}
+        params = json.loads(row[1])
+        return {**params, "version_id": str(row[0])} if isinstance(params, dict) else {}
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def promote_profile(database_path: Path, profile: str) -> dict:

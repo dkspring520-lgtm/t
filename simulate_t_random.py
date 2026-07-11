@@ -62,7 +62,7 @@ ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
 SIM_DAYS = 1
 SMART_T_PROFILE = "balanced"
-SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏"}
+SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}
 PREV_CLOSE_BY_SYMBOL: dict[str, float] = {}
 LOCAL_STOCK_NAME_MAP = {
     "000630": "铜陵有色",
@@ -611,6 +611,15 @@ def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str,
         out["second_confirm_enabled"] = 1
         out["max_daily_cycles"] = 5
         out["cycle_cooldown_minutes"] = 5
+    elif profile == "quantbrain":
+        out["min_trade_quality"] = max(8, int(out.get("min_trade_quality", 9)))
+        out["buy_confirm"] = max(4, min(6, int(out.get("buy_confirm", 5))))
+        out["sell_confirm"] = max(4, min(6, int(out.get("sell_confirm", 6))))
+        out["opening_reverse_strict"] = 1
+        out["second_confirm_enabled"] = 1
+        out["quantbrain_enabled"] = 1
+        out["max_daily_cycles"] = 4
+        out["cycle_cooldown_minutes"] = 8
     else:
         out["min_trade_quality"] = max(9, int(out.get("min_trade_quality", 9)))
         out["second_confirm_enabled"] = 1
@@ -1194,10 +1203,16 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             opening_wait = gate_state in {"PENDING_CONFIRMATION", "WAIT_DATA"} and bar.hm < "09:45"
             allow_buy = not opening_wait and not (gate_state == "CONFIRMED" and preference != "BUY_FIRST")
             allow_sell = not opening_wait and not (gate_state == "CONFIRMED" and preference != "SELL_FIRST")
-            if allow_buy and (_is_opening_buy_setup(bars, idx, bar, avg, lows, volumes) or _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)):
+            buy_setup = _is_opening_buy_setup(bars, idx, bar, avg, lows, volumes) or _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)
+            sell_setup = _is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes) or _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
+            if int(ACTIVE_STRATEGY.get("quantbrain_enabled", 0)):
+                factor_rsi = _causal_rsi(bars, idx)
+                buy_setup = buy_setup and factor_rsi <= 62.0
+                sell_setup = sell_setup and factor_rsi >= 38.0
+            if allow_buy and buy_setup:
                 buy = bar
                 mode = "正T"
-            elif allow_sell and (_is_opening_reverse_setup(bars, idx, bar, avg, highs, volumes) or _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)):
+            elif allow_sell and sell_setup:
                 sell_first = bar
                 mode = "反T"
             continue
@@ -1335,6 +1350,18 @@ def _sane_vwap(price: float, avg: float) -> bool:
         return False
     ratio = price / avg
     return 0.5 <= ratio <= 1.5
+
+
+def _causal_rsi(bars: List[Bar], idx: int, period: int = 14) -> float:
+    prices = [item.price for item in bars[max(0, idx - period): idx + 1] if item.price > 0]
+    if len(prices) < 2:
+        return 50.0
+    changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
+    gain = sum(max(value, 0.0) for value in changes) / len(changes)
+    loss = sum(max(-value, 0.0) for value in changes) / len(changes)
+    if loss <= 1e-12:
+        return 100.0
+    return 100.0 - 100.0 / (1.0 + gain / loss)
 
 
 def _smart_money_reason(bars: List[Bar]) -> str:

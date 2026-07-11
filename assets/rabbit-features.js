@@ -80,7 +80,7 @@
     state.textContent=`🐰 ${profile}档｜${label}`;
     state.title=smart.reason||'';
   }
-  const smartStateLabels={READY:'准备执行',EXECUTED:'已模拟成交',OPENING_OBSERVE:'开盘观察',AUCTION_WAIT_CONFIRMATION:'等待09:35确认',AUCTION_DIRECTION_BLOCKED:'竞价方向拦截',WAIT_CONFIRMATION:'等待确认',SCORE_BLOCKED:'评分不足',REGIME_OBSERVE:'等待5分钟K',TREND_BLOCKED:'趋势过滤',EDGE_BLOCKED:'价差不足',ENTRY_CUTOFF:'停止新循环',FORCE_CLOSE:'收盘恢复',FORCE_CLOSE_READY:'准备恢复仓位',DATA_RISK:'数据保护',MARKET_CLOSED:'休市观察',COOLDOWN:'信号冷却',DAILY_LIMIT:'达到日限额',LOSS_LOCKED:'亏损保护',SIDE_LOCKED:'等待反向完成',CAPACITY_BLOCKED:'资金/持仓不足',DUPLICATE:'已处理',NO_ACTION:'方向不明确'};
+  const smartStateLabels={READY:'准备执行',EXECUTED:'已模拟成交',OPENING_OBSERVE:'开盘观察',AUCTION_WAIT_CONFIRMATION:'等待09:35确认',AUCTION_DIRECTION_BLOCKED:'竞价方向拦截',WAIT_CONFIRMATION:'等待确认',SCORE_BLOCKED:'评分不足',QUANT_FACTOR_BLOCKED:'量化因子拦截',REGIME_OBSERVE:'等待5分钟K',TREND_BLOCKED:'趋势过滤',EDGE_BLOCKED:'价差不足',ENTRY_CUTOFF:'停止新循环',FORCE_CLOSE:'收盘恢复',FORCE_CLOSE_READY:'准备恢复仓位',DATA_RISK:'数据保护',MARKET_CLOSED:'休市观察',COOLDOWN:'信号冷却',DAILY_LIMIT:'达到日限额',LOSS_LOCKED:'亏损保护',SIDE_LOCKED:'等待反向完成',CAPACITY_BLOCKED:'资金/持仓不足',DUPLICATE:'已处理',NO_ACTION:'方向不明确'};
   const regimeLabels={UPTREND:'上涨趋势',DOWNTREND:'下跌趋势',RANGE:'震荡区间',OBSERVE:'观察中'};
   function renderSmartTPanel(rows){
     const focus=(rows||[]).find(row=>String(row.code)===String(window.premarketTargetCode||''))||(rows||[])[0];

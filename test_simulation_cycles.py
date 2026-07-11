@@ -29,12 +29,12 @@ class SimulationCycleTests(unittest.TestCase):
         self.assertEqual(result.entry_time, "10:00")
         self.assertEqual(result.exit_time, "11:05")
 
-    def test_profiles_define_two_three_five_cycle_caps(self):
+    def test_profiles_define_two_three_five_and_four_cycle_caps(self):
         limits = {
             name: sim.apply_smart_t_profile(sim.load_adaptive_strategy(), name)["max_daily_cycles"]
-            for name in ("steady", "balanced", "sensitive")
+            for name in ("steady", "balanced", "sensitive", "quantbrain")
         }
-        self.assertEqual(limits, {"steady": 2, "balanced": 3, "sensitive": 5})
+        self.assertEqual(limits, {"steady": 2, "balanced": 3, "sensitive": 5, "quantbrain": 4})
 
     def test_dashboard_does_not_mistake_cycle_cap_for_stock_cap(self):
         command = dashboard_app.build_commands("simulate", {"sample": 6, "smartTProfile": "steady"})[0]

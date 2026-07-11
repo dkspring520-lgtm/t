@@ -55,6 +55,22 @@ class SmartTPolicyTests(unittest.TestCase):
         self.assertEqual(forced["state"], "FORCE_CLOSE")
         self.assertTrue(forced["forceClose"])
 
+    def test_quantbrain_uses_learned_params_and_blocks_overheated_buy(self):
+        rising = points([9.6 + i * 0.02 for i in range(41)])
+        result = self.base(
+            profile="quantbrain",
+            points=rising,
+            price=10.4,
+            average=10.0,
+            high=10.5,
+            low=9.6,
+            learned_params={"confirmed_score": 80, "cooldown_bars": 6, "min_expected_net_rate": 0.004, "version_id": "v-test"},
+        )
+        self.assertEqual(result["profile"]["label"], "量化学习")
+        self.assertEqual(result["experienceVersion"], "v-test")
+        self.assertEqual(result["state"], "QUANT_FACTOR_BLOCKED")
+        self.assertGreaterEqual(result["quantFeatures"]["rsi"], 78)
+
 
 if __name__ == "__main__":
     unittest.main()

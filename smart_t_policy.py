@@ -24,6 +24,7 @@ PROFILES = {
     "steady": SmartTProfile("steady", "稳健", 9, 8, 0.50, 2),
     "balanced": SmartTProfile("balanced", "平衡", 8, 5, 0.35, 3),
     "sensitive": SmartTProfile("sensitive", "灵敏", 7, 3, 0.25, 5),
+    "quantbrain": SmartTProfile("quantbrain", "量化学习", 8, 5, 0.35, 4),
 }
 
 
@@ -72,6 +73,25 @@ def market_regime(points: Iterable[Mapping[str, object]], average: float, now_mi
     return "RANGE"
 
 
+def _quantbrain_features(points: Iterable[Mapping[str, object]]) -> dict:
+    rows = [item for item in points if _number(item.get("price")) > 0]
+    prices = [_number(item.get("price")) for item in rows]
+    changes = [prices[index] - prices[index - 1] for index in range(1, len(prices))]
+    window = changes[-14:]
+    gains = sum(max(value, 0.0) for value in window) / max(len(window), 1)
+    losses = sum(max(-value, 0.0) for value in window) / max(len(window), 1)
+    rsi = 50.0 if not window else 100.0 if losses <= 1e-12 else 100.0 - 100.0 / (1.0 + gains / losses)
+    returns = [abs(changes[index] / max(prices[index], 1e-9)) * 100.0 for index in range(len(changes))]
+    volatility = sum(returns[-14:]) / max(len(returns[-14:]), 1)
+    volumes = [max(0.0, _number(item.get("volumeDelta"), _number(item.get("volDelta"), _number(item.get("volume"))))) for item in rows]
+    recent = volumes[-5:]
+    baseline = volumes[-20:-5]
+    recent_avg = sum(recent) / max(len(recent), 1)
+    baseline_avg = sum(baseline) / max(len(baseline), 1)
+    volume_ratio = recent_avg / baseline_avg if baseline_avg > 0 else 1.0
+    return {"rsi": round(rsi, 2), "volatilityPct": round(volatility, 4), "volumeRatio": round(volume_ratio, 3)}
+
+
 def evaluate_smart_t(
     *,
     profile: object = "balanced",
@@ -88,12 +108,23 @@ def evaluate_smart_t(
     market_status: object = "交易中",
     auction_direction: object = "",
     auction_state: object = "NEUTRAL",
+    learned_params: Mapping[str, object] | None = None,
     estimated_cycle_cost_pct: float = 0.10,
     slippage_per_side_pct: float = 0.02,
 ) -> dict:
     """Evaluate an existing signal and return a UI/execution policy payload."""
 
     selected = resolve_profile(profile)
+    learned = dict(learned_params or {}) if selected.name == "quantbrain" else {}
+    if learned:
+        selected = SmartTProfile(
+            "quantbrain",
+            "量化学习",
+            max(7, min(10, round(_number(learned.get("confirmed_score"), 82.0) / 10.0))),
+            max(3, min(15, int(_number(learned.get("cooldown_bars"), 5)))),
+            max(0.25, min(0.65, _number(learned.get("min_expected_net_rate"), 0.0035) * 100.0)),
+            4,
+        )
     minute = _clock_minutes(time_text)
     current = _number(price)
     avg = _number(average)
@@ -102,7 +133,22 @@ def evaluate_smart_t(
     raw_score = max(0, int(_number(signal_score)))
     action = str(signal_action or "")
     direction = "BUY_FIRST" if any(word in action for word in ("低吸", "买入", "正T")) else "SELL_FIRST" if any(word in action for word in ("高抛", "卖出", "反T")) else ""
-    regime = market_regime(points, avg, minute)
+    point_list = list(points)
+    regime = market_regime(point_list, avg, minute)
+    quant_features = _quantbrain_features(point_list) if selected.name == "quantbrain" else {}
+    quant_adjustment = 0
+    if selected.name == "quantbrain":
+        rsi = _number(quant_features.get("rsi"), 50.0)
+        volume_ratio = _number(quant_features.get("volumeRatio"), 1.0)
+        if direction == "BUY_FIRST":
+            quant_adjustment += 1 if 32 <= rsi <= 55 else -2 if rsi >= 72 else 0
+        elif direction == "SELL_FIRST":
+            quant_adjustment += 1 if 55 <= rsi <= 78 else -2 if rsi <= 28 else 0
+        if volume_ratio >= 1.15:
+            quant_adjustment += 1
+        elif volume_ratio < _number(learned.get("min_volume_ratio"), 0.18):
+            quant_adjustment -= 1
+    effective_score = max(0, raw_score + quant_adjustment)
     required_gross = selected.min_expected_net_pct + max(0.0, estimated_cycle_cost_pct) + 2 * max(0.0, slippage_per_side_pct)
     day_range = (day_high - day_low) / max(current, 1e-9) * 100.0 if current > 0 and day_high >= day_low else 0.0
     vwap_space = abs(current - avg) / max(current, 1e-9) * 100.0 if current > 0 and avg > 0 else 0.0
@@ -136,8 +182,13 @@ def evaluate_smart_t(
     elif auction_confirmed and direction != auction_preference:
         expected = "正T先买后卖" if auction_preference == "BUY_FIRST" else "反T先卖后买"
         state, reason = "AUCTION_DIRECTION_BLOCKED", f"集合竞价与09:35走势已确认{expected}，拦截相反方向。"
-    elif raw_score < selected.confirmed_score:
-        state, reason = "SCORE_BLOCKED", f"信号{raw_score}分，未达到{selected.label}档{selected.confirmed_score}分门槛。"
+    elif selected.name == "quantbrain" and direction == "BUY_FIRST" and _number(quant_features.get("rsi"), 50) >= 78:
+        state, reason = "QUANT_FACTOR_BLOCKED", "量化学习档识别到RSI极度过热，拦截追高正T。"
+    elif selected.name == "quantbrain" and direction == "SELL_FIRST" and _number(quant_features.get("rsi"), 50) <= 22:
+        state, reason = "QUANT_FACTOR_BLOCKED", "量化学习档识别到RSI极度超卖，拦截低位反T。"
+    elif effective_score < selected.confirmed_score:
+        suffix = f"；多因子修正{quant_adjustment:+d}" if selected.name == "quantbrain" else ""
+        state, reason = "SCORE_BLOCKED", f"信号{effective_score}分，未达到{selected.label}档{selected.confirmed_score}分门槛{suffix}。"
     elif regime == "OBSERVE":
         state, reason = "REGIME_OBSERVE", "已完成5分钟K线不足，暂不判断趋势。"
     elif regime == "UPTREND" and direction != "BUY_FIRST":
@@ -151,7 +202,10 @@ def evaluate_smart_t(
         new_cycle_allowed = True
         state = "READY"
         style = "回踩正T" if direction == "BUY_FIRST" else "冲高反T"
-        reason = f"{selected.label}档确认：{style}，预估毛价差{available_space:.2f}%，覆盖费用后再执行。"
+        factor_text = ""
+        if selected.name == "quantbrain":
+            factor_text = f"，RSI {quant_features.get('rsi', 50):.0f}、量比 {quant_features.get('volumeRatio', 1):.2f}、经验修正{quant_adjustment:+d}"
+        reason = f"{selected.label}档确认：{style}，预估毛价差{available_space:.2f}%{factor_text}，覆盖费用后再执行。"
 
     return {
         "profile": asdict(selected),
@@ -164,7 +218,10 @@ def evaluate_smart_t(
         "newCycleAllowed": new_cycle_allowed,
         "forceClose": force_close,
         "rawScore": raw_score,
-        "score": min(100, raw_score * 10),
+        "effectiveScore": effective_score,
+        "score": min(100, effective_score * 10),
+        "quantFeatures": quant_features,
+        "experienceVersion": str(learned.get("version_id") or "初始经验") if selected.name == "quantbrain" else "",
         "requiredGrossSpreadPct": round(required_gross, 3),
         "availableSpreadPct": round(available_space, 3),
         "reason": reason,

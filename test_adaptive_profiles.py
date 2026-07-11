@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from adaptive_profiles import profile_status, promote_profile, record_profile_run
+from adaptive_profiles import profile_status, promote_profile, record_profile_run, runtime_profile_params
 
 
 class AdaptiveProfileTests(unittest.TestCase):
@@ -36,6 +36,15 @@ class AdaptiveProfileTests(unittest.TestCase):
             self.assertEqual(payload["labeledSignalsThisRun"], 1)
             self.assertTrue(payload["manualPromotionOnly"])
             self.assertFalse(promote_profile(Path(folder) / "balanced.sqlite3", "balanced")["ok"])
+
+    def test_quantbrain_has_an_independent_experience_database(self):
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder) / "quantbrain.sqlite3"
+            status = profile_status(database, "quantbrain")
+            params = runtime_profile_params(database, "quantbrain")
+            self.assertEqual(status["profileLabel"], "量化学习")
+            self.assertEqual(params["version_id"], status["currentVersion"])
+            self.assertEqual(params["confirmed_score"], 82)
 
 
 if __name__ == "__main__":

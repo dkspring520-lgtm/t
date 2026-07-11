@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 from rabbit_market_radar import calculate_market_radar, update_radar_history
 from auction_direction import evaluate_auction_gate
-from adaptive_profiles import profile_status, promote_profile, record_profile_run, rollback_profile
+from adaptive_profiles import profile_status, promote_profile, record_profile_run, rollback_profile, runtime_profile_params
 from smart_t_policy import evaluate_smart_t
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -487,7 +487,7 @@ def account_strategy_path(email: str | None = None) -> Path:
 
 def normalize_smart_profile(value: object) -> str:
     profile = str(value or "balanced").lower()
-    return profile if profile in {"steady", "balanced", "sensitive"} else "balanced"
+    return profile if profile in {"steady", "balanced", "sensitive", "quantbrain"} else "balanced"
 
 
 def account_profile_strategy_path(email: str | None, profile: object) -> Path:
@@ -2436,6 +2436,7 @@ def demo_realtime_payload(email: str | None = None, error: str = "") -> dict:
             "agents": ["买兔：等待黄线承接", "卖兔：不追高，先看回落", "风控兔：未共振就观察"],
         })
     smart_profile = str(load_profit_strategy_settings(email).get("smartTProfile") or "balanced")
+    smart_experience = runtime_profile_params(profile_learning_path(email, smart_profile), smart_profile)
     for row in rows:
         row["rawStrictSignal"] = bool(row.get("strictSignal"))
         auction_gate = evaluate_auction_gate(
@@ -2464,6 +2465,7 @@ def demo_realtime_payload(email: str | None = None, error: str = "") -> dict:
             market_status=row.get("marketStatus"),
             auction_direction=auction_gate.get("preferredDirection"),
             auction_state=auction_gate.get("state"),
+            learned_params=smart_experience,
         )
     ranking = auto_t_update(rows, email)
     return {"ok": True, "demo": True, "message": "使用内置演示行情预览界面。" + (f" 行情模块：{error}" if error else ""), "stocks": rows, "paperRanking": ranking}
@@ -2480,6 +2482,7 @@ def realtime_payload(email: str | None = None) -> dict:
     market_context = cached_market_context()
     smart_settings = load_profit_strategy_settings(email)
     smart_profile = str(smart_settings.get("smartTProfile") or "balanced")
+    smart_experience = runtime_profile_params(profile_learning_path(email, smart_profile), smart_profile)
     for stock in dashboard_watchlist(email)[: account_watch_limit(email)]:
         try:
             quote = fetch_quote(stock.symbol)
@@ -2582,6 +2585,7 @@ def realtime_payload(email: str | None = None) -> dict:
                 market_status="交易中" if is_open else "休市中",
                 auction_direction=auction_gate.get("preferredDirection"),
                 auction_state=auction_gate.get("state"),
+                learned_params=smart_experience,
             )
             raw_display_signal, raw_display_reason = display_signal, display_reason
             if (strict_signal or reminder_is_confirmed) and not smart_t.get("confirmed"):
@@ -5091,7 +5095,7 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         cash = clamp_float(options.get("cash"), 100000.0, 1000.0, 100000000.0)
         per_trade = clamp_float(options.get("trade"), max(cash / max(sample, 1), 1000.0), 1000.0, cash)
         profile = str(options.get("smartTProfile") or "balanced")
-        if profile not in {"steady", "balanced", "sensitive"}:
+        if profile not in {"steady", "balanced", "sensitive", "quantbrain"}:
             profile = "balanced"
         # Cross-stock capacity is the sample size. Per-stock T-cycle limits are
         # applied inside the simulator by the selected smart-T profile.
@@ -5151,7 +5155,7 @@ def load_profit_strategy_settings(email: str | None = None) -> dict:
         "highSellDev": str(clamp_float(data.get("sell_min_dev"), 1.40, 0.50, 3.00)),
         "signalCooldown": str(clamp_int(data.get("signal_cooldown_minutes"), 5, 1, 120)),
         "alertMode": str(data.get("alert_mode") or "important") if str(data.get("alert_mode") or "important") in {"important", "all", "silent"} else "important",
-        "smartTProfile": str(data.get("smart_t_profile") or "balanced") if str(data.get("smart_t_profile") or "balanced") in {"steady", "balanced", "sensitive"} else "balanced",
+        "smartTProfile": str(data.get("smart_t_profile") or "balanced") if str(data.get("smart_t_profile") or "balanced") in {"steady", "balanced", "sensitive", "quantbrain"} else "balanced",
     })
     return out
 
@@ -5177,7 +5181,7 @@ def save_strategy_options(options: dict, email: str | None = None) -> None:
         incoming["alert_mode"] = mode if mode in {"important", "all", "silent"} else "important"
     if "smartTProfile" in options:
         profile = str(options.get("smartTProfile") or "balanced")
-        incoming["smart_t_profile"] = profile if profile in {"steady", "balanced", "sensitive"} else "balanced"
+        incoming["smart_t_profile"] = profile if profile in {"steady", "balanced", "sensitive", "quantbrain"} else "balanced"
     if "strategyMode" in options:
         incoming["strategy_mode"] = str(options.get("strategyMode") or "官方默认策略")[:32]
     if "customStrategy" in options:
@@ -13904,7 +13908,7 @@ body.rq-cute-console .rqf-tip-card small{display:block!important;margin-top:8px!
       <div class="settings-title">自定义做T策略</div>
       <div class="ai-config-grid">
         <label>策略模式<select id="strategyMode"><option>官方默认策略</option><option>自定义策略</option><option>AI复核优先</option></select></label>
-        <label>智能做T档位<select id="smartTProfile"><option value="steady">稳健｜少提醒 · 2轮</option><option value="balanced">平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option></select></label>
+        <label>智能做T档位<select id="smartTProfile"><option value="steady">稳健｜少提醒 · 2轮</option><option value="balanced">平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜经验进化 · 4轮</option></select></label>
         <label>单股每日提醒<input id="maxSignalsPerDay" type="number" min="1" max="6" placeholder="2" /></label>
         <label>低吸偏离%<input id="lowBuyDev" type="number" step="0.05" placeholder="-1.20" /></label>
         <label>高抛偏离%<input id="highSellDev" type="number" step="0.05" placeholder="1.40" /></label>
@@ -15223,11 +15227,11 @@ html body.rq-cute-console .actions-strip .stock-manager .stock-add-group .stock-
 </html>"""
 HTML = HTML.replace(
     "</head>",
-    '<link rel="stylesheet" href="/assets/rabbit-features.css?v=12" />\n</head>',
+    '<link rel="stylesheet" href="/assets/rabbit-features.css?v=14" />\n</head>',
     1,
 ).replace(
     "</body>",
-    '<script src="/assets/rabbit-features.js?v=12"></script>\n</body>',
+    '<script src="/assets/rabbit-features.js?v=14"></script>\n</body>',
     1,
 )
 SIMULATION_HTML = r"""<!doctype html>
@@ -15648,7 +15652,7 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
     <label class="field"><span>测试股数</span><input id="sampleInput" type="number" min="1" max="30" step="1" value="10" oninput="syncCards()" /></label>
     <label class="field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
-    <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards()"><option value="steady">稳健｜少交易</option><option value="balanced" selected>平衡｜默认</option><option value="sensitive">灵敏｜多机会</option></select></label>
+    <label class="field"><span>智能做T档位</span><select id="simSmartTProfile" onchange="syncCards();loadAdaptiveStatus()"><option value="steady">稳健｜少交易 · 2轮</option><option value="balanced" selected>平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option></select></label>
     <label class="field wide"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>
     <button onclick="syncWatchlistStocks(true)">同步监控股票</button>
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
@@ -15748,7 +15752,7 @@ function finishProgress(){clearInterval(progressTimer);markProgress(5);setTimeou
 function stopProgress(){clearInterval(progressTimer);document.querySelectorAll('#progress .step').forEach(el=>el.classList.remove('active'))}
 function syncTradeAmount(){if(!tradeManual){const cash=Number($('cashInput').value||100000);$('tradeInput').value=Math.max(1000,Math.floor(cash*.2/1000)*1000)}syncCards()}
 function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);$('trade').textContent=formatYuan(o.trade);clearTimeout(settingsTimer);settingsTimer=setTimeout(saveSettings,450)}
-async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards()}
+async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
 function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
@@ -15759,7 +15763,7 @@ async function adaptiveAction(action){const profile=$('simSmartTProfile')?.value
 async function loadAdaptiveStatus(){const profile=$('simSmartTProfile')?.value||'balanced';try{const data=await (await fetch('/api/adaptive/profile?profile='+encodeURIComponent(profile),{cache:'no-store'})).json();if(data.ok)renderReview({}, {}, data)}catch(e){}}
 async function loadHistory(showStatus=true){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const h=data.history||{},runs=data.runs||[];$('history').innerHTML=`<b>总统计</b><div>${h.runs||0} 次模拟，${h.trades||0} 笔交易，总胜率 ${h.winRate||'--'}，总盈亏 ${h.pnl||'--'}</div>`+'<b>最近记录</b>'+(runs.length?runs.map(r=>`<div class="run-item"><b>${esc(r.time||'--')}</b><div class="muted">触发 ${r.triggered||0}/${r.total||0}，盈利 ${r.wins||0}，盈亏 ${Number(r.pnl||0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}元</div><div class="muted">${esc((r.review||{}).headline||'')}</div></div>`).join(''):'<div class="muted">暂无历史。</div>');if(showStatus)$('status').textContent='历史已读取'}catch(e){$('history').textContent='历史读取失败：'+e.message}}
 async function restoreLatestSim(){try{const data=await (await fetch('/api/simulation_history',{cache:'no-store'})).json();const latest=data.latest||{};if(latest.stats){updateStats(latest.stats,false);renderRows(latest.stocks||[]);setResultVisible((latest.stocks||[]).length>0);renderReview((latest.stats||{}).review||{},(latest.stats||{}).history||{});$('status').textContent='已恢复最近一次模拟'}}catch(e){}}
-function chart(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');const mark=(time,label,color,dy)=>{if(!time||time==='--:--')return '';let idx=xy.findIndex(p=>String(p.time)>=String(time).replace(':',''));if(idx<0)idx=xy.length-1;const p=xy[idx],y=Math.max(10,Math.min(82,p.y+dy));return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}"/><text x="${p.x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="900" fill="${color}">${label}</text>`};const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);const tradeMarks=cycles.map((x,i)=>mark(x.buyTime,`买${cycles.length>1?i+1:''}`,'#2563eb',-9)+mark(x.sellTime,`卖${cycles.length>1?i+1:''}`,'#ec5f6b',14)).join('');return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${tradeMarks}</svg>`}
+function chart(row){const series=(row.prices||[]).filter(x=>Number(x.price)>0),c=Number(row.pnl||0)>=0?'#35b978':'#ec5f6b';if(series.length<2)return '<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="43" x2="410" y2="43" stroke="#eadfce" stroke-width="2"/></svg>';const step=Math.max(1,Math.floor(series.length/95)),points=series.filter((_,i)=>i%step===0),values=points.map(x=>Number(x.price));const min=Math.min(...values),max=Math.max(...values),span=Math.max(max-min,.01);const xy=points.map((p,i)=>({x:10+(i/(points.length-1))*400,y:74-((Number(p.price)-min)/span)*62,time:p.time}));const pts=xy.map(p=>`${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '),placed=[];const norm=t=>String(t||'').replace(/\D/g,'').slice(-4);const mark=(time,label,color,side,order)=>{if(!time||time==='--:--')return '';const target=norm(time);let idx=xy.findIndex(p=>norm(p.time)>=target);if(idx<0)idx=xy.length-1;const p=xy[idx],near=placed.filter(x=>Math.abs(x-p.x)<30&&x.side===side).length,shift=(near%2?1:-1)*Math.ceil(near/2)*20,tx=Math.max(18,Math.min(402,p.x+shift)),ty=side==='buy'?(10+(order%2)*11):(78-(order%2)*11),w=label.length>1?24:20;placed.push({x:tx,side});return `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${(ty+(side==='buy'?4:-4)).toFixed(1)}" stroke="${color}" stroke-width="1" opacity=".55"/><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${color}" stroke="#fff" stroke-width="2"/><rect x="${(tx-w/2).toFixed(1)}" y="${(ty-9).toFixed(1)}" width="${w}" height="13" rx="6.5" fill="#fff" stroke="${color}"/><text x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" font-size="8" font-weight="900" fill="${color}">${label}</text>`};const cycles=(Array.isArray(row.cycles)&&row.cycles.length?row.cycles:[{buyTime:row.buyTime,sellTime:row.sellTime}]);const tradeMarks=cycles.map((x,i)=>mark(x.buyTime,`买${cycles.length>1?i+1:''}`,'#2563eb','buy',i)+mark(x.sellTime,`卖${cycles.length>1?i+1:''}`,'#ec5f6b','sell',i)).join('');return `<svg class="chart" viewBox="0 0 420 86"><line x1="10" y1="74" x2="410" y2="74" stroke="#eef1f3"/><line x1="10" y1="12" x2="410" y2="12" stroke="#eef1f3"/><polyline points="${pts}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${tradeMarks}</svg>`}
 function clearView(){setResultVisible(false,'已清空。点击“开始测试”后再显示结果。');renderReview({},{});$('status').textContent='已清空'}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>
