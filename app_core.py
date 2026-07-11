@@ -5137,6 +5137,16 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
             "--smart-profile",
             profile,
         ]
+        sim_mode = str(options.get("simMode") or "strict")
+        if sim_mode not in {"strict", "scan"}:
+            sim_mode = "strict"
+        cmd.extend(["--mode", sim_mode])
+        cmd.extend(["--base-shares", str(clamp_int(options.get("baseShares"), 6000, 0, 100000000))])
+        cmd.extend(["--commission-rate", str(clamp_float(options.get("commissionRate"), 0.0003, 0.0, 0.01))])
+        cmd.extend(["--min-commission", str(clamp_float(options.get("minCommission"), 5.0, 0.0, 1000.0))])
+        cmd.extend(["--stamp-duty-rate", str(clamp_float(options.get("stampDutyRate"), 0.0005, 0.0, 0.01))])
+        cmd.extend(["--transfer-fee-rate", str(clamp_float(options.get("transferFeeRate"), 0.00001, 0.0, 0.01))])
+        cmd.extend(["--slippage-bps", str(clamp_float(options.get("slippageBps"), 2.0, 0.0, 100.0))])
         json_file = str(options.get("json_file") or "")
         if json_file:
             cmd.extend(["--json-file", json_file])
@@ -5298,7 +5308,7 @@ def summarize(name: str, raw: str, ok: bool, stats: dict) -> str:
 
 
 def parse_sim_stats(raw: str) -> dict:
-    stats = {"cash": "100,000元", "trade": "20,000元", "trigger": "--", "win": "--", "pnl": "--", "return": "--", "endingCash": "--"}
+    stats = {"cash": "100,000元", "trade": "20,000元", "trigger": "--", "win": "--", "pnl": "--", "fees": "--", "grossPnl": "--", "return": "--", "endingCash": "--"}
     for line in raw.splitlines():
         line = line.strip()
         if line.startswith("资金"):
@@ -5316,6 +5326,11 @@ def parse_sim_stats(raw: str) -> dict:
             if m:
                 stats["pnl"] = m.group(1)
                 stats["return"] = m.group(2)
+        elif line.startswith("交易费用"):
+            m = re.search(r"交易费用\s+([^\s]+)\s+毛收益\s+([^\s]+)", line)
+            if m:
+                stats["fees"] = m.group(1)
+                stats["grossPnl"] = m.group(2)
         elif line.startswith("滚动资金"):
             m = re.search(r"滚动资金\s+([^\s]+)", line)
             if m:
@@ -5341,6 +5356,7 @@ def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict]
         "total": trigger[1],
         "wins": wins,
         "pnl": money_to_float(stats.get("pnl")),
+        "fees": money_to_float(stats.get("fees")),
         "review": stats.get("review") or {},
         "stocks": [
             {
@@ -5363,6 +5379,10 @@ def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict]
                     "tradeAmount",
                     "shares",
                     "cycles",
+                    "fees",
+                    "grossPnl",
+                    "position",
+                    "dailyResults",
                 )
             }
             for row in stocks
@@ -5443,7 +5463,7 @@ def update_adaptive_strategy(stocks: list[dict], email: str | None = None, profi
 
 def aggregate_sim_history(email: str | None = None) -> dict:
     trades = wins = runs = no_trigger = 0
-    pnl = 0.0
+    pnl = fees = 0.0
     failures: dict[str, int] = {}
     try:
         lines = sim_history_path(email).read_text(encoding="utf-8").splitlines()[-500:]
@@ -5460,6 +5480,7 @@ def aggregate_sim_history(email: str | None = None) -> dict:
         trades += triggered
         wins += int(item.get("wins") or 0)
         pnl += float(item.get("pnl") or 0)
+        fees += float(item.get("fees") or 0)
         no_trigger += max(total - triggered, 0)
         for stock in item.get("stocks") or []:
             kind = stock.get("failureType")
@@ -5467,7 +5488,7 @@ def aggregate_sim_history(email: str | None = None) -> dict:
                 failures[kind] = failures.get(kind, 0) + 1
     win_rate = wins / trades * 100 if trades else 0.0
     top_failures = sorted(failures.items(), key=lambda x: x[1], reverse=True)[:3]
-    return {"runs": runs, "trades": trades, "winRate": f"{win_rate:.1f}%", "pnl": f"{pnl:+,.2f}元", "noTrigger": no_trigger, "failures": [{"type": k, "count": v} for k, v in top_failures]}
+    return {"runs": runs, "trades": trades, "winRate": f"{win_rate:.1f}%", "pnl": f"{pnl:+,.2f}元", "fees": f"{fees:,.2f}元", "noTrigger": no_trigger, "failures": [{"type": k, "count": v} for k, v in top_failures]}
 
 
 def recent_sim_history(limit: int = 12, email: str | None = None) -> list[dict]:
@@ -5602,6 +5623,10 @@ def merge_sim_chart_data(rows: list[dict], path: Path) -> None:
         row["tradeAmount"] = item.get("tradeAmount")
         row["shares"] = item.get("shares")
         row["cycles"] = item.get("cycles") or []
+        row["fees"] = item.get("fees", 0)
+        row["grossPnl"] = item.get("grossPnl", 0)
+        row["position"] = item.get("position") or {}
+        row["dailyResults"] = item.get("dailyResults") or []
 
 
 def get_user_env(name: str) -> str:
@@ -15682,6 +15707,15 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <label class="field"><span>黄线止盈%</span><input id="vwapProfitInput" type="number" min="0.10" max="1.00" step="0.05" value="0.25" oninput="syncCards()" /></label>
     <label class="field"><span>普通止盈%</span><input id="normalProfitInput" type="number" min="0.20" max="1.50" step="0.05" value="0.60" oninput="syncCards()" /></label>
     <label class="field"><span>尾盘目标%</span><input id="lateProfitInput" type="number" min="0.15" max="1.20" step="0.05" value="0.45" oninput="syncCards()" /></label>
+    <details class="sim-cost-settings"><summary>底仓与成交成本</summary><div class="sim-cost-grid">
+      <label class="field"><span>昨仓可卖股数</span><input id="baseSharesInput" type="number" min="0" step="100" value="6000" /></label>
+      <label class="field"><span>回测口径</span><select id="simMode"><option value="strict" selected>严格随机</option><option value="scan">机会扫描</option></select></label>
+      <label class="field"><span>佣金率</span><input id="commissionRateInput" type="number" min="0" step="0.00001" value="0.0003" /></label>
+      <label class="field"><span>最低佣金</span><input id="minCommissionInput" type="number" min="0" step="1" value="5" /></label>
+      <label class="field"><span>印花税率</span><input id="stampDutyInput" type="number" min="0" step="0.00001" value="0.0005" /></label>
+      <label class="field"><span>过户费率</span><input id="transferFeeInput" type="number" min="0" step="0.000001" value="0.00001" /></label>
+      <label class="field"><span>滑点(bp)</span><input id="slippageBpsInput" type="number" min="0" step="0.5" value="2" /></label>
+    </div></details>
     <div class="run-actions" aria-label="模拟测试操作">
       <button class="primary" onclick="runSim('simulate')">开始测试</button>
       <button onclick="runSim('simulate',{random:true})">随机抽测</button>
@@ -15704,6 +15738,7 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <div class="metric"><div class="k">触发次数</div><div id="trigger" class="v">--</div></div>
     <div class="metric"><div class="k">胜率</div><div id="win" class="v win">--</div></div>
     <div class="metric"><div class="k">模拟盈亏</div><div id="pnl" class="v">--</div></div>
+    <div class="metric"><div class="k">成交成本</div><div id="fees" class="v">--</div></div>
     <div class="metric"><div class="k">资金收益</div><div id="ret" class="v">--</div></div>
   </section>
   <section class="layout is-empty" id="simLayout">
@@ -15717,7 +15752,7 @@ const $=id=>document.getElementById(id);let tradeManual=false,stocksManual=false
 async function loadAccountBadge(){try{const res=await fetch('/api/account',{cache:'no-store'});const data=await res.json();const account=data.account||{};const nick=account.nickname||account.email||account.userId||'用户';const plan=account.plan||'体验版';const logged=!!data.loggedIn;document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent=logged?nick:'未登录');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent=logged?`${plan} · 点击进入个人中心`:'未登录 · 点击登录');document.querySelectorAll('#sideAvatar,.side-avatar,.suite-avatar').forEach(el=>el.textContent=String(nick).trim().slice(0,1).toUpperCase()||'兔')}catch(e){document.querySelectorAll('#sideUserName,.side-user b,.suite-user b').forEach(el=>el.textContent='用户');document.querySelectorAll('#sideUserMeta,.side-user span:not(.side-avatar),.suite-user span:not(.suite-avatar)').forEach(el=>el.textContent='点击进入个人中心')}}
 window.addEventListener('DOMContentLoaded',async()=>{loadAccountBadge();await loadSettings();await syncWatchlistStocks(false);loadHistory();setResultVisible(false,'点击“开始测试”后显示结果。');});
 function pct(id,fallback){const n=Number($(id).value||fallback);return Math.max(0.05,Math.min(2,n))}
-function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
+function options(){return {cash:Number($('cashInput').value||100000),trade:Number($('tradeInput').value||20000),sample:Number($('sampleInput').value||10),days:Number($('testDaysInput')?.value||1),stocks:($('stocksInput')?.value||'').trim(),smartTProfile:$('simSmartTProfile')?.value||'balanced',simMode:$('simMode')?.value||'strict',baseShares:Number($('baseSharesInput')?.value||6000),commissionRate:Number($('commissionRateInput')?.value||0.0003),minCommission:Number($('minCommissionInput')?.value||5),stampDutyRate:Number($('stampDutyInput')?.value||0.0005),transferFeeRate:Number($('transferFeeInput')?.value||0.00001),slippageBps:Number($('slippageBpsInput')?.value||2),vwap_take_profit_pct:pct('vwapProfitInput',0.25),normal_take_profit_pct:pct('normalProfitInput',0.6),late_take_profit_pct:pct('lateProfitInput',0.45)}}
 function setBusy(on){document.querySelectorAll('button').forEach(b=>b.disabled=on)}
 async function runSim(name,opts={}){
   setBusy(true);
@@ -15779,7 +15814,7 @@ function syncCards(){const o=options();$('cash').textContent=formatYuan(o.cash);
 async function loadSettings(){try{const s=await (await fetch('/api/settings',{cache:'no-store'})).json();if(s.ok){$('cashInput').value=s.cash;$('tradeInput').value=s.trade;$('sampleInput').value=s.sample;if($('testDaysInput'))$('testDaysInput').value=s.days||5;if($('simSmartTProfile'))$('simSmartTProfile').value=s.smartTProfile||'balanced';$('vwapProfitInput').value=s.vwap_take_profit_pct??0.25;$('normalProfitInput').value=s.normal_take_profit_pct??0.6;$('lateProfitInput').value=s.late_take_profit_pct??0.45}}catch(e){}syncCards();loadAdaptiveStatus()}
 function saveSettings(){fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(options())}).catch(()=>{})}
 function formatYuan(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:0})+'元'}function parseYuan(s){return Number(String(s||'').replace(/[^\d.-]/g,''))||0}
-function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
+function updateStats(s,persist=true){if(!Object.keys(s).length)return;$('cash').textContent=s.endingCash||s.cash||'--';$('trade').textContent=s.trade||'--';$('trigger').textContent=s.trigger||'--';$('win').textContent=s.win||'--';$('pnl').textContent=s.pnl||'--';if($('fees'))$('fees').textContent=s.fees||'--';$('ret').textContent=s.return||'--';$('pnl').className='v '+((s.pnl||'').startsWith('-')?'neg':'pos');const ending=parseYuan(s.endingCash);if(persist&&ending>0){$('cashInput').value=ending.toFixed(2);saveSettings()}}
 function setResultVisible(on,msg){const layout=$('simLayout');if(layout)layout.classList.toggle('is-empty',!on);if(!on&&$('rows')){$('rows').className='rows empty';$('rows').textContent=msg||'暂无结果。点击“开始测试”后再显示曲线、买卖点和复盘。';if($('count'))$('count').textContent='等待运行'}}
 function renderRows(rows){if(!rows.length){setResultVisible(false,'暂无股票明细。');if($('count'))$('count').textContent='0 只';return}setResultVisible(true);$('rows').className='rows';$('count').textContent=rows.length+' 只';$('rows').innerHTML=`<div class="sim-table"><div class="sim-head"><span>股票</span><span>状态</span><span>曲线与买卖点</span><span>胜率</span><span>盈亏金额</span><span>原因</span></div>${rows.map(r=>{const pos=Number(r.pnl||0)>0,cls=pos?'pos':'neg';const win=Number(r.pnl||0)>0?'100%':(r.action&&r.action!=='未触发'?'0%':'--');return `<div class="sim-row"><div><span class="stock">${esc(r.name)}</span><span class="code">${esc(r.code)}</span></div><div class="status">${esc(r.action||'--')}</div><div>${chart(r)}</div><div class="${cls}">${win}</div><div><span class="${cls}" style="font-weight:950">${esc(r.pnlText||'--')}</span><div class="muted">${esc(r.money||'--')}</div></div><div class="reason">${esc(r.reason||r.detail||'')}</div></div>`}).join('')}</div>`}
 function renderReview(review,history,adaptive={}){const parts=[];if(review.headline)parts.push(`<b>本轮复盘</b><div>${esc(review.headline)}</div>`);if((review.focus||[]).length)parts.push('<ul>'+review.focus.map(x=>`<li>${esc(x.name)} ${esc(x.code)}：${esc(x.type)}，${esc(x.suggestion)}</li>`).join('')+'</ul>');if((review.suggestions||[]).length)parts.push('<b>下一轮优化</b><ul>'+review.suggestions.map(x=>`<li>${esc(x)}</li>`).join('')+'</ul>');if(history&&history.runs){const fails=(history.failures||[]).map(x=>`${esc(x.type)} ${x.count}次`).join('；')||'暂无高频问题';const noTrig=history.noTrigger?`，未触发 ${history.noTrigger} 次`:'';parts.push(`<b>累计统计</b><div>${history.runs} 次模拟，${history.trades} 笔交易，总胜率 ${history.winRate}，总盈亏 ${history.pnl}${noTrig}。问题：${fails}</div>`)}if(adaptive&&adaptive.ok){parts.push(`<b>策略成长 · ${esc(adaptive.profileLabel||'平衡')}</b><div>正式版 ${esc(adaptive.currentVersion||'--')}｜候选版 ${esc(adaptive.challengerVersion||'暂无')}｜${esc(adaptive.status||'积累样本中')}</div><div class="muted">已标注 ${Number(adaptive.signalsLearned||0)} 个信号；挑战版只在影子环境验证，不会自动影响正式信号。</div><div style="display:flex;gap:8px;margin-top:8px"><button onclick="adaptiveAction('promote')">人工确认升级</button><button onclick="adaptiveAction('rollback')">一键回滚</button></div>`)}$('review').innerHTML=parts.join('')||'模拟后自动讨论失败位置和下一轮优化方向。'}

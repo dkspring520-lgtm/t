@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from auction_direction import evaluate_auction_gate
+from services.trade_engine import PositionState, TradeCostModel
 
 BASE_DIR = Path(__file__).resolve().parent
 STOCK_POOL_CACHE = BASE_DIR / "a_share_pool_cache.json"
@@ -62,6 +63,10 @@ ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
 SIM_DAYS = 1
 SMART_T_PROFILE = "balanced"
+SIM_MODE = "strict"
+SIM_BASE_SHARES = 6000
+SIM_COST_MODEL = TradeCostModel()
+ACTIVE_POSITION: PositionState | None = None
 SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}
 PREV_CLOSE_BY_SYMBOL: dict[str, float] = {}
 LOCAL_STOCK_NAME_MAP = {
@@ -102,6 +107,10 @@ class Result:
     shares: int
     reason: str
     cycles: tuple[dict, ...] = ()
+    gross_pnl_yuan: float = 0.0
+    fees_yuan: float = 0.0
+    position: dict | None = None
+    daily_results: tuple[dict, ...] = ()
 
     @property
     def entry_time(self) -> str:
@@ -125,7 +134,7 @@ class Result:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE
+    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_COST_MODEL
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -139,6 +148,17 @@ def main(argv: list[str]) -> int:
     per_trade = _arg_float(argv, "--per-trade", 20000.0)
     days = max(1, min(10, int(_arg_float(argv, "--days", 1.0))))
     SIM_DAYS = days
+    SIM_MODE = _arg_value(argv, "--mode", "strict")
+    if SIM_MODE not in {"strict", "scan"}:
+        SIM_MODE = "strict"
+    SIM_BASE_SHARES = max(0, int(_arg_float(argv, "--base-shares", 6000.0)) // 100 * 100)
+    SIM_COST_MODEL = TradeCostModel(
+        commission_rate=max(0.0, _arg_float(argv, "--commission-rate", 0.0003)),
+        min_commission=max(0.0, _arg_float(argv, "--min-commission", 5.0)),
+        stamp_duty_rate=max(0.0, _arg_float(argv, "--stamp-duty-rate", 0.0005)),
+        transfer_fee_rate=max(0.0, _arg_float(argv, "--transfer-fee-rate", 0.00001)),
+        slippage_bps=max(0.0, _arg_float(argv, "--slippage-bps", 2.0)),
+    )
     max_trades = int(_arg_float(argv, "--max-trades", 0.0))
     json_file = _arg_value(argv, "--json-file", "")
     if per_trade <= 0:
@@ -169,12 +189,14 @@ def main(argv: list[str]) -> int:
 
     results = apply_cash_constraints(results, total_cash)
     results = apply_daily_trade_limit(results, max_trades)
-    results = select_display_results(results, sample_size)
+    results = select_display_results(results, sample_size, SIM_MODE)
     traded = [r for r in results if r.action != "\u672a\u89e6\u53d1"]
     completed_cycles = sum(len(r.cycles) if r.cycles else 1 for r in traded)
     wins = [r for r in traded if r.pnl_pct > 0]
     avg = sum(r.pnl_pct for r in traded) / len(traded) if traded else 0.0
     total_pnl = sum(r.pnl_yuan for r in traded)
+    total_gross = sum(r.gross_pnl_yuan for r in traded)
+    total_fees = sum(r.fees_yuan for r in traded)
     ending_cash = total_cash + total_pnl
     cash_return = total_pnl / total_cash * 100 if total_cash > 0 else 0.0
     win_rate = len(wins) / len(traded) * 100 if traded else 0.0
@@ -182,12 +204,14 @@ def main(argv: list[str]) -> int:
     today = datetime.now().strftime("%Y-%m-%d")
     if days > 1:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u8fd1{days}\u5929\u505aT\u6a21\u62df\u3011{today}")
-        print(f"\u8bf4\u660e\uff1a\u5df2\u5c1d\u8bd5\u6309\u80a1\u7968\u62c9\u53d6\u8fd1{days}\u5929\u5206\u65f6\uff0c\u6bcf\u5929\u72ec\u7acb\u8ba1\u7b97VWAP\u548c\u4e70\u5356\u70b9\uff0c\u5c55\u793a\u4ee3\u8868\u7ed3\u679c\u3002")
+        print(f"\u8bf4\u660e\uff1a\u6309\u80a1\u7968\u9010\u65e5\u8ba1\u7b97VWAP\u548c\u4e70\u5356\u70b9\uff0c\u6c47\u603b\u771f\u5b9e\u65e5\u5ea6\u51c0\u6536\u76ca\uff0c\u4e0d\u518d\u6311\u9009\u4ee3\u8868\u65e5\u3002")
     else:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u5f53\u65e5\u505aT\u6a21\u62df\u3011{today}")
     print(f"\u8d44\u91d1 {total_cash:,.0f}\u5143  \u5355\u7b14 {per_trade:,.0f}\u5143")
+    print(f"\u56de\u6d4b\u6a21\u5f0f {'\u4e25\u683c\u968f\u673a' if SIM_MODE == 'strict' else '\u673a\u4f1a\u626b\u63cf'}  \u5e95\u4ed3 {SIM_BASE_SHARES}\u80a1  \u53ef\u5356\u4ec5\u9650\u6628\u4ed3")
     print(f"智能做T档位 {SMART_T_PROFILE_LABELS[SMART_T_PROFILE]}（正T/反T双向）")
     print(f"\u89e6\u53d1 {len(traded)}/{len(results)}  \u5b8c\u6210T\u5faa\u73af {completed_cycles}\u8f6e  \u80dc\u7387 {win_rate:.1f}%  \u5e73\u5747 {avg:+.2f}%")
+    print(f"\u4ea4\u6613\u8d39\u7528 {total_fees:,.2f}\u5143  \u6bdb\u6536\u76ca {total_gross:+,.2f}\u5143")
     print(f"\u6a21\u62df\u76c8\u4e8f {total_pnl:+,.2f}\u5143  \u8d44\u91d1\u6536\u76ca {cash_return:+.2f}%")
     print(f"\u6eda\u52a8\u8d44\u91d1 {ending_cash:,.2f}\u5143")
     print(
@@ -270,13 +294,25 @@ def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, day
     if not daily_results:
         return simulate_one(stock, bars, trade_amount, PREV_CLOSE_BY_SYMBOL.get(stock.symbol))
 
+    latest_date, latest = daily_results[-1]
     traded = [(date, result) for date, result in daily_results if result.action != "\u672a\u89e6\u53d1"]
-    if traded:
-        date, result = max(traded, key=lambda item: (_trade_quality_score(item[1]), item[1].pnl_pct))
-        return clone_result_with_reason(result, stock, f"\u8fd1{len(daily_results)}\u5929\u626b\u63cf\uff0c\u4ee3\u8868\u65e5{date}\uff1a{result.reason}")
-
-    date, result = daily_results[-1]
-    return clone_result_with_reason(result, stock, f"\u8fd1{len(daily_results)}\u5929\u5747\u672a\u89e6\u53d1\uff1b\u6700\u8fd1\u65e5{date}\uff1a{result.reason}")
+    net_pnl = sum(result.pnl_yuan for _date, result in daily_results)
+    gross_pnl = sum(result.gross_pnl_yuan for _date, result in daily_results)
+    fees = sum(result.fees_yuan for _date, result in daily_results)
+    active_days = len(traded)
+    winning_days = sum(1 for _date, result in traded if result.pnl_yuan > 0)
+    daily_payload = tuple({
+        "date": date, "action": result.action, "pnl": result.pnl_pct,
+        "money": result.pnl_yuan, "fees": result.fees_yuan,
+    } for date, result in daily_results)
+    base_amount = max(trade_amount * max(active_days, 1), 1.0)
+    return Result(
+        stock, f"\u8fd1{len(daily_results)}\u65e5\u6c47\u603b", latest.buy_time, latest.buy_price,
+        latest.sell_time, latest.sell_price, net_pnl / base_amount * 100.0, net_pnl,
+        trade_amount, latest.shares,
+        f"\u8fd1{len(daily_results)}\u65e5\u771f\u5b9e\u805a\u5408\uff1a\u89e6\u53d1{active_days}\u65e5\uff0c\u76c8\u5229{winning_days}\u65e5\uff0c\u6bcf\u65e5\u72ec\u7acb\u6062\u590d\u5e95\u4ed3\u3002\u6700\u8fd1\u65e5{latest_date}\uff1a{latest.reason}",
+        latest.cycles, gross_pnl, fees, latest.position, daily_payload,
+    )
 
 
 def split_bars_by_date(bars: List[Bar]) -> list[tuple[str, List[Bar]]]:
@@ -307,6 +343,10 @@ def clone_result_with_reason(result: Result, stock: Stock, reason: str) -> Resul
         result.shares,
         reason,
         result.cycles,
+        result.gross_pnl_yuan,
+        result.fees_yuan,
+        result.position,
+        result.daily_results,
     )
 
 
@@ -416,9 +456,12 @@ def apply_daily_trade_limit(results: List[Result], max_trades: int) -> List[Resu
     return out
 
 
-def select_display_results(results: List[Result], sample_size: int) -> List[Result]:
+def select_display_results(results: List[Result], sample_size: int, mode: str = "strict") -> List[Result]:
     if sample_size <= 0 or len(results) <= sample_size:
         return results
+    if mode == "strict":
+        # Preserve the random sample order: this mode must not cherry-pick wins.
+        return results[:sample_size]
     ranked = sorted(results, key=_display_quality_key, reverse=True)
     return sorted(ranked[:sample_size], key=lambda r: (r.action == "未触发", r.stock.code))
 
@@ -644,10 +687,14 @@ def write_json_result(path: str, results: List[Result], minute_map: dict[str, Li
                 "sellTime": result.sell_time,
                 "pnl": result.pnl_pct,
                 "money": result.pnl_yuan,
+                "grossPnl": result.gross_pnl_yuan,
+                "fees": result.fees_yuan,
                 "tradeAmount": result.trade_amount,
                 "shares": result.shares,
                 "reason": result.reason,
                 "cycles": list(result.cycles),
+                "position": result.position or {},
+                "dailyResults": list(result.daily_results),
                 "prices": [{"time": b.hm, "price": b.price} for b in bars],
             }
         )
@@ -1113,8 +1160,11 @@ def _cycle_dict(result: Result) -> dict:
         "sellPrice": result.sell_price,
         "pnl": result.pnl_pct,
         "money": result.pnl_yuan,
+        "grossPnl": result.gross_pnl_yuan,
+        "fees": result.fees_yuan,
         "shares": result.shares,
         "reason": result.reason,
+        "position": result.position or {},
     }
 
 
@@ -1129,10 +1179,13 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
     limit = max(1, min(5, int(strategy.get("max_daily_cycles", 3))))
     cooldown = max(3, min(30, int(strategy.get("cycle_cooldown_minutes", 10))))
     cycles: list[Result] = []
+    global ACTIVE_POSITION
+    position = PositionState(SIM_BASE_SHARES)
+    ACTIVE_POSITION = position
     entry_after = ""
     last_result: Result | None = None
     for _ in range(limit):
-        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after)
+        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after, position)
         last_result = result
         if result.action == "未触发":
             break
@@ -1147,22 +1200,25 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
     payload = tuple(_cycle_dict(item) for item in cycles)
     if len(cycles) == 1:
         item = cycles[0]
-        return Result(stock, item.action, item.buy_time, item.buy_price, item.sell_time, item.sell_price, item.pnl_pct, item.pnl_yuan, item.trade_amount, item.shares, item.reason, payload)
+        return Result(stock, item.action, item.buy_time, item.buy_price, item.sell_time, item.sell_price, item.pnl_pct, item.pnl_yuan, item.trade_amount, item.shares, item.reason, payload, item.gross_pnl_yuan, item.fees_yuan, item.position)
     total_money = sum(item.pnl_yuan for item in cycles)
+    total_gross = sum(item.gross_pnl_yuan for item in cycles)
+    total_fees = sum(item.fees_yuan for item in cycles)
     base_amount = max((item.trade_amount for item in cycles), default=trade_amount)
     total_pct = total_money / base_amount * 100.0 if base_amount > 0 else 0.0
     first, last = cycles[0], cycles[-1]
     directions = " / ".join(item.action for item in cycles)
-    return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, base_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}", payload)
+    return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, base_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}；底仓已恢复", payload, total_gross, total_fees, position.snapshot())
 
 
-def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "") -> Result:
-    day_low_all = min((b.price for b in bars), default=0.0)
-    day_high_all = max((b.price for b in bars), default=0.0)
-    day_amp = (day_high_all - day_low_all) / day_low_all * 100.0 if day_low_all > 0 else 0.0
-    if day_amp < 2.0:
+def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None) -> Result:
+    # Do not inspect end-of-day extrema here: all entry decisions are causal.
+    day_amp = 0.0
+    # Full-day range is a reporting value only; never gate an intraday decision with future bars.
+    if False and day_amp < 2.0:
         return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, f"日内振幅{day_amp:.1f}%，空间不足2%")
 
+    position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
     total_vol = 0.0
     total_amt = 0.0
     buy: Optional[Bar] = None
@@ -1186,6 +1242,10 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
         if avg <= 0 or not _sane_vwap(bar.price, avg) or not _in_trade_window(bar.hm):
             continue
         if entry_after and bar.hm <= entry_after:
+            continue
+        observed_low, observed_high = min(lows), max(highs)
+        observed_range = (observed_high - observed_low) / observed_low * 100.0 if observed_low > 0 else 0.0
+        if observed_range < float((ACTIVE_STRATEGY or DEFAULT_STRATEGY).get("min_observed_range_pct", 0.65)):
             continue
         dev = (bar.price - avg) / avg * 100.0
 
@@ -1385,24 +1445,42 @@ def _smart_money_reason(bars: List[Bar]) -> str:
     return "主力行为：中性震荡，暂不强行交易"
 
 
-def _trade_result(stock: Stock, action: str, buy: Bar, sell: Bar, trade_amount: float, reason: str) -> Result:
+def _trade_result(stock: Stock, action: str, buy: Bar, sell: Bar, trade_amount: float, reason: str, position: PositionState | None = None) -> Result:
+    position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
     shares = int(trade_amount / buy.price / 100) * 100
     if shares <= 0:
         shares = 100
-    actual_amount = shares * buy.price
-    pnl_pct = (sell.price - buy.price) / buy.price * 100.0
-    pnl_yuan = (sell.price - buy.price) * shares
-    return Result(stock, action, buy.hm, buy.price, sell.hm, sell.price, pnl_pct, pnl_yuan, actual_amount, shares, reason)
+    shares = position.executable_shares(shares)
+    if shares < 100:
+        return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "可卖底仓不足，禁止虚拟卖出", position=position.snapshot())
+    buy_price = SIM_COST_MODEL.execution_price(buy.price, "buy")
+    sell_price = SIM_COST_MODEL.execution_price(sell.price, "sell")
+    actual_amount = shares * buy_price
+    gross_pnl = (sell_price - buy_price) * shares
+    fees = SIM_COST_MODEL.fee("buy", actual_amount, stock.code) + SIM_COST_MODEL.fee("sell", shares * sell_price, stock.code)
+    pnl_yuan = gross_pnl - fees
+    pnl_pct = pnl_yuan / actual_amount * 100.0 if actual_amount > 0 else 0.0
+    position.settle_closed_t(shares)
+    return Result(stock, action, buy.hm, buy_price, sell.hm, sell_price, pnl_pct, pnl_yuan, actual_amount, shares, reason + "（净收益已扣费用）", (), gross_pnl, fees, position.snapshot())
 
 
-def _reverse_t_result(stock: Stock, action: str, sell: Bar, buyback: Bar, trade_amount: float, reason: str) -> Result:
+def _reverse_t_result(stock: Stock, action: str, sell: Bar, buyback: Bar, trade_amount: float, reason: str, position: PositionState | None = None) -> Result:
+    position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
     shares = int(trade_amount / sell.price / 100) * 100
     if shares <= 0:
         shares = 100
-    actual_amount = shares * sell.price
-    pnl_pct = (sell.price - buyback.price) / sell.price * 100.0
-    pnl_yuan = (sell.price - buyback.price) * shares
-    return Result(stock, action, buyback.hm, buyback.price, sell.hm, sell.price, pnl_pct, pnl_yuan, actual_amount, shares, reason)
+    shares = position.executable_shares(shares)
+    if shares < 100:
+        return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "可卖底仓不足，禁止虚拟卖出", position=position.snapshot())
+    sell_price = SIM_COST_MODEL.execution_price(sell.price, "sell")
+    buy_price = SIM_COST_MODEL.execution_price(buyback.price, "buy")
+    actual_amount = shares * sell_price
+    gross_pnl = (sell_price - buy_price) * shares
+    fees = SIM_COST_MODEL.fee("sell", actual_amount, stock.code) + SIM_COST_MODEL.fee("buy", shares * buy_price, stock.code)
+    pnl_yuan = gross_pnl - fees
+    pnl_pct = pnl_yuan / actual_amount * 100.0 if actual_amount > 0 else 0.0
+    position.settle_closed_t(shares)
+    return Result(stock, action, buyback.hm, buy_price, sell.hm, sell_price, pnl_pct, pnl_yuan, actual_amount, shares, reason + "（净收益已扣费用）", (), gross_pnl, fees, position.snapshot())
 
 
 def _is_better_buy_setup(
