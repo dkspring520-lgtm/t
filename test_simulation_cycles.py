@@ -36,6 +36,19 @@ class SimulationCycleTests(unittest.TestCase):
         }
         self.assertEqual(limits, {"steady": 2, "balanced": 3, "sensitive": 5, "quantbrain": 4})
 
+    def test_profiles_preserve_deviation_selectivity_order(self):
+        strategy = sim.load_adaptive_strategy()
+        profiles = {
+            name: sim.apply_smart_t_profile(strategy, name)
+            for name in ("steady", "balanced", "sensitive", "quantbrain")
+        }
+        self.assertLessEqual(profiles["steady"]["buy_min_dev"], profiles["balanced"]["buy_min_dev"])
+        self.assertEqual(profiles["balanced"]["buy_min_dev"], profiles["quantbrain"]["buy_min_dev"])
+        self.assertGreater(profiles["sensitive"]["buy_min_dev"], profiles["balanced"]["buy_min_dev"])
+        self.assertGreaterEqual(profiles["steady"]["sell_min_dev"], profiles["balanced"]["sell_min_dev"])
+        self.assertEqual(profiles["balanced"]["sell_min_dev"], profiles["quantbrain"]["sell_min_dev"])
+        self.assertLess(profiles["sensitive"]["sell_min_dev"], profiles["balanced"]["sell_min_dev"])
+
     def test_large_order_reserves_sellable_base_for_four_cycles(self):
         sim.SIM_BASE_SHARES = 6000
         sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "quantbrain")
@@ -96,6 +109,44 @@ class SimulationCycleTests(unittest.TestCase):
         command = dashboard_app.build_commands("simulate", {"sample": 6, "smartTProfile": "steady"})[0]
         index = command.index("--max-trades")
         self.assertEqual(command[index + 1], "6")
+
+    def test_opening_setup_exits_when_vwap_confirmation_fails(self):
+        bars = [
+            sim.Bar("09:45", 10.00, 100, 100000, "2026-07-10"),
+            sim.Bar("09:46", 9.98, 100, 99800, "2026-07-10"),
+            sim.Bar("09:47", 9.94, 100, 99400, "2026-07-10"),
+        ]
+        reason = sim._invalidation_reason(
+            direction="BUY_FIRST",
+            bars=bars,
+            idx=2,
+            entry_idx=0,
+            avg_prices=[10.01, 10.00, 9.99],
+            pnl_pct=-0.6,
+            structural_stop=9.90,
+            opening_entry=True,
+            strategy=sim.DEFAULT_STRATEGY,
+        )
+        self.assertIn("开盘试探方向失效", reason)
+
+    def test_normal_setup_exits_only_after_structure_and_vwap_both_fail(self):
+        bars = [
+            sim.Bar("10:10", 10.00, 100, 100000, "2026-07-10"),
+            sim.Bar("10:11", 9.98, 100, 99800, "2026-07-10"),
+            sim.Bar("10:12", 9.94, 100, 99400, "2026-07-10"),
+        ]
+        reason = sim._invalidation_reason(
+            direction="BUY_FIRST",
+            bars=bars,
+            idx=2,
+            entry_idx=0,
+            avg_prices=[10.01, 10.00, 9.99],
+            pnl_pct=-0.6,
+            structural_stop=9.95,
+            opening_entry=False,
+            strategy=sim.DEFAULT_STRATEGY,
+        )
+        self.assertIn("结构与VWAP同时失效", reason)
 
 
 if __name__ == "__main__":

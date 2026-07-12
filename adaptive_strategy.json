@@ -1,17 +1,25 @@
 {
-  "buy_min_dev": -1.3,
+  "buy_min_dev": -1.8,
   "buy_max_dev": -2.8,
   "buy_rebound": 0.45,
   "buy_confirm": 5,
-  "sell_min_dev": 1.5,
+  "sell_min_dev": 1.8,
   "sell_max_dev": 2.8,
   "sell_fade": 1.4,
   "sell_confirm": 7,
   "hold_exit_minutes": 25,
   "min_take_profit_minutes": 25,
-  "min_stop_minutes": 15,
+  "min_stop_minutes": 8,
   "fast_take_profit_pct": 1.8,
-  "emergency_stop_pct": -2.2,
+  "emergency_stop_pct": -1.35,
+  "normal_stop_pct": -0.75,
+  "opening_invalidation_pct": -0.45,
+  "breakeven_trigger_pct": 1.2,
+  "trailing_pullback_pct": 0.6,
+  "min_reward_risk_ratio": 1.25,
+  "min_structural_risk_pct": 0.35,
+  "max_structural_risk_pct": 0.8,
+  "risk_first_enabled": 1,
   "vwap_reclaim_pct": 0.5,
   "vwap_exit_buffer_pct": 0.2,
   "vwap_take_profit_pct": 0.6,
@@ -35,9 +43,10 @@
   "observe_dev": 0.8,
   "strict_min_score": 8,
   "strict_day_range": 2.0,
-  "version": 9,
-  "last_updated": "2026-07-02 10:59:02",
+  "version": 11,
+  "last_updated": "2026-07-12 13:30:00",
   "last_notes": [
-    "低吸过早偏多：建议只做突破最近5分钟小压力后的正T，不自动加严参数"
+    "先校验分钟量额与VWAP，再允许信号进入回放和训练",
+    "新增收益风险比门槛、结构失效止损与浮盈保护"
   ]
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import sys
 from datetime import datetime
@@ -44,11 +45,9 @@ def _service(database_path: Path, profile: str):
 
 def _bar_frame(row: dict):
     pd, _, _, _ = _dependencies()
-    records = []
-    index = []
+    records_by_timestamp = {}
     for item in row.get("prices") or []:
         time_text = str(item.get("time") or "")[:5]
-        price = float(item.get("price") or 0)
         date = str(item.get("date") or row.get("date") or "")[:10]
         # Learning only accepts complete, source-dated increment bars.  Old
         # price-only result snapshots cannot yield a truthful VWAP or volume
@@ -56,23 +55,93 @@ def _bar_frame(row: dict):
         if (
             len(time_text) != 5
             or len(date) != 10
-            or price <= 0
             or item.get("dataQuality") not in {None, "full"}
             or item.get("volumeDelta") is None
             or item.get("amountDelta") is None
         ):
             continue
         try:
-            minute_volume = max(0.0, float(item.get("volumeDelta")))
-            minute_amount = max(0.0, float(item.get("amountDelta")))
-        except (TypeError, ValueError):
+            timestamp = pd.Timestamp(f"{date} {time_text}")
+            price = float(item.get("price"))
+            minute_volume = float(item.get("volumeDelta"))
+            minute_amount = float(item.get("amountDelta"))
+        except (TypeError, ValueError, OverflowError):
             continue
-        index.append(pd.Timestamp(f"{date} {time_text}"))
-        records.append({"open": price, "high": price, "low": price, "close": price, "volume": minute_volume, "amount": minute_amount})
-    if not records:
+        minute_of_day = timestamp.hour * 60 + timestamp.minute
+        in_session = 570 <= minute_of_day <= 690 or 780 <= minute_of_day <= 900
+        if (
+            not in_session
+            or not all(math.isfinite(value) and value > 0 for value in (price, minute_volume, minute_amount))
+        ):
+            continue
+        # Simulation bars use A-share lots (100 shares).  Reject inconsistent
+        # amount/volume pairs rather than letting a unit error poison learning.
+        implied_price = minute_amount / (minute_volume * 100.0)
+        if not math.isfinite(implied_price) or not 0.7 * price <= implied_price <= 1.3 * price:
+            continue
+        records_by_timestamp[timestamp] = {
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": minute_volume,
+            "amount": minute_amount,
+        }
+    if not records_by_timestamp:
         return pd.DataFrame()
-    frame = pd.DataFrame(records, index=pd.DatetimeIndex(index))
-    return frame[~frame.index.duplicated(keep="last")].sort_index()
+    ordered = sorted(records_by_timestamp.items())
+    return pd.DataFrame(
+        [record for _timestamp, record in ordered],
+        index=pd.DatetimeIndex([timestamp for timestamp, _record in ordered]),
+    )
+
+
+def _valid_trade_date(value: Any) -> str:
+    text = str(value or "")[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _finite_number(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _trade_date_for_row(row: dict, bars, action: str) -> str:
+    """Resolve one cycle to one trading day; never infer from HH:MM alone."""
+    for key in ("date", "tradeDate", "buyDate", "sellDate"):
+        resolved = _valid_trade_date(row.get(key))
+        if resolved:
+            return resolved
+
+    daily_results = row.get("dailyResults") if isinstance(row.get("dailyResults"), list) else []
+    active_days = []
+    matching_days = []
+    for daily in daily_results:
+        if not isinstance(daily, dict) or str(daily.get("action") or "") == "未触发":
+            continue
+        resolved = _valid_trade_date(daily.get("date"))
+        if not resolved:
+            continue
+        active_days.append(resolved)
+        daily_action = str(daily.get("action") or "")
+        if action and daily_action and (action == daily_action or action in daily_action or daily_action in action):
+            matching_days.append(resolved)
+    if matching_days:
+        return matching_days[-1]
+    if active_days:
+        # Aggregated rows expose the most recent day's buy/sell times.  Cycles
+        # produced by current simulations carry an explicit date and return
+        # above; this fallback only supports older aggregate payloads.
+        return active_days[-1]
+
+    dates = sorted({timestamp.strftime("%Y-%m-%d") for timestamp in bars.index}) if not bars.empty else []
+    return dates[0] if len(dates) == 1 else ""
 
 
 def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) -> dict:
@@ -95,21 +164,27 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         direction = "SELL_FIRST" if action.startswith("反T") else "BUY_FIRST"
         entry_time = str(row.get("sellTime") if direction == "SELL_FIRST" else row.get("buyTime") or "")[:5]
         exit_time = str(row.get("buyTime") if direction == "SELL_FIRST" else row.get("sellTime") or "")[:5]
-        entry_price = float(row.get("sellPrice") if direction == "SELL_FIRST" else row.get("buyPrice") or 0)
-        exit_price = float(row.get("buyPrice") if direction == "SELL_FIRST" else row.get("sellPrice") or 0)
+        entry_price = _finite_number(row.get("sellPrice") if direction == "SELL_FIRST" else row.get("buyPrice"))
+        exit_price = _finite_number(row.get("buyPrice") if direction == "SELL_FIRST" else row.get("sellPrice"))
         bars = _bar_frame(row)
-        matching = bars.index[bars.index.strftime("%H:%M") == entry_time] if len(entry_time) == 5 and not bars.empty else []
+        trade_date = _trade_date_for_row(row, bars, action)
+        day_bars = bars[bars.index.strftime("%Y-%m-%d") == trade_date] if trade_date and not bars.empty else bars.iloc[0:0]
+        matching = day_bars.index[day_bars.index.strftime("%H:%M") == entry_time] if len(entry_time) == 5 and not day_bars.empty else []
         timestamp = matching[-1] if len(matching) else None
         if timestamp is None or entry_price <= 0:
             skipped_price_only += 1
             continue
-        history = bars.loc[:timestamp]
+        history = day_bars.loc[:timestamp]
         close = history["close"]
         delta = close.diff()
         gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
         loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
-        rs = gain / loss.replace(0, float("nan"))
-        rsi14 = float((100 - 100 / (1 + rs)).iloc[-1]) if len(history) > 1 else 50.0
+        latest_gain = _finite_number(gain.iloc[-1]) if len(history) > 1 else 0.0
+        latest_loss = _finite_number(loss.iloc[-1]) if len(history) > 1 else 0.0
+        if latest_loss <= 0:
+            rsi14 = 100.0 if latest_gain > 0 else 50.0
+        else:
+            rsi14 = 100.0 - 100.0 / (1.0 + latest_gain / latest_loss)
         volume = history["volume"].clip(lower=0)
         volume_ma = float(volume.tail(20).mean() or 0)
         volume_ratio = float(volume.iloc[-1] / volume_ma) if volume_ma > 0 else 1.0
@@ -138,7 +213,7 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
         }], index=pd.DatetimeIndex([timestamp]))
         trade_frame = pd.DataFrame()
         if len(exit_time) == 5 and exit_price > 0:
-            trade_date = timestamp.strftime("%Y-%m-%d")
+            pnl = _finite_number(row.get("pnl"))
             trade_frame = pd.DataFrame([{
                 "date": trade_date,
                 "direction": direction,
@@ -146,14 +221,14 @@ def record_profile_run(database_path: Path, profile: str, stocks: list[dict]) ->
                 "exit_time": f"{trade_date}T{exit_time}:00",
                 "entry_price": entry_price,
                 "exit_price": exit_price,
-                "net_return": float(row.get("pnl") or 0) / 100.0,
-                "result": "WIN" if float(row.get("pnl") or 0) > 0 else "LOSS",
+                "net_return": pnl / 100.0,
+                "result": "WIN" if pnl > 0 else "LOSS",
                 "exit_reason": str(row.get("reason") or action),
             }])
         counts = service.record_intraday(str(row.get("code") or "SIM"), signal, trade_frame)
         recorded_signals += counts["signals"]
         recorded_trades += counts["trades"]
-        labeled += service.end_of_day(str(row.get("code") or "SIM"), bars)["labeledSignals"]
+        labeled += service.end_of_day(str(row.get("code") or "SIM"), day_bars)["labeledSignals"]
 
     proposal = service.create_weekly_challenger()
     review = service.review_challenger(apply=False)

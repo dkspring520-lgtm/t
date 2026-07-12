@@ -131,6 +131,10 @@ def evaluate_trade_decision(
     estimated_cycle_cost_pct: float = 0.10,
     slippage_per_side_pct: float = 0.02,
     market_radar_score: object = None,
+    structural_stop_price: object = None,
+    min_reward_risk_ratio: float = 1.25,
+    min_structural_risk_pct: float = 0.35,
+    max_structural_risk_pct: float = 0.80,
 ) -> dict:
     """Single Smart-T decision gate used by live monitoring and replay.
 
@@ -232,6 +236,30 @@ def evaluate_trade_decision(
         observed_opening_range = (day_high - day_low) / current * 100.0
         available_space = max(available_space, observed_opening_range * 0.35)
 
+    risk_floor = max(0.10, _number(min_structural_risk_pct, 0.35))
+    risk_cap = max(risk_floor, _number(max_structural_risk_pct, 0.80))
+    explicit_stop = _number(structural_stop_price)
+    recent_prices = [_number(point.get("price")) for point in point_list[-6:]]
+    recent_prices = [value for value in recent_prices if value > 0]
+    if current > 0 and direction == "BUY_FIRST" and 0 < explicit_stop < current:
+        structural_risk = (current - explicit_stop) / current * 100.0
+    elif current > 0 and direction == "SELL_FIRST" and explicit_stop > current:
+        structural_risk = (explicit_stop - current) / current * 100.0
+    elif current > 0 and recent_prices:
+        raw_risk = (
+            (current - min(recent_prices + [current])) / current * 100.0
+            if direction == "BUY_FIRST"
+            else (max(recent_prices + [current]) - current) / current * 100.0
+        )
+        structural_risk = min(risk_cap, max(risk_floor, raw_risk))
+    else:
+        structural_risk = risk_cap
+    structural_risk = max(risk_floor, structural_risk)
+    # Zero is reserved for deterministic legacy A/B replay.  Production
+    # profiles clamp the configured value to at least 1.0 before reaching here.
+    required_reward_risk = max(0.0, _number(min_reward_risk_ratio, 1.25))
+    reward_risk_ratio = available_space / structural_risk if structural_risk > 0 else 0.0
+
     state = "WAIT_CONFIRMATION"
     reason = "观察状态不直接成交，等待反转确认。"
     confirmed = False
@@ -279,6 +307,8 @@ def evaluate_trade_decision(
         state, reason = "TREND_BLOCKED", "弱势趋势只允许冲高反T，不逆势加仓。"
     elif available_space + 1e-9 < required_gross:
         state, reason = "EDGE_BLOCKED", f"预估毛价差{available_space:.2f}%不足，至少需要{required_gross:.2f}%。"
+    elif required_reward_risk > 0 and reward_risk_ratio + 1e-9 < required_reward_risk:
+        state, reason = "REWARD_RISK_BLOCKED", f"预估收益风险比{reward_risk_ratio:.2f}不足，至少需要{required_reward_risk:.2f}。"
     else:
         confirmed = True
         new_cycle_allowed = True
@@ -287,7 +317,7 @@ def evaluate_trade_decision(
         factor_text = ""
         if selected.name == "quantbrain":
             factor_text = f"，RSI {quant_features.get('rsi', 50):.0f}、量比 {quant_features.get('volumeRatio', 1):.2f}、经验修正{quant_adjustment:+d}"
-        reason = f"{selected.label}档确认：{style}，预估毛价差{available_space:.2f}%{factor_text}，覆盖费用后再执行。"
+        reason = f"{selected.label}档确认：{style}，预估毛价差{available_space:.2f}%、收益风险比{reward_risk_ratio:.2f}{factor_text}，覆盖费用后再执行。"
 
     if state == "SCORE_BLOCKED" and radar_score is not None and radar_adjustment:
         reason = f"信号{effective_score}分；市场雷达{radar_score:.0f}分，确认门槛提高至{required_score}分。"
@@ -315,6 +345,9 @@ def evaluate_trade_decision(
         "experienceVersion": str(learned.get("version_id") or "初始经验") if selected.name == "quantbrain" else "",
         "requiredGrossSpreadPct": round(required_gross, 3),
         "availableSpreadPct": round(available_space, 3),
+        "structuralRiskPct": round(structural_risk, 3),
+        "rewardRiskRatio": round(reward_risk_ratio, 3),
+        "requiredRewardRiskRatio": round(required_reward_risk, 3),
         "reason": reason,
     }
 

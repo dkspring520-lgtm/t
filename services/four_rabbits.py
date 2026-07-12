@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -44,12 +46,13 @@ def _default_state() -> dict[str, Any]:
         "phase": "idle",
         "progress": 0,
         "batch": {},
+        "batchManifest": {},
         "lastResult": {},
         "events": [],
         "message": "持续训练尚未启动",
         "agents": {
             "training": {"label": "训练兔", "state": "idle", "message": "等待后台复盘"},
-            "challenger": {"label": "挑战兔", "state": "idle", "message": "等待候选参数"},
+            "challenger": {"label": "挑战兔", "state": "wait", "message": "WAIT｜等待候选参数"},
             "official": {"label": "正式兔", "state": "ready", "message": "仅使用已晋升冠军"},
             "risk": {"label": "风控兔", "state": "ready", "message": "自动监控异常与回退"},
         },
@@ -69,6 +72,10 @@ def _read(core, email: str) -> dict[str, Any]:
             state["agents"] = {**_default_state()["agents"], **dict(saved.get("agents") or {})}
     except Exception:
         pass
+    challenger = dict(state["agents"].get("challenger") or {})
+    if challenger.get("state") == "idle" and not dict(state.get("lastResult") or {}).get("promotionEligible"):
+        challenger.update({"state": "wait", "message": "WAIT｜本批次未产生可晋升候选"})
+        state["agents"]["challenger"] = challenger
     state["ok"] = True
     return state
 
@@ -96,6 +103,105 @@ def _set_phase(state: dict[str, Any], phase: str, progress: int, message: str) -
     events = list(state.get("events") or [])
     events.append({"time": _now().isoformat(timespec="seconds"), "phase": phase, "message": message})
     state["events"] = events[-12:]
+
+
+def _number(value: object) -> float:
+    """Parse the compact percentages/money strings returned by the simulator."""
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", str(value or "").replace(",", ""))
+    try:
+        return float(match.group(0)) if match else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stable_digest(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _stock_dates(stock: dict[str, Any]) -> list[str]:
+    dates: set[str] = set()
+    for key in ("date", "tradeDate"):
+        text = str(stock.get(key) or "").strip()
+        if text:
+            dates.add(text[:10])
+    for key in ("dailyResults", "cycles", "prices"):
+        for item in list(stock.get(key) or []):
+            if not isinstance(item, dict):
+                continue
+            for date_key in ("date", "tradeDate", "tradingDate"):
+                text = str(item.get(date_key) or "").strip()
+                if text:
+                    dates.add(text[:10])
+    return sorted(dates)
+
+
+def _batch_manifest(batch: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """Describe exactly what can (and cannot) be reproduced from a shadow run."""
+    stats = dict(result.get("stats") or {})
+    stocks = [dict(item) for item in list(result.get("stocks") or []) if isinstance(item, dict)]
+    selected_stocks = [{
+        "code": str(item.get("code") or "").strip(),
+        "name": str(item.get("name") or "").strip(),
+    } for item in stocks if str(item.get("code") or "").strip()]
+    codes = [str(item.get("code") or "").strip() for item in stocks]
+    codes = [code for code in codes if code]
+    dates = {str(item.get("code") or ""): _stock_dates(item) for item in stocks if item.get("code")}
+    evidence = [{
+        "code": str(item.get("code") or ""),
+        "dates": dates.get(str(item.get("code") or ""), []),
+        "prices": item.get("prices") or [],
+        "dailyResults": item.get("dailyResults") or [],
+        "cycles": item.get("cycles") or [],
+        "action": item.get("action"),
+        "pnl": item.get("pnl"),
+        "money": item.get("money"),
+        "detail": item.get("detail"),
+    } for item in stocks]
+    if not evidence:
+        evidence = [{
+            "trigger": stats.get("trigger"),
+            "win": stats.get("win"),
+            "pnl": stats.get("pnl"),
+            "fees": stats.get("fees"),
+            "summary": result.get("summary"),
+        }]
+    reported_seed = result.get("seed")
+    if reported_seed is None:
+        reported_seed = stats.get("seed")
+    requested_seed = batch.get("seed")
+    seed_applied = reported_seed is not None and str(reported_seed) == str(requested_seed)
+    has_market_evidence = any(
+        item.get("prices") or item.get("dailyResults") or item.get("cycles")
+        for item in evidence
+    )
+    fingerprint_type = "data" if has_market_evidence else "result"
+    limitations: list[str] = []
+    if not seed_applied:
+        limitations.append("当前随机选股器未回传已应用种子，不能保证精确复跑同一批股票。")
+    if not codes:
+        limitations.append("任务结果未返回入选股票代码，只能核对汇总结果指纹。")
+    if not has_market_evidence:
+        limitations.append("任务结果未返回逐分钟行情，只能核对结果，不能还原原始数据。")
+    return {
+        "batchId": str(batch.get("id") or ""),
+        "seed": requested_seed,
+        "seedApplied": seed_applied,
+        "selectedStocks": selected_stocks,
+        "selectedCodes": codes,
+        "selectedDates": dates,
+        "fingerprintType": fingerprint_type,
+        "fingerprint": _stable_digest(evidence),
+        "reproducibility": "exact" if seed_applied and codes and has_market_evidence else "limited",
+        "limitations": limitations,
+    }
+
+
+def _proposal_version(adaptive: dict[str, Any]) -> str:
+    proposal = dict(adaptive.get("proposal") or {})
+    # LearningRunResult.to_dict() exposes camelCase challengerVersion.  The old
+    # version_id lookup silently hid real challengers from the coordinator.
+    return str(proposal.get("challengerVersion") or "").strip()
 
 
 def status(core, email: str) -> dict[str, Any]:
@@ -128,9 +234,17 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             _update_agent(state, "training", "idle", state["message"])
             return _write(core, email, state)
         started = _now()
+        batch_id = started.strftime("%Y%m%d-%H%M%S")
+        batch_seed = int(hashlib.sha256(batch_id.encode("utf-8")).hexdigest()[:8], 16)
         state["running"] = True
         state["runStartedAt"] = started.isoformat(timespec="seconds")
-        state["batch"] = {"id": started.strftime("%Y%m%d-%H%M%S"), "days": 5, "sample": 10, "profile": "量化学习"}
+        state["batch"] = {
+            "id": batch_id,
+            "seed": batch_seed,
+            "days": 5,
+            "sample": 10,
+            "profile": "量化学习",
+        }
         _set_phase(state, "replaying", 20, "正在获取10只股票并进行近5日影子回放")
         _update_agent(state, "training", "running", state["message"], days=5, sample=10)
         _write(core, email, state)
@@ -147,6 +261,9 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             "smartTProfile": "quantbrain",
             "baseShares": 6000,
             "shadowTraining": True,
+            # Kept in the manifest even on older simulators that do not yet
+            # consume it.  seedApplied remains false until the task echoes it.
+            "seed": batch_seed,
         })
         with _LOCK:
             state = _read(core, email)
@@ -168,13 +285,17 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                 "skipped": adaptive.get("skippedPriceOnly", 0),
                 "durationSeconds": duration,
             }
+            manifest = _batch_manifest(dict(state.get("batch") or {}), result)
+            state["batchManifest"] = manifest
+            state["batch"] = {**dict(state.get("batch") or {}), "manifest": manifest}
             if result.get("ok"):
                 win_rate = str(stats.get("win") or "--")
                 trigger = str(stats.get("trigger") or "--")
                 triggered, _total = core.parse_trigger(trigger)
+                net_pnl = _number(stats.get("pnl"))
                 if triggered <= 0:
                     result_message = f"影子复盘完成：{trigger}，本轮没有满足条件的交易，不计为亏损"
-                elif win_rate.startswith("0"):
+                elif net_pnl <= 0:
                     result_message = f"影子复盘完成：触发 {trigger}，本轮有成交但没有盈利，候选不得晋升"
                 else:
                     result_message = f"影子复盘完成：触发 {trigger}，胜率 {win_rate}"
@@ -182,11 +303,39 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                     state, "training", "success", result_message,
                     signals=adaptive.get("recordedSignals", 0), trades=adaptive.get("recordedTrades", 0),
                 )
-                proposal = dict(adaptive.get("proposal") or {})
-                if proposal and proposal.get("version_id"):
-                    _update_agent(state, "challenger", "pending", "发现候选版本，等待人工晋升", version=proposal.get("version_id"))
+                proposal_version = _proposal_version(adaptive)
+                promotion_eligible = bool(triggered > 0 and net_pnl > 0 and proposal_version)
+                state["lastResult"].update({
+                    "promotionEligible": promotion_eligible,
+                    "promotionStatus": "CANDIDATE" if promotion_eligible else "WAIT",
+                    "challengerVersion": proposal_version,
+                })
+                if promotion_eligible:
+                    _update_agent(
+                        state,
+                        "challenger",
+                        "pending",
+                        "候选已产生；本轮为正收益，等待人工晋升",
+                        version=proposal_version,
+                        promotionEligible=True,
+                    )
+                elif proposal_version and net_pnl <= 0:
+                    _update_agent(
+                        state,
+                        "challenger",
+                        "wait",
+                        "WAIT｜本轮净收益不为正，现有候选不得晋升",
+                        version=proposal_version,
+                        promotionEligible=False,
+                    )
                 else:
-                    _update_agent(state, "challenger", "idle", "本批次未产生更优候选")
+                    _update_agent(
+                        state,
+                        "challenger",
+                        "wait",
+                        "WAIT｜本批次未产生可晋升候选",
+                        promotionEligible=False,
+                    )
                 profile = core.profile_status(core.profile_learning_path(email, "quantbrain"), "quantbrain")
                 champion = dict(profile.get("champion") or {})
                 _update_agent(state, "official", "ready", "正式策略保持冠军版本", version=champion.get("version_id", "默认"))
@@ -203,7 +352,15 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                     _update_agent(state, "risk", "warning", f"风险检查暂不可用：{exc}")
                 _set_phase(state, "completed", 100, f"{result_message}，净盈亏 {stats.get('pnl') or '--'}")
             else:
+                state["lastResult"].update({"promotionEligible": False, "promotionStatus": "WAIT"})
                 _update_agent(state, "training", "error", result.get("summary") or "训练失败")
+                _update_agent(
+                    state,
+                    "challenger",
+                    "wait",
+                    "WAIT｜本批次失败，没有可晋升候选",
+                    promotionEligible=False,
+                )
                 _set_phase(state, "error", 100, result.get("summary") or "训练失败")
             state["lastRunAt"] = _now().isoformat(timespec="seconds")
             state["totalBatches"] = int(state.get("totalBatches") or 0) + 1
@@ -219,6 +376,18 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             state["nextRunAt"] = (_now() + timedelta(minutes=TRAIN_INTERVAL_MINUTES)).isoformat(timespec="seconds")
             _set_phase(state, "error", 100, f"训练失败：{exc}")
             _update_agent(state, "training", "error", state["message"])
+            state["lastResult"] = {
+                **dict(state.get("lastResult") or {}),
+                "promotionEligible": False,
+                "promotionStatus": "WAIT",
+            }
+            _update_agent(
+                state,
+                "challenger",
+                "wait",
+                "WAIT｜训练异常，没有可晋升候选",
+                promotionEligible=False,
+            )
             return _write(core, email, state)
     finally:
         core.REQUEST_EMAIL.reset(token)
@@ -275,6 +444,17 @@ def control(core, email: str, action: str) -> dict[str, Any]:
         threading.Thread(target=run_once, args=(core, email, True), daemon=True, name=f"four-rabbits-run-{email}").start()
         return {**status(core, email), "message": "训练任务已提交"}
     if action == "promote":
+        with _LOCK:
+            state = _read(core, email)
+            eligible = bool(dict(state.get("lastResult") or {}).get("promotionEligible"))
+        if not eligible:
+            message = "WAIT｜最近批次未通过正收益门槛，当前没有可晋升候选"
+            with _LOCK:
+                state = _read(core, email)
+                _update_agent(state, "challenger", "wait", message, promotionEligible=False)
+                _update_agent(state, "official", "ready", "正式策略保持冠军版本")
+                _write(core, email, state)
+            return {**status(core, email), "promotion": {"ok": False, "message": message}}
         result = core.promote_profile(core.profile_learning_path(email, "quantbrain"), "quantbrain")
         with _LOCK:
             state = _read(core, email)

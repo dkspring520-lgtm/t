@@ -158,6 +158,34 @@ class SmartTPolicyTests(unittest.TestCase):
         self.assertEqual(result["marketRadarBand"], "OVERHEATED")
         self.assertEqual(result["state"], "RADAR_OVERHEAT_WAIT_PULLBACK")
 
+    def test_reward_risk_gate_blocks_poor_payoff_even_when_signal_is_confirmed(self):
+        rising = points([9.80 + i * 0.01 for i in range(41)])
+        result = self.base(
+            points=rising,
+            price=10.0,
+            average=10.2,
+            high=10.25,
+            low=9.75,
+            structural_stop_price=9.8,
+            min_reward_risk_ratio=1.25,
+        )
+        self.assertEqual(result["state"], "REWARD_RISK_BLOCKED")
+        self.assertAlmostEqual(result["rewardRiskRatio"], 1.0, places=2)
+
+    def test_reward_risk_gate_allows_same_signal_with_tighter_real_stop(self):
+        rising = points([9.80 + i * 0.01 for i in range(41)])
+        result = self.base(
+            points=rising,
+            price=10.0,
+            average=10.2,
+            high=10.25,
+            low=9.75,
+            structural_stop_price=9.9,
+            min_reward_risk_ratio=1.25,
+        )
+        self.assertEqual(result["state"], "READY")
+        self.assertGreaterEqual(result["rewardRiskRatio"], 1.25)
+
 
 if __name__ == "__main__":
     unittest.main()

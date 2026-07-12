@@ -21,6 +21,12 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from auction_direction import evaluate_auction_gate
+from services.market_data_quality import (
+    is_a_share_session_minute,
+    normalise_trade_date,
+    normalise_volume_lots,
+    sanitize_incremental_records,
+)
 from services.trade_engine import PositionState, TradeCostModel
 from smart_t_policy import evaluate_trade_decision
 
@@ -30,19 +36,27 @@ MINUTE_CACHE_DIR = BASE_DIR / "minute_cache"
 SIM_HISTORY_PATH = BASE_DIR / "simulation_history.jsonl"
 ADAPTIVE_STRATEGY_PATH = Path(os.environ.get("ADAPTIVE_STRATEGY_PATH") or BASE_DIR / "adaptive_strategy.json")
 DEFAULT_STRATEGY = {
-    "buy_min_dev": -1.15,
+    "buy_min_dev": -1.8,
     "buy_max_dev": -2.8,
     "buy_rebound": 0.45,
     "buy_confirm": 5,
-    "sell_min_dev": 1.35,
+    "sell_min_dev": 1.8,
     "sell_max_dev": 2.8,
     "sell_fade": 1.2,
     "sell_confirm": 6,
     "hold_exit_minutes": 25,
     "min_take_profit_minutes": 25,
-    "min_stop_minutes": 15,
+    "min_stop_minutes": 8,
     "fast_take_profit_pct": 1.8,
-    "emergency_stop_pct": -2.2,
+    "emergency_stop_pct": -1.35,
+    "normal_stop_pct": -0.75,
+    "opening_invalidation_pct": -0.45,
+    "breakeven_trigger_pct": 1.20,
+    "trailing_pullback_pct": 0.60,
+    "min_reward_risk_ratio": 1.25,
+    "min_structural_risk_pct": 0.35,
+    "max_structural_risk_pct": 0.80,
+    "risk_first_enabled": 1,
     "vwap_take_profit_pct": 0.25,
     "normal_take_profit_pct": 0.6,
     "late_take_profit_pct": 0.45,
@@ -58,7 +72,7 @@ DEFAULT_STRATEGY = {
     "opening_reverse_strict": 0,
     "min_trade_quality": 9,
     "second_confirm_enabled": 1,
-    "version": 3,
+    "version": 11,
 }
 ACTIVE_STRATEGY: dict[str, float] = {}
 SIM_RELAX_CONFIRM = 0
@@ -662,9 +676,19 @@ def load_adaptive_strategy() -> dict[str, float]:
     strategy["sell_confirm"] = max(3, min(6, int(strategy["sell_confirm"])))
     strategy["hold_exit_minutes"] = max(15, min(35, int(strategy["hold_exit_minutes"])))
     strategy["min_take_profit_minutes"] = max(15, min(35, int(strategy.get("min_take_profit_minutes", 25))))
-    strategy["min_stop_minutes"] = max(10, min(25, int(strategy.get("min_stop_minutes", 15))))
+    strategy["min_stop_minutes"] = max(5, min(20, int(strategy.get("min_stop_minutes", 8))))
     strategy["fast_take_profit_pct"] = max(1.2, min(3.0, float(strategy.get("fast_take_profit_pct", 1.8))))
-    strategy["emergency_stop_pct"] = max(-3.5, min(-1.6, float(strategy.get("emergency_stop_pct", -2.2))))
+    strategy["emergency_stop_pct"] = max(-2.0, min(-1.0, float(strategy.get("emergency_stop_pct", -1.35))))
+    strategy["normal_stop_pct"] = max(-1.2, min(-0.45, float(strategy.get("normal_stop_pct", -0.75))))
+    strategy["opening_invalidation_pct"] = max(-0.80, min(-0.25, float(strategy.get("opening_invalidation_pct", -0.45))))
+    strategy["breakeven_trigger_pct"] = max(0.35, min(1.20, float(strategy.get("breakeven_trigger_pct", 0.55))))
+    strategy["trailing_pullback_pct"] = max(0.15, min(0.70, float(strategy.get("trailing_pullback_pct", 0.30))))
+    strategy["min_reward_risk_ratio"] = max(1.0, min(2.5, float(strategy.get("min_reward_risk_ratio", 1.25))))
+    strategy["min_structural_risk_pct"] = max(0.20, min(0.60, float(strategy.get("min_structural_risk_pct", 0.35))))
+    strategy["max_structural_risk_pct"] = max(0.50, min(1.50, float(strategy.get("max_structural_risk_pct", 0.80))))
+    if strategy["max_structural_risk_pct"] < strategy["min_structural_risk_pct"]:
+        strategy["max_structural_risk_pct"] = strategy["min_structural_risk_pct"]
+    strategy["risk_first_enabled"] = max(0, min(1, int(strategy.get("risk_first_enabled", 1))))
     strategy["vwap_take_profit_pct"] = max(0.10, min(1.0, float(strategy.get("vwap_take_profit_pct", 0.25))))
     strategy["normal_take_profit_pct"] = max(0.20, min(1.5, float(strategy.get("normal_take_profit_pct", 0.6))))
     strategy["late_take_profit_pct"] = max(0.15, min(1.2, float(strategy.get("late_take_profit_pct", 0.45))))
@@ -686,12 +710,18 @@ def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str,
     """给模拟测试应用三档有界参数；不修改硬风控与费用。"""
     out = dict(strategy)
     if profile == "steady":
+        out["buy_min_dev"] = min(-2.0, float(out.get("buy_min_dev", -1.8)))
+        out["sell_min_dev"] = max(2.0, float(out.get("sell_min_dev", 1.8)))
         out["min_trade_quality"] = max(12, int(out.get("min_trade_quality", 9)))
         out["buy_confirm"] = min(6, max(5, int(out.get("buy_confirm", 5))))
         out["sell_confirm"] = min(6, max(6, int(out.get("sell_confirm", 6))))
         out["opening_reverse_strict"] = 1
         out["second_confirm_enabled"] = 1
     elif profile == "sensitive":
+        # The sensitive profile explicitly trades frequency for selectivity.
+        # Other profiles keep the strategy file's real deviation threshold.
+        out["buy_min_dev"] = max(-1.3, float(out.get("buy_min_dev", -1.8)))
+        out["sell_min_dev"] = min(1.5, float(out.get("sell_min_dev", 1.8)))
         out["min_trade_quality"] = min(7, int(out.get("min_trade_quality", 9)))
         out["buy_confirm"] = max(3, int(out.get("buy_confirm", 5)) - 1)
         out["sell_confirm"] = max(3, int(out.get("sell_confirm", 6)) - 1)
@@ -1030,15 +1060,58 @@ def save_cached_stock_pool(pool: List[Stock]) -> None:
         pass
 
 
+def _sanitize_bars(bars: Iterable[Bar]) -> List[Bar]:
+    """Keep only causal, in-session incremental bars with explainable VWAP."""
+    normalised: list[Bar] = []
+    for item in bars:
+        lots = normalise_volume_lots(item.price, item.volume_lot, item.amount_yuan)
+        if lots <= 0:
+            continue
+        normalised.append(
+            Bar(
+                item.hm,
+                item.price,
+                lots,
+                item.amount_yuan,
+                normalise_trade_date(item.date),
+            )
+        )
+    return sanitize_incremental_records(
+        normalised,
+        time_getter=lambda item: item.hm,
+        price_getter=lambda item: item.price,
+        volume_getter=lambda item: item.volume_lot,
+        amount_getter=lambda item: item.amount_yuan,
+        date_getter=lambda item: item.date,
+    )
+
+
+def _bars_cover_requested_days(bars: List[Bar], days: int) -> bool:
+    """A multi-day replay must contain the number of sessions it advertises."""
+    required_days = max(1, int(days or 1))
+    if len(bars) < 30:
+        return False
+    if required_days <= 1:
+        return True
+    trading_days = {bar.date for bar in bars if bar.date}
+    return len(trading_days) >= required_days
+
+
 def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
     cached = load_cached_minutes(symbol)
-    cached_days = {bar.date for bar in cached if bar.date}
-    if len(cached) >= 30 and (days <= 1 or len(cached_days) >= days) and minute_cache_is_fresh(symbol):
+    cache_has_previous_close = float(PREV_CLOSE_BY_SYMBOL.get(symbol) or 0.0) > 0
+    if _bars_cover_requested_days(cached, days) and minute_cache_is_fresh(symbol) and cache_has_previous_close:
         return cached
     if days > 1:
         bars = fetch_minutes_eastmoney(symbol, days)
-        if len(bars) >= 30:
+        if _bars_cover_requested_days(bars, days):
+            save_cached_minutes(symbol, bars)
             return bars
+        # Tencent and Sina expose only the current session.  Falling through
+        # would silently label one day as a five-day replay and poison the
+        # adaptive learner.  A complete older cache is truthful; otherwise the
+        # caller must surface data insufficiency.
+        return cached if _bars_cover_requested_days(cached, days) else []
 
     url = f"http://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=js&code={symbol}"
     try:
@@ -1048,7 +1121,11 @@ def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
             rows = []
         else:
             data = json.loads(text.split("=", 1)[1].strip())
-            rows = data.get("data", {}).get(symbol, {}).get("data", {}).get("data", []) or []
+            node = data.get("data", {}).get(symbol, {})
+            previous_close = _extract_tencent_previous_close(data, symbol)
+            if previous_close > 0:
+                PREV_CLOSE_BY_SYMBOL[symbol] = previous_close
+            rows = node.get("data", {}).get("data", []) or []
     except Exception:
         rows = []
 
@@ -1066,17 +1143,19 @@ def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
             minute_amount = max(amount - last_amount, 0.0)
             last_volume = volume
             last_amount = amount
-            bars.append(Bar(_hm(parts[0]), float(parts[1]), minute_volume, minute_amount, datetime.now().strftime("%Y-%m-%d")))
+            bars.append(Bar(_hm(parts[0]), float(parts[1]), minute_volume, minute_amount, normalise_trade_date("")))
         except Exception:
             continue
-    if len(bars) >= 30:
+    bars = _sanitize_bars(bars)
+    if _bars_cover_requested_days(bars, 1):
         save_cached_minutes(symbol, bars)
         return bars
     bars = fetch_minutes_eastmoney(symbol, 1) or fetch_minutes_sina(symbol)
-    if len(bars) >= 30:
+    if _bars_cover_requested_days(bars, 1):
         save_cached_minutes(symbol, bars)
         return bars
-    return load_cached_minutes(symbol) or load_history_price_bars(symbol)
+    cached = load_cached_minutes(symbol)
+    return cached if _bars_cover_requested_days(cached, 1) else load_history_price_bars(symbol)
 
 
 def minute_cache_is_fresh(symbol: str, now: datetime | None = None) -> bool:
@@ -1094,6 +1173,7 @@ def minute_cache_is_fresh(symbol: str, now: datetime | None = None) -> bool:
 
 
 def save_cached_minutes(symbol: str, bars: List[Bar]) -> None:
+    bars = _sanitize_bars(bars)
     if len(bars) < 30:
         return
     try:
@@ -1101,6 +1181,7 @@ def save_cached_minutes(symbol: str, bars: List[Bar]) -> None:
         payload = {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "symbol": symbol,
+            "previousClose": float(PREV_CLOSE_BY_SYMBOL.get(symbol) or 0.0) or None,
             "bars": [{"hm": b.hm, "price": b.price, "volume": b.volume_lot, "amount": b.amount_yuan, "date": b.date} for b in bars],
         }
         (MINUTE_CACHE_DIR / f"{symbol}.json").write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -1111,11 +1192,32 @@ def save_cached_minutes(symbol: str, bars: List[Bar]) -> None:
 def load_cached_minutes(symbol: str) -> List[Bar]:
     try:
         data = json.loads((MINUTE_CACHE_DIR / f"{symbol}.json").read_text(encoding="utf-8"))
+        previous_close = float(data.get("previousClose") or 0.0)
+        if previous_close > 0:
+            PREV_CLOSE_BY_SYMBOL[symbol] = previous_close
         rows = data.get("bars") or []
-        bars = [Bar(str(x["hm"]), float(x["price"]), float(x.get("volume") or 0.0), float(x.get("amount") or 0.0), str(x.get("date") or data.get("date") or "")) for x in rows if x.get("price")]
+        bars = _sanitize_bars(
+            Bar(str(x["hm"]), float(x["price"]), float(x.get("volume") or 0.0), float(x.get("amount") or 0.0), str(x.get("date") or data.get("date") or ""))
+            for x in rows
+            if x.get("price")
+        )
         return bars if len(bars) >= 30 else []
     except Exception:
         return []
+
+
+def _extract_tencent_previous_close(payload: object, symbol: str) -> float:
+    """Read yesterday's close from Tencent's quote metadata without another request."""
+    try:
+        node = payload.get("data", {}).get(symbol, {})
+        quote_map = node.get("qt", {})
+        quote = quote_map.get(symbol, []) if isinstance(quote_map, dict) else quote_map
+        if isinstance(quote, str):
+            quote = quote.split("~")
+        value = float(quote[4]) if isinstance(quote, (list, tuple)) and len(quote) > 4 else 0.0
+        return value if value > 0 else 0.0
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 0.0
 
 
 def load_history_price_bars(symbol: str) -> List[Bar]:
@@ -1191,7 +1293,7 @@ def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
             bars.append(Bar(hm, close, volume, amount, date))
         except Exception:
             continue
-    return bars
+    return _sanitize_bars(bars)
 
 
 def fetch_minutes_sina(symbol: str) -> List[Bar]:
@@ -1221,10 +1323,10 @@ def fetch_minutes_sina(symbol: str) -> List[Bar]:
             last_total_volume = total_volume
             last_total_amount = total_amount
             if price > 0:
-                bars.append(Bar(hm, price, minute_volume / 100.0, minute_amount, datetime.now().strftime("%Y-%m-%d")))
+                bars.append(Bar(hm, price, minute_volume / 100.0, minute_amount, normalise_trade_date("")))
         except Exception:
             continue
-    return bars
+    return _sanitize_bars(bars)
 
 
 def _cycle_dict(result: Result) -> dict:
@@ -1251,6 +1353,9 @@ def _minute_text(total: int) -> str:
 
 def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None) -> Result:
     """Run several independent closed T cycles while keeping full-day VWAP."""
+    bars = _sanitize_bars(bars)
+    if not bars:
+        return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "分钟行情未通过数据质量检查")
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     limit = max(1, min(5, int(strategy.get("max_daily_cycles", 3))))
     cooldown = max(3, min(30, int(strategy.get("cycle_cooldown_minutes", 10))))
@@ -1330,6 +1435,9 @@ def _shared_policy_allows(
             SIM_COST_MODEL.fee("buy", amount, stock.code)
             + SIM_COST_MODEL.fee("sell", amount, stock.code)
         ) / amount * 100.0
+    strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
+    risk_first = bool(int(strategy.get("risk_first_enabled", 1)))
+    structural_stop = _candidate_structural_stop(bars, idx, direction, opening_trial, strategy) if risk_first else None
     decision = evaluate_trade_decision(
         profile=SMART_T_PROFILE,
         time_text=bar.hm,
@@ -1360,8 +1468,72 @@ def _shared_policy_allows(
         slippage_per_side_pct=SIM_COST_MODEL.slippage_bps / 100.0,
         market_radar_score=SIM_MARKET_RADAR_SCORE,
         learned_params=SIM_LEARNED_PARAMS,
+        structural_stop_price=structural_stop,
+        min_reward_risk_ratio=float(strategy.get("min_reward_risk_ratio", 1.25)) if risk_first else 0.0,
+        min_structural_risk_pct=float(strategy.get("min_structural_risk_pct", 0.35)),
+        max_structural_risk_pct=float(strategy.get("max_structural_risk_pct", 0.80)),
     )
     return bool(decision.get("confirmed"))
+
+
+def _candidate_structural_stop(
+    bars: List[Bar],
+    idx: int,
+    direction: str,
+    opening_entry: bool = False,
+    strategy: dict | None = None,
+) -> float | None:
+    """Return a causal invalidation level from bars visible at entry."""
+    recent = [item.price for item in bars[max(0, idx - 5) : idx + 1] if item.price > 0]
+    if not recent:
+        return None
+    current = bars[idx].price
+    config = strategy or ACTIVE_STRATEGY or DEFAULT_STRATEGY
+    risk_cap = float(config.get("max_structural_risk_pct", 0.80)) / 100.0
+    if opening_entry:
+        risk_cap = abs(float(config.get("opening_invalidation_pct", -0.45))) / 100.0
+    if direction == "BUY_FIRST":
+        level = min(recent)
+        structure = level * 0.9995 if level < current else current * (1.0 - risk_cap)
+        return max(structure, current * (1.0 - risk_cap))
+    if direction == "SELL_FIRST":
+        level = max(recent)
+        structure = level * 1.0005 if level > current else current * (1.0 + risk_cap)
+        return min(structure, current * (1.0 + risk_cap))
+    return None
+
+
+def _invalidation_reason(
+    *,
+    direction: str,
+    bars: List[Bar],
+    idx: int,
+    entry_idx: int,
+    avg_prices: List[float],
+    pnl_pct: float,
+    structural_stop: float | None,
+    opening_entry: bool,
+    strategy: dict,
+) -> str:
+    """Detect a failed setup before a large fixed-percentage stop is reached."""
+    if entry_idx < 0 or idx - entry_idx < 2 or len(avg_prices) < 2:
+        return ""
+    recent_prices = [item.price for item in bars[max(entry_idx + 1, idx - 1) : idx + 1]]
+    recent_vwaps = avg_prices[-len(recent_prices) :]
+    if len(recent_prices) < 2 or len(recent_prices) != len(recent_vwaps):
+        return ""
+    if direction == "BUY_FIRST":
+        lost_vwap = all(price < average for price, average in zip(recent_prices, recent_vwaps))
+        structure_broken = bool(structural_stop and bars[idx].price <= structural_stop)
+    else:
+        lost_vwap = all(price > average for price, average in zip(recent_prices, recent_vwaps))
+        structure_broken = bool(structural_stop and bars[idx].price >= structural_stop)
+    opening_limit = float(strategy.get("opening_invalidation_pct", -0.45))
+    if opening_entry and lost_vwap and pnl_pct <= opening_limit:
+        return "开盘试探方向失效，连续两分钟反向穿越VWAP"
+    if lost_vwap and structure_broken:
+        return "入场结构与VWAP同时失效"
+    return ""
 
 
 def _minimum_profitable_move_pct(stock: Stock, price: float, trade_amount: float, net_buffer_pct: float = 0.08) -> float:
@@ -1395,6 +1567,11 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
     highs: List[float] = []
     avg_prices: List[float] = []
     volumes: List[float] = []
+    strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
+    entry_idx = -1
+    entry_opening = False
+    entry_structural_stop: float | None = None
+    best_pnl = 0.0
 
     for idx, bar in enumerate(bars):
         total_vol += bar.volume_lot
@@ -1466,31 +1643,41 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 buy = bar
                 mode = "正T"
                 active_trade_amount = candidate_trade_amount
+                entry_idx = idx
+                entry_opening = opening_trial
+                entry_structural_stop = _candidate_structural_stop(bars, idx, "BUY_FIRST", opening_trial, strategy)
+                best_pnl = 0.0
                 entry_note = ("；开盘试探T，首次确认，仅使用计划资金的1/6" if opening_legs_used == 0 else "；开盘试探T，回踩确认后第二次，仅使用计划资金的1/6") if opening_trial else ""
             elif sell_allowed:
                 sell_first = bar
                 mode = "反T"
                 active_trade_amount = candidate_trade_amount
+                entry_idx = idx
+                entry_opening = opening_trial
+                entry_structural_stop = _candidate_structural_stop(bars, idx, "SELL_FIRST", opening_trial, strategy)
+                best_pnl = 0.0
                 entry_note = ("；开盘试探T，首次确认，仅使用昨仓可卖部分的1/6" if opening_legs_used == 0 else "；开盘试探T，跌破开盘价反抽失败后第二次，仅使用昨仓可卖部分的1/6") if opening_trial else ""
             continue
 
         if mode == "正T" and buy is not None:
             hold_minutes = _minutes_between(buy.hm, bar.hm)
             pnl = (bar.price - buy.price) / buy.price * 100.0
+            best_pnl = max(best_pnl, pnl)
             sell_dev = (bar.price - avg) / avg * 100.0
-            hold_limit = int(ACTIVE_STRATEGY.get("hold_exit_minutes", 5))
-            min_stop = int(ACTIVE_STRATEGY.get("min_stop_minutes", 12))
-            emergency_stop = float(ACTIVE_STRATEGY.get("emergency_stop_pct", -1.6))
-            min_take_profit = int(ACTIVE_STRATEGY.get("min_take_profit_minutes", 8))
-            fast_take_profit = float(ACTIVE_STRATEGY.get("fast_take_profit_pct", 1.35))
-            vwap_take_profit = float(ACTIVE_STRATEGY.get("vwap_take_profit_pct", 0.25))
-            normal_take_profit = float(ACTIVE_STRATEGY.get("normal_take_profit_pct", 0.6))
-            late_take_profit = float(ACTIVE_STRATEGY.get("late_take_profit_pct", 0.45))
+            hold_limit = int(strategy.get("hold_exit_minutes", 25))
+            min_stop = int(strategy.get("min_stop_minutes", 8))
+            emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
+            normal_stop = float(strategy.get("normal_stop_pct", -0.75))
+            min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
+            fast_take_profit = float(strategy.get("fast_take_profit_pct", 1.8))
+            vwap_take_profit = float(strategy.get("vwap_take_profit_pct", 0.25))
+            normal_take_profit = float(strategy.get("normal_take_profit_pct", 0.6))
+            late_take_profit = float(strategy.get("late_take_profit_pct", 0.45))
             profitable_floor = _minimum_profitable_move_pct(stock, buy.price, active_trade_amount)
             vwap_take_profit = max(vwap_take_profit, profitable_floor)
             normal_take_profit = max(normal_take_profit, profitable_floor)
             late_take_profit = max(late_take_profit, profitable_floor)
-            exit_buffer = float(ACTIVE_STRATEGY.get("vwap_exit_buffer_pct", 0.20))
+            exit_buffer = float(strategy.get("vwap_exit_buffer_pct", 0.20))
             near_or_above_vwap = bar.price >= avg * (1.0 - exit_buffer / 100.0)
             if (
                 (hold_minutes >= 12 and near_or_above_vwap and pnl >= vwap_take_profit)
@@ -1499,7 +1686,20 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
                 return _trade_result(stock, "正T止盈", buy, bar, active_trade_amount, "右侧低吸确认后达到目标，已拉开时间间隔" + entry_note)
-            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= -0.90):
+            risk_first = bool(int(strategy.get("risk_first_enabled", 1)))
+            breakeven_trigger = float(strategy.get("breakeven_trigger_pct", 0.55))
+            pullback = float(strategy.get("trailing_pullback_pct", 0.30))
+            if risk_first and best_pnl >= breakeven_trigger and best_pnl - pnl >= pullback and pnl >= profitable_floor:
+                return _trade_result(stock, "正T保本止盈", buy, bar, active_trade_amount, "已有浮盈回撤，优先锁定覆盖费用后的收益" + entry_note)
+            invalidation = _invalidation_reason(
+                direction="BUY_FIRST", bars=bars, idx=idx, entry_idx=entry_idx,
+                avg_prices=avg_prices, pnl_pct=pnl, structural_stop=entry_structural_stop,
+                opening_entry=entry_opening, strategy=strategy,
+            )
+            if risk_first and invalidation:
+                return _trade_result(stock, "正T结构止损", buy, bar, active_trade_amount, invalidation + entry_note)
+            fixed_stop = normal_stop if risk_first else -0.90
+            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _trade_result(stock, "正T止损", buy, bar, active_trade_amount, "确认破位后止损" + entry_note)
             if hold_minutes >= hold_limit and sell_dev >= 0.7 and pnl > 0:
                 return _trade_result(stock, "正T高抛", buy, bar, active_trade_amount, "回到均价上方" + entry_note)
@@ -1507,20 +1707,22 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
         if mode == "反T" and sell_first is not None:
             hold_minutes = _minutes_between(sell_first.hm, bar.hm)
             pnl = (sell_first.price - bar.price) / sell_first.price * 100.0
+            best_pnl = max(best_pnl, pnl)
             buy_dev = (bar.price - avg) / avg * 100.0
-            hold_limit = int(ACTIVE_STRATEGY.get("hold_exit_minutes", 5))
-            min_stop = int(ACTIVE_STRATEGY.get("min_stop_minutes", 12))
-            emergency_stop = float(ACTIVE_STRATEGY.get("emergency_stop_pct", -1.6))
-            min_take_profit = int(ACTIVE_STRATEGY.get("min_take_profit_minutes", 8))
-            fast_take_profit = float(ACTIVE_STRATEGY.get("fast_take_profit_pct", 1.35))
-            vwap_take_profit = float(ACTIVE_STRATEGY.get("vwap_take_profit_pct", 0.25))
-            normal_take_profit = float(ACTIVE_STRATEGY.get("normal_take_profit_pct", 0.6))
-            late_take_profit = float(ACTIVE_STRATEGY.get("late_take_profit_pct", 0.45))
+            hold_limit = int(strategy.get("hold_exit_minutes", 25))
+            min_stop = int(strategy.get("min_stop_minutes", 8))
+            emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
+            normal_stop = float(strategy.get("normal_stop_pct", -0.75))
+            min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
+            fast_take_profit = float(strategy.get("fast_take_profit_pct", 1.8))
+            vwap_take_profit = float(strategy.get("vwap_take_profit_pct", 0.25))
+            normal_take_profit = float(strategy.get("normal_take_profit_pct", 0.6))
+            late_take_profit = float(strategy.get("late_take_profit_pct", 0.45))
             profitable_floor = _minimum_profitable_move_pct(stock, sell_first.price, active_trade_amount)
             vwap_take_profit = max(vwap_take_profit, profitable_floor)
             normal_take_profit = max(normal_take_profit, profitable_floor)
             late_take_profit = max(late_take_profit, profitable_floor)
-            exit_buffer = float(ACTIVE_STRATEGY.get("vwap_exit_buffer_pct", 0.20))
+            exit_buffer = float(strategy.get("vwap_exit_buffer_pct", 0.20))
             near_or_below_vwap = bar.price <= avg * (1.0 + exit_buffer / 100.0)
             if (
                 (hold_minutes >= 12 and near_or_below_vwap and pnl >= vwap_take_profit)
@@ -1529,7 +1731,20 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
                 return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "高抛确认后回落买回，已拉开时间间隔" + entry_note)
-            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= -0.90):
+            risk_first = bool(int(strategy.get("risk_first_enabled", 1)))
+            breakeven_trigger = float(strategy.get("breakeven_trigger_pct", 0.55))
+            pullback = float(strategy.get("trailing_pullback_pct", 0.30))
+            if risk_first and best_pnl >= breakeven_trigger and best_pnl - pnl >= pullback and pnl >= profitable_floor:
+                return _reverse_t_result(stock, "反T保本买回", sell_first, bar, active_trade_amount, "已有浮盈回撤，优先锁定覆盖费用后的收益" + entry_note)
+            invalidation = _invalidation_reason(
+                direction="SELL_FIRST", bars=bars, idx=idx, entry_idx=entry_idx,
+                avg_prices=avg_prices, pnl_pct=pnl, structural_stop=entry_structural_stop,
+                opening_entry=entry_opening, strategy=strategy,
+            )
+            if risk_first and invalidation:
+                return _reverse_t_result(stock, "反T结构止损", sell_first, bar, active_trade_amount, invalidation + entry_note)
+            fixed_stop = normal_stop if risk_first else -0.90
+            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _reverse_t_result(stock, "反T止损", sell_first, bar, active_trade_amount, "确认继续走强后止损" + entry_note)
             if hold_minutes >= hold_limit and buy_dev <= -0.3 and pnl > 0:
                 return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "回落到均价下方" + entry_note)
@@ -1690,10 +1905,10 @@ def _is_better_buy_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not _is_low_buy_window(bar.hm):
         return False
-    # The learned values are deliberately conservative.  In a replay they
-    # are combined with a completed right-side pattern and the shared
-    # execution gate, so do not require an unusually deep pullback first.
-    buy_min_dev = max(float(strategy["buy_min_dev"]), -0.65)
+    # Respect the selected strategy's actual threshold.  The former -0.65%
+    # floor silently overrode user/adaptive settings and admitted noise whose
+    # available VWAP space could not cover fees plus structural risk.
+    buy_min_dev = float(strategy["buy_min_dev"])
     if dev > buy_min_dev or dev <= float(strategy["buy_max_dev"]):
         return False
     if not _vwap_reclaiming(bars, idx, avg_prices, max(0.30, float(strategy.get("vwap_reclaim_pct", 0.35)) * 0.75)):
@@ -1752,7 +1967,8 @@ def _is_better_reverse_t_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not int(strategy.get("reverse_t_enabled", 0)):
         return False
-    sell_min_dev = min(float(strategy["sell_min_dev"]), 0.65)
+    # Do not silently relax the real strategy threshold to +0.65%.
+    sell_min_dev = float(strategy["sell_min_dev"])
     if dev < sell_min_dev or dev >= float(strategy["sell_max_dev"]):
         return False
     if not _vwap_fading(bars, idx, avg_prices, max(0.30, float(strategy.get("vwap_reclaim_pct", 0.35)) * 0.75)):
@@ -2121,6 +2337,8 @@ def _in_trade_window(hm: str) -> bool:
     try:
         h, m = [int(x) for x in hm.split(":", 1)]
     except Exception:
+        return False
+    if not is_a_share_session_minute(hm):
         return False
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     end_text = str(strategy.get("trade_end_hm") or "14:00")
