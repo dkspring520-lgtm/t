@@ -489,7 +489,7 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.css" not in html:
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=3"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=4"></head>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.js" not in html:
             html = html.replace("</body>", '<script src="/assets/simulation.js?v=3"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
@@ -5443,7 +5443,10 @@ def parse_sim_stats(raw: str) -> dict:
                 stats["cash"] = m.group(1)
                 stats["trade"] = m.group(2)
         elif line.startswith("触发"):
-            m = re.search(r"触发\s+([^\s]+)\s+胜率\s+([^\s]+)", line)
+            # The simulator also reports the completed-cycle count between
+            # trigger ratio and win rate. Keep the parser tolerant of that
+            # explanatory field instead of silently turning every run into 0/0.
+            m = re.search(r"触发\s+(\d+\s*/\s*\d+).*?胜率\s+([^\s]+)", line)
             if m:
                 stats["trigger"] = m.group(1)
                 stats["win"] = m.group(2)
@@ -5470,7 +5473,11 @@ def sim_history_path(email: str | None = None) -> Path:
 
 def record_sim_history(name: str, options: dict, stats: dict, stocks: list[dict], email: str | None = None) -> None:
     trigger = parse_trigger(stats.get("trigger", "--"))
-    wins = sum(1 for row in stocks if float(row.get("pnl") or 0) > 0)
+    wins = sum(
+        1
+        for row in stocks
+        if str(row.get("action") or "") != "未触发" and float(row.get("pnl") or 0) > 0
+    )
     record = {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "task": name,
@@ -5719,12 +5726,16 @@ def parse_sim_stocks(raw: str) -> list[dict]:
         name, code, rest = m.groups()
         if name == code:
             name = stock_name_local(code)
-        pnl_match = re.search(r"([+-]\d+(?:\.\d+)?)%", rest)
-        yuan_match = re.search(r"([+-][\d,.]+)元", rest)
         if rest.startswith("未触发"):
             action = "未触发"
+            # Percentages in an observation reason describe the day's range
+            # or VWAP deviation; they are not a trade return.
+            pnl_match = None
+            yuan_match = None
         else:
             action = rest.split()[0] if rest.split() else "未触发"
+            pnl_match = re.search(r"([+-]\d+(?:\.\d+)?)%", rest)
+            yuan_match = re.search(r"([+-][\d,.]+)元", rest)
         pnl = float(pnl_match.group(1)) if pnl_match else 0.0
         rate = "100%" if pnl_match and pnl > 0 else ("0%" if pnl_match else "--")
         money = f"{money_to_float(yuan_match.group(1)):+,.2f}元" if yuan_match else "--"
@@ -7832,7 +7843,7 @@ html body.rq-page-simulation .sim-config-label{padding:0 6px!important;color:#8a
 html body.rq-page-simulation .sim-mode-selector button{height:34px!important;padding:0 12px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:#87624d!important;box-shadow:none!important;white-space:nowrap!important;}
 html body.rq-page-simulation .sim-mode-selector button.is-active{color:#fff!important;background:linear-gradient(135deg,#ff9b67,#f46e4b)!important;}
 html body.rq-page-simulation .sim-source-field select{height:34px!important;min-width:148px!important;padding:0 28px 0 10px!important;border:0!important;border-radius:9px!important;background:#fff!important;color:#765541!important;font-weight:850!important;}
-html body.rq-page-simulation .controls{display:grid!important;grid-template-columns:repeat(3,minmax(150px,1fr))!important;grid-auto-flow:row!important;align-items:end!important;gap:12px!important;width:100%!important;min-height:0!important;height:auto!important;padding:16px!important;overflow:visible!important;}
+html body.rq-page-simulation .controls{display:grid!important;grid-template-columns:repeat(4,minmax(150px,1fr))!important;grid-auto-flow:row!important;align-items:end!important;gap:12px!important;width:100%!important;min-height:0!important;height:auto!important;padding:16px!important;overflow:visible!important;}
 html body.rq-page-simulation .controls .field,html body.rq-page-simulation .controls>button,html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions{min-width:0!important;width:100%!important;margin:0!important;}
 html body.rq-page-simulation #simSmartTProfile,html body.rq-page-simulation #simStrategyMode{display:none!important;}
 html body.rq-page-simulation .controls .field input,html body.rq-page-simulation .controls .field select,html body.rq-page-simulation .controls .field.wide input{width:100%!important;min-width:0!important;max-width:none!important;}
@@ -7849,11 +7860,12 @@ html body.rq-page-simulation .sim-head{display:none!important;}
 html body.rq-page-simulation .sim-table{min-width:0!important;width:100%!important;}
 html body.rq-page-simulation .sim-row{display:grid!important;grid-template-columns:160px minmax(300px,1fr) 118px minmax(220px,.72fr)!important;grid-template-areas:"stock chart status reason" "stock chart pnl reason"!important;gap:10px 18px!important;min-height:142px!important;padding:16px 18px!important;}
 html body.rq-page-simulation .sim-row>div:nth-child(1){grid-area:stock!important;}html body.rq-page-simulation .sim-row>div:nth-child(2){grid-area:status!important;}html body.rq-page-simulation .sim-row>div:nth-child(3){grid-area:chart!important;}html body.rq-page-simulation .sim-row>div:nth-child(4){display:none!important;}html body.rq-page-simulation .sim-row>div:nth-child(5){grid-area:pnl!important;}html body.rq-page-simulation .sim-row>div:nth-child(6){grid-area:reason!important;max-height:96px!important;}html body.rq-page-simulation .sim-row .chart{width:100%!important;min-width:0!important;height:96px!important;}
+@media(max-width:1599px){html body.rq-page-simulation .controls{grid-template-columns:repeat(3,minmax(0,1fr))!important;}}
 @media(max-width:1050px){html body.rq-page-simulation .sim-config-bar{align-items:stretch!important;flex-direction:column!important;}html body.rq-page-simulation .sim-mode-selector,html body.rq-page-simulation .sim-source-field{width:100%!important;overflow:auto!important;}html body.rq-page-simulation .controls{grid-template-columns:repeat(2,minmax(0,1fr))!important;}html body.rq-page-simulation .run-actions{grid-column:1/-1!important;}}
 @media(max-width:560px){html body.rq-page-simulation .controls{grid-template-columns:1fr!important;}html body.rq-page-simulation .controls .field.wide,html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions,html body.rq-page-simulation .controls #status{grid-column:1!important;}html body.rq-page-simulation .run-actions,html body.rq-page-simulation .sim-utility-actions{flex-wrap:wrap!important;justify-content:flex-start!important;}html body.rq-page-simulation .run-actions button,html body.rq-page-simulation .sim-utility-actions button{flex:1 1 140px!important;}}
 /* The simulation now has a mode selector, so it must not inherit the legacy
    fixed five-row grid. Keep every section in normal vertical document flow. */
-html body.rq-page-simulation .page{display:flex!important;flex-direction:column!important;height:auto!important;min-height:calc(100vh - 32px)!important;overflow:visible!important;gap:10px!important;}
+html body.rq-page-simulation .sim-shell>.page{display:flex!important;flex-direction:column!important;width:min(100%,1480px)!important;max-width:1480px!important;justify-self:center!important;height:auto!important;min-height:calc(100vh - 32px)!important;overflow:visible!important;gap:10px!important;}
 html body.rq-page-simulation .page>.top,html body.rq-page-simulation .page>.sim-config-bar,html body.rq-page-simulation .page>.controls,html body.rq-page-simulation .page>.bar,html body.rq-page-simulation .page>.progress,html body.rq-page-simulation .page>.metrics{flex:0 0 auto!important;min-height:0!important;}
 html body.rq-page-simulation .layout{flex:1 0 520px!important;min-height:520px!important;}
 @media(max-width:1180px){html body.rq-page-simulation .layout{flex-basis:auto!important;min-height:420px!important;}}

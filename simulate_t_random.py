@@ -1247,8 +1247,21 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
     entry_after = ""
     opening_legs_used = 0
     last_result: Result | None = None
-    for _ in range(limit):
-        result = _simulate_one_cycle(stock, bars, trade_amount, previous_close, entry_after, position, opening_legs_used)
+    for cycle_index in range(limit):
+        # A-share shares bought back today cannot be sold again today. Reserve
+        # yesterday's sellable inventory across the remaining cycle slots;
+        # otherwise a large single-round amount consumes the whole base
+        # position on cycle one and makes the advertised 2/3/4/5-cycle caps
+        # unreachable.
+        remaining_slots = max(1, limit - cycle_index)
+        sellable = max(0, int(position.sellable_shares or 0))
+        reserved_shares = int(sellable / remaining_slots / 100) * 100
+        reference_price = next((item.price for item in bars if item.price > 0), 0.0)
+        cycle_trade_amount = min(trade_amount, reserved_shares * reference_price) if reserved_shares >= 100 and reference_price > 0 else trade_amount
+        result = _simulate_one_cycle(
+            stock, bars, cycle_trade_amount, previous_close, entry_after,
+            position, opening_legs_used, planned_trade_amount=trade_amount,
+        )
         last_result = result
         if result.action == "未触发":
             break
@@ -1257,6 +1270,10 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
             opening_legs_used += 1
         end_time = result.buy_time if result.action.startswith("反T") else result.sell_time
         end_minute = _hm_to_minutes(end_time)
+        # A stop means the day's setup was invalidated. Re-entering the same
+        # trend after a short cooldown compounded losses in multi-cycle mode.
+        if "止损" in result.action:
+            break
         if end_minute >= _hm_to_minutes(str(strategy.get("trade_end_hm") or "14:00")):
             break
         entry_after = _minute_text(end_minute + cooldown)
@@ -1333,7 +1350,19 @@ def _shared_policy_allows(
     return bool(decision.get("confirmed"))
 
 
-def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None, opening_legs_used: int = 0) -> Result:
+def _minimum_profitable_move_pct(stock: Stock, price: float, trade_amount: float, net_buffer_pct: float = 0.08) -> float:
+    """Minimum raw price move that remains positive after A-share costs."""
+    shares = max(100, int(trade_amount / max(price, 0.01) / 100) * 100)
+    amount = shares * max(price, 0.01)
+    fee_pct = (
+        SIM_COST_MODEL.fee("buy", amount, stock.code)
+        + SIM_COST_MODEL.fee("sell", amount, stock.code)
+    ) / amount * 100.0
+    slippage_pct = SIM_COST_MODEL.slippage_bps / 100.0 * 2.0
+    return fee_pct + slippage_pct + max(0.0, net_buffer_pct)
+
+
+def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None, opening_legs_used: int = 0, planned_trade_amount: float | None = None) -> Result:
     # Do not inspect end-of-day extrema here: all entry decisions are causal.
     day_amp = 0.0
     # Full-day range is a reporting value only; never gate an intraday decision with future bars.
@@ -1400,15 +1429,17 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 else:
                     buy_setup = gate_state == "CONFIRMED" and preference == "BUY_FIRST" and _is_opening_buy_add_setup(bars, idx, bar, avg)
                     sell_setup = gate_state == "CONFIRMED" and preference == "SELL_FIRST" and _is_opening_reverse_add_setup(bars, idx, bar, avg)
-                candidate_trade_amount = trade_amount / 6.0
+                opening_share_cap = max(100, int(position.base_shares / 6 / 100) * 100)
+                opening_amount_cap = opening_share_cap * bar.price
+                candidate_trade_amount = min(float(planned_trade_amount or trade_amount) / 6.0, opening_amount_cap)
             else:
                 buy_setup = _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)
                 sell_setup = _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
                 candidate_trade_amount = trade_amount
-            if int(ACTIVE_STRATEGY.get("quantbrain_enabled", 0)):
-                factor_rsi = _causal_rsi(bars, idx)
-                buy_setup = buy_setup and factor_rsi <= 62.0
-                sell_setup = sell_setup and factor_rsi >= 38.0
+            # QuantBrain's unified policy gate already evaluates causal RSI,
+            # volume ratio and learned score. Do not apply a second hard RSI
+            # gate here: duplicated filtering caused otherwise valid replay
+            # candidates to remain at zero triggers.
             buy_score = _buy_confirmation_score(bars, idx, lows, volumes) if idx >= 6 else 0
             sell_score = _sell_confirmation_score(bars, idx, highs, volumes) if idx >= 6 else 0
             buy_allowed = allow_buy and buy_setup and _shared_policy_allows(
@@ -1441,6 +1472,10 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             vwap_take_profit = float(ACTIVE_STRATEGY.get("vwap_take_profit_pct", 0.25))
             normal_take_profit = float(ACTIVE_STRATEGY.get("normal_take_profit_pct", 0.6))
             late_take_profit = float(ACTIVE_STRATEGY.get("late_take_profit_pct", 0.45))
+            profitable_floor = _minimum_profitable_move_pct(stock, buy.price, active_trade_amount)
+            vwap_take_profit = max(vwap_take_profit, profitable_floor)
+            normal_take_profit = max(normal_take_profit, profitable_floor)
+            late_take_profit = max(late_take_profit, profitable_floor)
             exit_buffer = float(ACTIVE_STRATEGY.get("vwap_exit_buffer_pct", 0.20))
             near_or_above_vwap = bar.price >= avg * (1.0 - exit_buffer / 100.0)
             if (
@@ -1450,12 +1485,7 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
                 return _trade_result(stock, "正T止盈", buy, bar, active_trade_amount, "右侧低吸确认后达到目标，已拉开时间间隔" + entry_note)
-            if pnl <= emergency_stop or (
-                hold_minutes >= min_stop
-                and pnl <= -0.55
-                and idx >= 2
-                and bar.price < min(bars[idx - 1].price, bars[idx - 2].price)
-            ):
+            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= -0.90):
                 return _trade_result(stock, "正T止损", buy, bar, active_trade_amount, "确认破位后止损" + entry_note)
             if hold_minutes >= hold_limit and sell_dev >= 0.7 and pnl > 0:
                 return _trade_result(stock, "正T高抛", buy, bar, active_trade_amount, "回到均价上方" + entry_note)
@@ -1472,6 +1502,10 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             vwap_take_profit = float(ACTIVE_STRATEGY.get("vwap_take_profit_pct", 0.25))
             normal_take_profit = float(ACTIVE_STRATEGY.get("normal_take_profit_pct", 0.6))
             late_take_profit = float(ACTIVE_STRATEGY.get("late_take_profit_pct", 0.45))
+            profitable_floor = _minimum_profitable_move_pct(stock, sell_first.price, active_trade_amount)
+            vwap_take_profit = max(vwap_take_profit, profitable_floor)
+            normal_take_profit = max(normal_take_profit, profitable_floor)
+            late_take_profit = max(late_take_profit, profitable_floor)
             exit_buffer = float(ACTIVE_STRATEGY.get("vwap_exit_buffer_pct", 0.20))
             near_or_below_vwap = bar.price <= avg * (1.0 + exit_buffer / 100.0)
             if (
@@ -1481,12 +1515,7 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 or (hold_minutes >= hold_limit and pnl >= late_take_profit)
             ):
                 return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "高抛确认后回落买回，已拉开时间间隔" + entry_note)
-            if pnl <= emergency_stop or (
-                hold_minutes >= min_stop
-                and pnl <= -0.55
-                and idx >= 2
-                and bar.price > max(bars[idx - 1].price, bars[idx - 2].price)
-            ):
+            if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= -0.90):
                 return _reverse_t_result(stock, "反T止损", sell_first, bar, active_trade_amount, "确认继续走强后止损" + entry_note)
             if hold_minutes >= hold_limit and buy_dev <= -0.3 and pnl > 0:
                 return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "回落到均价下方" + entry_note)

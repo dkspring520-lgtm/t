@@ -36,6 +36,32 @@ class SimulationCycleTests(unittest.TestCase):
         }
         self.assertEqual(limits, {"steady": 2, "balanced": 3, "sensitive": 5, "quantbrain": 4})
 
+    def test_large_order_reserves_sellable_base_for_four_cycles(self):
+        sim.SIM_BASE_SHARES = 6000
+        sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "quantbrain")
+        amounts = []
+
+        def close_cycle(stock, bars, amount, previous_close, entry_after, position, opening_legs_used, planned_trade_amount=None):
+            amounts.append(amount)
+            position.settle_closed_t(1500)
+            return self.result(len(amounts) - 1)
+
+        with patch.object(sim, "_simulate_one_cycle", side_effect=close_cycle):
+            result = sim.simulate_one(self.stock, self.bars, 1_000_000.0)
+        self.assertEqual(amounts, [15000.0] * 4)
+        self.assertEqual(len(result.cycles), 4)
+
+    def test_opening_layer_is_active_only_from_0935_through_1000(self):
+        self.assertFalse(sim._is_opening_trade_window("09:34"))
+        self.assertTrue(sim._is_opening_trade_window("09:35"))
+        self.assertTrue(sim._is_opening_trade_window("10:00"))
+        self.assertFalse(sim._is_opening_trade_window("10:01"))
+
+    def test_small_trade_profit_target_covers_cost_and_slippage(self):
+        sim.SIM_COST_MODEL = sim.TradeCostModel()
+        floor = sim._minimum_profitable_move_pct(self.stock, 10.0, 1000.0)
+        self.assertGreater(floor, 1.0)
+
     def test_dashboard_does_not_mistake_cycle_cap_for_stock_cap(self):
         command = dashboard_app.build_commands("simulate", {"sample": 6, "smartTProfile": "steady"})[0]
         index = command.index("--max-trades")

@@ -81,6 +81,18 @@ class SimulationFrontendTests(unittest.TestCase):
         kept = apply_daily_trade_limit([result], 0)
         self.assertEqual(kept[0].action, "正T卖出")
 
+    def test_summary_parser_accepts_completed_cycle_text(self):
+        raw = "触发 3/10  完成T循环 4轮  胜率 66.7%  平均 +0.42%"
+        stats = app_core.parse_sim_stats(raw)
+        self.assertEqual(stats["trigger"], "3/10")
+        self.assertEqual(stats["win"], "66.7%")
+
+    def test_untriggered_observation_percent_is_not_a_loss(self):
+        rows = app_core.parse_sim_stocks("测试股(000001) 未触发：日内振幅5.0%；偏离-1.37%")
+        self.assertEqual(rows[0]["action"], "未触发")
+        self.assertEqual(rows[0]["pnl"], 0.0)
+        self.assertEqual(rows[0]["pnlText"], "--")
+
 
 if __name__ == "__main__":
     unittest.main()
