@@ -289,7 +289,10 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
     out: list[tuple[Stock, List[Bar]]] = []
     workers = min(12, max(4, min(sample_size, 30)))
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
-    futures = {executor.submit(fetch_minutes, stock.symbol, days): stock for stock in candidates}
+    # Batch replay has its own overall deadline.  Each worker therefore uses a
+    # single short provider attempt; otherwise three providers x three 10s
+    # retries can keep non-daemon executor threads alive after the UI timeout.
+    futures = {executor.submit(fetch_minutes, stock.symbol, days, True): stock for stock in candidates}
     try:
         deadline = time_module.time() + (12 if days > 1 else 8)
         pending = set(futures)
@@ -1097,13 +1100,15 @@ def _bars_cover_requested_days(bars: List[Bar], days: int) -> bool:
     return len(trading_days) >= required_days
 
 
-def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
+def fetch_minutes(symbol: str, days: int = 1, quick: bool = False) -> List[Bar]:
+    request_timeout = 3 if quick else 10
+    request_attempts = 1 if quick else 3
     cached = load_cached_minutes(symbol)
     cache_has_previous_close = float(PREV_CLOSE_BY_SYMBOL.get(symbol) or 0.0) > 0
     if _bars_cover_requested_days(cached, days) and minute_cache_is_fresh(symbol) and cache_has_previous_close:
         return cached
     if days > 1:
-        bars = fetch_minutes_eastmoney(symbol, days)
+        bars = fetch_minutes_eastmoney(symbol, days, request_timeout, request_attempts)
         if _bars_cover_requested_days(bars, days):
             save_cached_minutes(symbol, bars)
             return bars
@@ -1115,7 +1120,7 @@ def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
 
     url = f"http://web.ifzq.gtimg.cn/appstock/app/minute/query?_var=js&code={symbol}"
     try:
-        text = _get(url, "utf-8", 10)
+        text = _get(url, "utf-8", request_timeout, request_attempts)
         if "=" not in text:
             text = ""
             rows = []
@@ -1150,7 +1155,9 @@ def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
     if _bars_cover_requested_days(bars, 1):
         save_cached_minutes(symbol, bars)
         return bars
-    bars = fetch_minutes_eastmoney(symbol, 1) or fetch_minutes_sina(symbol)
+    bars = fetch_minutes_eastmoney(symbol, 1, request_timeout, request_attempts) or fetch_minutes_sina(
+        symbol, request_timeout, request_attempts
+    )
     if _bars_cover_requested_days(bars, 1):
         save_cached_minutes(symbol, bars)
         return bars
@@ -1253,7 +1260,12 @@ def load_history_price_bars(symbol: str) -> List[Bar]:
     return []
 
 
-def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
+def fetch_minutes_eastmoney(
+    symbol: str,
+    days: int = 1,
+    request_timeout: int = 10,
+    request_attempts: int = 3,
+) -> List[Bar]:
     code = symbol[2:]
     market = "1" if symbol.startswith("sh") else "0"
     params = {
@@ -1267,7 +1279,7 @@ def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
     }
     url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get?" + urllib.parse.urlencode(params)
     try:
-        data = json.loads(_get(url, "utf-8", 10))
+        data = json.loads(_get(url, "utf-8", request_timeout, request_attempts))
     except Exception:
         return []
     result_data = data.get("data", {}) if isinstance(data, dict) else {}
@@ -1296,10 +1308,10 @@ def fetch_minutes_eastmoney(symbol: str, days: int = 1) -> List[Bar]:
     return _sanitize_bars(bars)
 
 
-def fetch_minutes_sina(symbol: str) -> List[Bar]:
+def fetch_minutes_sina(symbol: str, request_timeout: int = 10, request_attempts: int = 3) -> List[Bar]:
     url = f"https://quotes.sina.cn/cn/api/openapi.php/CN_MinlineService.getMinlineData?symbol={symbol}"
     try:
-        data = json.loads(_get(url, "utf-8", 10))
+        data = json.loads(_get(url, "utf-8", request_timeout, request_attempts))
     except Exception:
         return []
     rows = data.get("result", {}).get("data", []) if isinstance(data, dict) else []
@@ -1548,6 +1560,18 @@ def _minimum_profitable_move_pct(stock: Stock, price: float, trade_amount: float
     return fee_pct + slippage_pct + max(0.0, net_buffer_pct)
 
 
+def _executable_trade_budget(requested_amount: float, price: float, hard_cap: float | None = None) -> float:
+    """Return an executable one-lot budget without exceeding its hard cap."""
+    requested = max(0.0, float(requested_amount or 0.0))
+    cap = requested if hard_cap is None else max(0.0, float(hard_cap or 0.0))
+    one_lot = max(0.0, float(price or 0.0)) * 100.0
+    if requested <= 0 or one_lot <= 0 or one_lot > cap + 1e-9:
+        return 0.0
+    # A staged one-sixth amount may be smaller than the exchange minimum.
+    # Permit one lot only when it still fits inside the full round cap.
+    return min(max(requested, one_lot), cap)
+
+
 def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None, entry_after: str = "", position: PositionState | None = None, opening_legs_used: int = 0, planned_trade_amount: float | None = None) -> Result:
     # Do not inspect end-of-day extrema here: all entry decisions are causal.
     day_amp = 0.0
@@ -1583,14 +1607,19 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             continue
         avg = total_amt / (total_vol * 100.0)
         avg_prices.append(avg)
-        if avg <= 0 or not _sane_vwap(bar.price, avg) or not _in_trade_window(bar.hm):
+        if avg <= 0 or not _sane_vwap(bar.price, avg):
             continue
+        has_open_cycle = buy is not None or sell_first is not None
+        if not has_open_cycle and not _in_trade_window(bar.hm):
+            continue
+        # 14:00 stops new entries, not risk management.  Existing cycles keep
+        # evaluating exits until the mandatory 14:30 inventory restoration.
+        if has_open_cycle and bar.hm > "14:30":
+            break
         if entry_after and bar.hm <= entry_after:
             continue
         observed_low, observed_high = min(lows), max(highs)
         observed_range = (observed_high - observed_low) / observed_low * 100.0 if observed_low > 0 else 0.0
-        if observed_range < float((ACTIVE_STRATEGY or DEFAULT_STRATEGY).get("min_observed_range_pct", 0.65)):
-            continue
         dev = (bar.price - avg) / avg * 100.0
 
         if buy is None and sell_first is None:
@@ -1605,6 +1634,11 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             gate_state = str(gate.get("state") or "NEUTRAL")
             preference = str(gate.get("preferredDirection") or "")
             opening_trial = _is_opening_trade_window(bar.hm)
+            # Opening entries have their own gap, five-minute structure and
+            # VWAP confirmations.  A generic full-session range threshold here
+            # blocked valid 09:35-10:00 setups before those checks could run.
+            if not opening_trial and observed_range < float(strategy.get("min_observed_range_pct", 0.65)):
+                continue
             opening_wait = gate_state in {"PENDING_CONFIRMATION", "WAIT_DATA"} and bar.hm < "09:45"
             allow_buy = not opening_wait and not (gate_state == "CONFIRMED" and preference != "BUY_FIRST")
             allow_sell = not opening_wait and not (gate_state == "CONFIRMED" and preference != "SELL_FIRST")
@@ -1622,11 +1656,18 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                     sell_setup = gate_state == "CONFIRMED" and preference == "SELL_FIRST" and _is_opening_reverse_add_setup(bars, idx, bar, avg)
                 opening_share_cap = max(100, int(position.base_shares / 6 / 100) * 100)
                 opening_amount_cap = opening_share_cap * bar.price
-                candidate_trade_amount = min(float(planned_trade_amount or trade_amount) / 6.0, opening_amount_cap)
+                full_round_cap = float(planned_trade_amount or trade_amount)
+                candidate_trade_amount = _executable_trade_budget(
+                    full_round_cap / 6.0,
+                    bar.price,
+                    min(full_round_cap, opening_amount_cap),
+                )
             else:
                 buy_setup = _is_better_buy_setup(bars, idx, bar, dev, lows, avg_prices, volumes)
                 sell_setup = _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
-                candidate_trade_amount = trade_amount
+                candidate_trade_amount = _executable_trade_budget(trade_amount, bar.price, trade_amount)
+            if candidate_trade_amount <= 0:
+                buy_setup = sell_setup = False
             # QuantBrain's unified policy gate already evaluates causal RSI,
             # volume ratio and learned score. Do not apply a second hard RSI
             # gate here: duplicated filtering caused otherwise valid replay
@@ -1859,7 +1900,7 @@ def _trade_result(stock: Stock, action: str, buy: Bar, sell: Bar, trade_amount: 
     position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
     shares = int(trade_amount / buy.price / 100) * 100
     if shares <= 0:
-        shares = 100
+        return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "单轮资金不足一手，禁止超预算成交", position=position.snapshot())
     shares = position.executable_shares(shares)
     if shares < 100:
         return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "可卖底仓不足，禁止虚拟卖出", position=position.snapshot())
@@ -1878,7 +1919,7 @@ def _reverse_t_result(stock: Stock, action: str, sell: Bar, buyback: Bar, trade_
     position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
     shares = int(trade_amount / sell.price / 100) * 100
     if shares <= 0:
-        shares = 100
+        return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "单轮资金不足一手，禁止超预算成交", position=position.snapshot())
     shares = position.executable_shares(shares)
     if shares < 100:
         return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "可卖底仓不足，禁止虚拟卖出", position=position.snapshot())
@@ -2414,9 +2455,10 @@ def _arg_value(argv: list[str], name: str, default: str) -> str:
     return argv[idx + 1]
 
 
-def _get(url: str, encoding: str, timeout: int) -> str:
+def _get(url: str, encoding: str, timeout: int, attempts: int = 3) -> str:
     last_error: Exception | None = None
-    for attempt in range(3):
+    attempts = max(1, min(3, int(attempts or 1)))
+    for attempt in range(attempts):
         req = urllib.request.Request(
             url,
             headers={
@@ -2431,7 +2473,7 @@ def _get(url: str, encoding: str, timeout: int) -> str:
                 return resp.read().decode(encoding, "replace")
         except Exception as exc:
             last_error = exc
-            if attempt < 2:
+            if attempt + 1 < attempts:
                 time_module.sleep(0.6 + attempt * 0.8)
     raise last_error or RuntimeError("request failed")
 

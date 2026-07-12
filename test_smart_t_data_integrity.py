@@ -78,6 +78,23 @@ class SmartTDataIntegrityTests(unittest.TestCase):
             self.assertEqual(sim.fetch_minutes("sh600000", days=5), [])
         current_day_provider.assert_not_called()
 
+    def test_random_candidate_fetch_uses_single_attempt_quick_mode(self):
+        stock = sim.Stock("T", "600000", "sh600000")
+        bars = [
+            sim.Bar(f"09:{30 + index:02d}", 10.0, 100.0, 100000.0, "2026-07-10")
+            for index in range(30)
+        ]
+        with patch.object(sim, "fetch_minutes", return_value=bars) as fetch:
+            selected = sim.fetch_simulation_candidates([stock], 1, 1)
+        self.assertEqual(len(selected), 1)
+        fetch.assert_called_once_with(stock.symbol, 1, True)
+
+    def test_quick_http_attempt_does_not_retry_three_times(self):
+        with patch.object(sim.urllib.request, "urlopen", side_effect=OSError("offline")) as opener:
+            with self.assertRaises(OSError):
+                sim._get("https://example.invalid", "utf-8", 1, attempts=1)
+        self.assertEqual(opener.call_count, 1)
+
     def test_tencent_quote_metadata_supplies_previous_close(self):
         payload = {"data": {"sh600000": {"qt": {"sh600000": ["1", "T", "600000", "9.06", "8.98"]}}}}
         self.assertEqual(sim._extract_tencent_previous_close(payload, "sh600000"), 8.98)

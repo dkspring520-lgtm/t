@@ -70,10 +70,58 @@ class SimulationCycleTests(unittest.TestCase):
         self.assertTrue(sim._is_opening_trade_window("10:00"))
         self.assertFalse(sim._is_opening_trade_window("10:01"))
 
+    def test_opening_setup_is_not_blocked_by_generic_intraday_range(self):
+        bars = []
+        for index in range(11):
+            minute = 9 * 60 + 30 + index
+            price = 10.0 + (index % 2) * 0.01
+            bars.append(sim.Bar(f"{minute // 60:02d}:{minute % 60:02d}", price, 100.0, price * 10000.0, "2026-07-10"))
+        sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "balanced")
+        gate = {"state": "CONFIRMED", "preferredDirection": "BUY_FIRST"}
+        with (
+            patch.object(sim, "evaluate_auction_gate", return_value=gate),
+            patch.object(sim, "_is_opening_buy_setup", return_value=False) as opening_setup,
+        ):
+            sim._simulate_one_cycle(self.stock, bars, 20000.0, previous_close=10.4)
+        self.assertTrue(opening_setup.called)
+
     def test_small_trade_profit_target_covers_cost_and_slippage(self):
         sim.SIM_COST_MODEL = sim.TradeCostModel()
         floor = sim._minimum_profitable_move_pct(self.stock, 10.0, 1000.0)
         self.assertGreater(floor, 1.0)
+
+    def test_one_lot_never_exceeds_single_round_budget(self):
+        self.assertEqual(sim._executable_trade_budget(20000.0, 620.0, 20000.0), 0.0)
+        self.assertEqual(sim._executable_trade_budget(20000.0 / 6.0, 79.0, 20000.0), 7900.0)
+        position = sim.PositionState(6000)
+        result = sim._trade_result(
+            self.stock,
+            "正T止损",
+            sim.Bar("09:45", 620.0, 100.0, 6200000.0, "2026-07-10"),
+            sim.Bar("09:50", 610.0, 100.0, 6100000.0, "2026-07-10"),
+            20000.0,
+            "test",
+            position,
+        )
+        self.assertEqual(result.shares, 0)
+        self.assertEqual(position.sellable_shares, 6000)
+
+    def test_existing_cycle_keeps_risk_management_after_entry_cutoff(self):
+        bars = []
+        for index in range(31):
+            minute = 13 * 60 + 40 + index
+            price = (9.9 if index % 2 == 0 else 10.0) if index < 8 else 10.0 + (index - 8) * 0.012
+            bars.append(sim.Bar(f"{minute // 60:02d}:{minute % 60:02d}", price, 100.0, price * 10000.0, "2026-07-10"))
+        sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "balanced")
+        with (
+            patch.object(sim, "evaluate_auction_gate", return_value={"state": "NEUTRAL", "preferredDirection": ""}),
+            patch.object(sim, "_is_better_buy_setup", return_value=False),
+            patch.object(sim, "_is_better_reverse_t_setup", side_effect=lambda _bars, _idx, bar, *_args: bar.hm == "13:48"),
+            patch.object(sim, "_shared_policy_allows", return_value=True),
+        ):
+            result = sim._simulate_one_cycle(self.stock, bars, 20000.0, previous_close=10.0)
+        self.assertIn("止损", result.action)
+        self.assertLessEqual(result.buy_time, "14:30")
 
     def test_low_gap_opening_strategy_reaches_a_real_cycle(self):
         prices = [9.60, 9.52, 9.50, 9.54, 9.58, 9.62, 9.68, 9.74, 9.82, 9.91, 10.02, 10.08]
