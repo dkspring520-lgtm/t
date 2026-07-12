@@ -50,6 +50,8 @@ DEFAULT_STRATEGY = {
     "fast_take_profit_pct": 1.8,
     "emergency_stop_pct": -1.35,
     "normal_stop_pct": -0.60,
+    "time_decay_stop_minutes": 15,
+    "time_decay_loss_pct": -0.20,
     "opening_invalidation_pct": -0.45,
     "breakeven_trigger_pct": 1.20,
     "trailing_pullback_pct": 0.60,
@@ -683,6 +685,8 @@ def load_adaptive_strategy() -> dict[str, float]:
     strategy["fast_take_profit_pct"] = max(1.2, min(3.0, float(strategy.get("fast_take_profit_pct", 1.8))))
     strategy["emergency_stop_pct"] = max(-2.0, min(-1.0, float(strategy.get("emergency_stop_pct", -1.35))))
     strategy["normal_stop_pct"] = max(-1.2, min(-0.45, float(strategy.get("normal_stop_pct", -0.60))))
+    strategy["time_decay_stop_minutes"] = max(10, min(30, int(strategy.get("time_decay_stop_minutes", 15))))
+    strategy["time_decay_loss_pct"] = max(-0.45, min(-0.10, float(strategy.get("time_decay_loss_pct", -0.20))))
     strategy["opening_invalidation_pct"] = max(-0.80, min(-0.25, float(strategy.get("opening_invalidation_pct", -0.45))))
     strategy["breakeven_trigger_pct"] = max(0.35, min(1.20, float(strategy.get("breakeven_trigger_pct", 0.55))))
     strategy["trailing_pullback_pct"] = max(0.15, min(0.70, float(strategy.get("trailing_pullback_pct", 0.30))))
@@ -1583,6 +1587,29 @@ def _entry_reward_floor_pct(
     return max(0.0, risk_pct * reward_ratio)
 
 
+def _time_decay_exit_reason(
+    direction: str,
+    bars: List[Bar],
+    idx: int,
+    avg_prices: List[float],
+    hold_minutes: int,
+    pnl_pct: float,
+    strategy: dict,
+) -> str:
+    """Exit a stale losing thesis before it expands into the full hard stop."""
+    minimum_hold = int(strategy.get("time_decay_stop_minutes", 15))
+    loss_limit = float(strategy.get("time_decay_loss_pct", -0.20))
+    if hold_minutes < minimum_hold or pnl_pct > loss_limit or idx < 2 or len(avg_prices) < 3:
+        return ""
+    recent_prices = [item.price for item in bars[idx - 2 : idx + 1]]
+    recent_vwaps = avg_prices[-3:]
+    if direction == "BUY_FIRST" and all(price < average for price, average in zip(recent_prices, recent_vwaps)):
+        return "正T持仓超时且连续位于VWAP下方，均值回归假设失效"
+    if direction == "SELL_FIRST" and all(price > average for price, average in zip(recent_prices, recent_vwaps)):
+        return "反T持仓超时且连续位于VWAP上方，均值回归假设失效"
+    return ""
+
+
 def _executable_trade_budget(requested_amount: float, price: float, hard_cap: float | None = None) -> float:
     """Return an executable one-lot budget without exceeding its hard cap."""
     requested = max(0.0, float(requested_amount or 0.0))
@@ -1763,6 +1790,11 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             )
             if risk_first and invalidation:
                 return _trade_result(stock, "正T结构止损", buy, bar, active_trade_amount, invalidation + entry_note)
+            time_decay = _time_decay_exit_reason(
+                "BUY_FIRST", bars, idx, avg_prices, hold_minutes, pnl, strategy
+            )
+            if risk_first and time_decay:
+                return _trade_result(stock, "正T时间止损", buy, bar, active_trade_amount, time_decay + entry_note)
             fixed_stop = normal_stop if risk_first else -0.90
             if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _trade_result(stock, "正T止损", buy, bar, active_trade_amount, "确认破位后止损" + entry_note)
@@ -1809,6 +1841,11 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             )
             if risk_first and invalidation:
                 return _reverse_t_result(stock, "反T结构止损", sell_first, bar, active_trade_amount, invalidation + entry_note)
+            time_decay = _time_decay_exit_reason(
+                "SELL_FIRST", bars, idx, avg_prices, hold_minutes, pnl, strategy
+            )
+            if risk_first and time_decay:
+                return _reverse_t_result(stock, "反T时间止损", sell_first, bar, active_trade_amount, time_decay + entry_note)
             fixed_stop = normal_stop if risk_first else -0.90
             if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _reverse_t_result(stock, "反T止损", sell_first, bar, active_trade_amount, "确认继续走强后止损" + entry_note)

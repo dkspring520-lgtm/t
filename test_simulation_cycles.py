@@ -27,6 +27,38 @@ class SimulationCycleTests(unittest.TestCase):
 
         self.assertAlmostEqual(floor, 0.75, places=6)
 
+    def test_time_decay_exit_requires_persistent_wrong_side_of_vwap(self):
+        strategy = dict(sim.DEFAULT_STRATEGY)
+        bars = [
+            sim.Bar("10:13", 9.96, 100.0, 99600.0),
+            sim.Bar("10:14", 9.95, 100.0, 99500.0),
+            sim.Bar("10:15", 9.94, 100.0, 99400.0),
+        ]
+        reason = sim._time_decay_exit_reason(
+            "BUY_FIRST", bars, 2, [10.0, 9.99, 9.98], 15, -0.60, strategy
+        )
+        self.assertIn("VWAP", reason)
+        self.assertEqual(
+            sim._time_decay_exit_reason("BUY_FIRST", bars, 2, [10.0, 9.99, 9.98], 14, -0.60, strategy),
+            "",
+        )
+        self.assertEqual(
+            sim._time_decay_exit_reason("BUY_FIRST", bars, 2, [10.0, 9.93, 9.92], 15, -0.60, strategy),
+            "",
+        )
+
+    def test_reverse_time_decay_exit_is_symmetric(self):
+        strategy = dict(sim.DEFAULT_STRATEGY)
+        bars = [
+            sim.Bar("13:43", 10.04, 100.0, 100400.0),
+            sim.Bar("13:44", 10.05, 100.0, 100500.0),
+            sim.Bar("13:45", 10.06, 100.0, 100600.0),
+        ]
+        reason = sim._time_decay_exit_reason(
+            "SELL_FIRST", bars, 2, [10.0, 10.01, 10.02], 15, -0.60, strategy
+        )
+        self.assertIn("VWAP", reason)
+
     def setUp(self):
         self.stock = sim.Stock("测试股", "000001", "sz000001")
         self.bars = [sim.Bar("09:30", 10.0, 100.0, 100000.0, "2026-07-10")]
