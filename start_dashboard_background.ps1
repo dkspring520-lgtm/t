@@ -23,11 +23,13 @@ if (-not $python) {
   throw "python.exe not found. Install Python or add it to PATH."
 }
 
-# The adaptive-learning worker imports pandas/numpy. Install the declared
-# runtime dependencies only when this Python environment is missing them.
-& $python -c "import requests, numpy, pandas" 2>$null
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "Installing missing dashboard dependencies..."
+# The adaptive-learning worker imports pandas/numpy. Detect absent modules
+# without deliberately raising ImportError: with ErrorActionPreference=Stop,
+# Windows PowerShell promotes a native process traceback to NativeCommandError
+# before this script can inspect LASTEXITCODE.
+$missingDependencies = [string](& $python -c "import importlib.util; print(','.join(name for name in ('requests','numpy','pandas') if importlib.util.find_spec(name) is None))")
+if ($missingDependencies.Trim()) {
+  Write-Host "Installing missing dashboard dependencies: $missingDependencies"
   & $python -m pip install --disable-pip-version-check -r (Join-Path $PSScriptRoot "requirements.txt")
   if ($LASTEXITCODE -ne 0) {
     throw "Dashboard dependencies could not be installed."
