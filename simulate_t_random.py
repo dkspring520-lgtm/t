@@ -68,6 +68,7 @@ SIM_MODE = "strict"
 SIM_BASE_SHARES = 6000
 SIM_MARKET_RADAR_SCORE: float | None = None
 SIM_COST_MODEL = TradeCostModel()
+SIM_LEARNED_PARAMS: dict = {}
 ACTIVE_POSITION: PositionState | None = None
 SMART_T_PROFILE_LABELS = {"steady": "稳健", "balanced": "平衡", "sensitive": "灵敏", "quantbrain": "量化学习"}
 PREV_CLOSE_BY_SYMBOL: dict[str, float] = {}
@@ -142,7 +143,7 @@ def _is_reverse_action(action: object) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_MARKET_RADAR_SCORE, SIM_COST_MODEL
+    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_MARKET_RADAR_SCORE, SIM_COST_MODEL, SIM_LEARNED_PARAMS
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -151,6 +152,15 @@ def main(argv: list[str]) -> int:
     if SMART_T_PROFILE not in SMART_T_PROFILE_LABELS:
         SMART_T_PROFILE = "balanced"
     ACTIVE_STRATEGY = apply_smart_t_profile(load_adaptive_strategy(), SMART_T_PROFILE)
+    SIM_LEARNED_PARAMS = {}
+    learning_database = _arg_value(argv, "--learning-database", "")
+    if SMART_T_PROFILE == "quantbrain" and learning_database:
+        try:
+            from adaptive_profiles import runtime_profile_params
+
+            SIM_LEARNED_PARAMS = runtime_profile_params(Path(learning_database), SMART_T_PROFILE)
+        except Exception:
+            SIM_LEARNED_PARAMS = {}
     sample_size = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 10
     total_cash = _arg_float(argv, "--cash", 100000.0)
     per_trade = _arg_float(argv, "--per-trade", 20000.0)
@@ -184,7 +194,9 @@ def main(argv: list[str]) -> int:
         pool = custom_pool
         sample_size = min(max(sample_size, len(custom_pool)), len(custom_pool))
 
-    scan_size = max(sample_size * 4, sample_size + 24)
+    # Candidate fetching already owns the fallback pool. Expanding the target
+    # again here turned a 10-stock test into up to 120 network requests.
+    scan_size = sample_size
     results: List[Result] = []
     minute_map: dict[str, List[Bar]] = {}
     random.shuffle(pool)
@@ -256,7 +268,7 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
     # Keep random tests responsive: scan enough symbols for variety, but do not
     # let slow quote providers hold the UI hostage.
     scan_factor = 2 if days > 1 else 3
-    max_attempts = min(len(pool), max(sample_size * scan_factor, sample_size + 18), 90 if days > 1 else 120)
+    max_attempts = min(len(pool), max(sample_size * scan_factor, sample_size + 8), 60)
     candidates = pool[:max_attempts]
     if not candidates:
         return []
@@ -265,7 +277,7 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
     futures = {executor.submit(fetch_minutes, stock.symbol, days): stock for stock in candidates}
     try:
-        deadline = time_module.time() + (14 if days > 1 else 10)
+        deadline = time_module.time() + (12 if days > 1 else 8)
         pending = set(futures)
         while pending and len(out) < sample_size and time_module.time() < deadline:
             done, pending = concurrent.futures.wait(pending, timeout=0.6, return_when=concurrent.futures.FIRST_COMPLETED)
@@ -318,13 +330,18 @@ def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, day
         "date": date, "action": result.action, "pnl": result.pnl_pct,
         "money": result.pnl_yuan, "fees": result.fees_yuan,
     } for date, result in daily_results)
+    all_cycles = tuple(
+        {**cycle, "date": date}
+        for date, result in daily_results
+        for cycle in result.cycles
+    )
     base_amount = max(trade_amount * max(active_days, 1), 1.0)
     return Result(
         stock, f"\u8fd1{len(daily_results)}\u65e5\u6c47\u603b", latest.buy_time, latest.buy_price,
         latest.sell_time, latest.sell_price, net_pnl / base_amount * 100.0, net_pnl,
         trade_amount, latest.shares,
         f"\u8fd1{len(daily_results)}\u65e5\u771f\u5b9e\u805a\u5408\uff1a\u89e6\u53d1{active_days}\u65e5\uff0c\u76c8\u5229{winning_days}\u65e5\uff0c\u6bcf\u65e5\u72ec\u7acb\u6062\u590d\u5e95\u4ed3\u3002\u6700\u8fd1\u65e5{latest_date}\uff1a{latest.reason}",
-        latest.cycles, gross_pnl, fees, latest.position, daily_payload,
+        all_cycles, gross_pnl, fees, latest.position, daily_payload,
     )
 
 
@@ -1014,6 +1031,10 @@ def save_cached_stock_pool(pool: List[Stock]) -> None:
 
 
 def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
+    cached = load_cached_minutes(symbol)
+    cached_days = {bar.date for bar in cached if bar.date}
+    if len(cached) >= 30 and (days <= 1 or len(cached_days) >= days):
+        return cached
     if days > 1:
         bars = fetch_minutes_eastmoney(symbol, days)
         if len(bars) >= 30:
@@ -1307,6 +1328,7 @@ def _shared_policy_allows(
         estimated_cycle_cost_pct=fee_pct,
         slippage_per_side_pct=SIM_COST_MODEL.slippage_bps / 100.0,
         market_radar_score=SIM_MARKET_RADAR_SCORE,
+        learned_params=SIM_LEARNED_PARAMS,
     )
     return bool(decision.get("confirmed"))
 

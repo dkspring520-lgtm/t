@@ -9,7 +9,8 @@ class MarketRadarNavigationTest(unittest.TestCase):
 
         self.assertEqual(html.count('data-app-navigation'), 1)
         self.assertNotIn('<button class="nav"', html)
-        self.assertIn('rq-radar-navigation-fallback', html)
+        self.assertNotIn('rq-radar-navigation-fallback', html)
+        self.assertIn('class="rq-radar-page"', html)
 
 
 if __name__ == "__main__":

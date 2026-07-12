@@ -261,6 +261,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"ok": False, "message": f"策略成长状态读取失败：{exc}"}, status=500)
             return
+        if path == "/api/four-rabbits/status":
+            from services.four_rabbits import status
+
+            self._send_json(status(sys.modules[__name__], email))
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -325,6 +330,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(payload, status=200 if payload.get("ok") else 409)
             except Exception as exc:
                 self._send_json({"ok": False, "message": f"策略版本操作失败：{exc}"}, status=500)
+            return
+        if path == "/api/four-rabbits/control":
+            from services.four_rabbits import control
+
+            data = self._read_json()
+            self._send_json(control(sys.modules[__name__], email, str(data.get("action") or "status")))
             return
         self.send_error(404)
 
@@ -478,9 +489,9 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.css" not in html:
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=1"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=3"></head>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.js" not in html:
-            html = html.replace("</body>", '<script src="/assets/simulation.js?v=1"></script></body>', 1)
+            html = html.replace("</body>", '<script src="/assets/simulation.js?v=3"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
             html = html.replace("</body>", '<script src="/assets/app-navigation.js?v=1"></script></body>', 1)
         if "/assets/layout-unified.js" not in html:
@@ -546,8 +557,10 @@ def profile_learning_path(email: str | None, profile: object) -> Path:
 
 
 def run_task(name: str, options: dict | None = None) -> dict:
-    json_path = BASE_DIR / "last_sim_result.json" if name in {"simulate", "simulate5"} else None
     email = REQUEST_EMAIL.get("")
+    shadow_training = bool((options or {}).get("shadowTraining"))
+    result_name = "last_shadow_sim_result.json" if shadow_training else "last_sim_result.json"
+    json_path = user_data_path(email, result_name) if name in {"simulate", "simulate5"} else None
     if json_path:
         try:
             json_path.unlink()
@@ -555,6 +568,8 @@ def run_task(name: str, options: dict | None = None) -> dict:
             pass
         options = dict(options or {})
         options["json_file"] = str(json_path)
+        profile = normalize_smart_profile(options.get("smartTProfile"))
+        options["learning_database"] = str(profile_learning_path(email, profile))
         save_strategy_options(options, email)
     commands = build_commands(name, options or {})
     if not commands:
@@ -586,14 +601,17 @@ def run_task(name: str, options: dict | None = None) -> dict:
         }
     if name in {"simulate", "simulate5"} and stats:
         stats["review"] = build_sim_review(stocks)
-        persist_rolling_cash(options or {}, stats, email)
-        record_sim_history(name, options or {}, stats, stocks, email)
-        update_adaptive_strategy(stocks, email, profile)
+        shadow_training = bool((options or {}).get("shadowTraining"))
+        if not shadow_training:
+            persist_rolling_cash(options or {}, stats, email)
+            record_sim_history(name, options or {}, stats, stocks, email)
+            update_adaptive_strategy(stocks, email, profile)
         try:
             stats["adaptiveLearning"] = record_profile_run(profile_learning_path(email, profile), profile, stocks)
         except Exception as exc:
             stats["adaptiveLearning"] = {"ok": False, "profile": profile, "message": f"影子学习记录失败：{exc}"}
-        stats["history"] = aggregate_sim_history(email)
+        if not shadow_training:
+            stats["history"] = aggregate_sim_history(email)
     summary = summarize(name, raw, ok, stats)
     if name == "start_all":
         raw = clean_start_all_detail(raw)
@@ -5206,6 +5224,9 @@ def build_commands(name: str, options: dict) -> list[list[str]] | None:
         json_file = str(options.get("json_file") or "")
         if json_file:
             cmd.extend(["--json-file", json_file])
+        learning_database = str(options.get("learning_database") or "")
+        if learning_database:
+            cmd.extend(["--learning-database", learning_database])
         stocks = str(options.get("stocks") or "").strip()
         if name == "simulate5" and not stocks and not options.get("random"):
             email = REQUEST_EMAIL.get("")
@@ -15867,6 +15888,10 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     </div>
     <div id="status" class="sub">就绪</div>
   </div>
+  <section class="four-rabbits" id="fourRabbits" aria-labelledby="fourRabbitsTitle">
+    <div class="four-rabbits-head"><div><b id="fourRabbitsTitle">四兔持续训练</b><span id="fourRabbitsMessage">读取训练状态…</span></div><div class="four-rabbits-actions"><button type="button" data-rabbit-action="start">启动</button><button type="button" data-rabbit-action="run">立即训练</button><button type="button" data-rabbit-action="promote">人工晋升</button><button type="button" data-rabbit-action="pause">暂停</button></div></div>
+    <div class="four-rabbits-grid" id="fourRabbitsGrid"></div>
+  </section>
   <div id="loading" class="bar"></div>
   <div id="progress" class="progress">
     <div class="step" data-step="0"><b>准备样本</b><span>读取股票池</span></div>

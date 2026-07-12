@@ -80,6 +80,52 @@
     $("simRetryButton")?.addEventListener("click", () => $("simStartButton")?.click());
     syncPlan();
     updateSource();
+    loadFourRabbits();
+    document.querySelectorAll("[data-rabbit-action]").forEach((button) => button.addEventListener("click", () => controlFourRabbits(button.dataset.rabbitAction, button)));
+  }
+
+  function renderFourRabbits(data) {
+    const message = $("fourRabbitsMessage");
+    if (message) message.textContent = data.message || "四兔状态正常";
+    const grid = $("fourRabbitsGrid");
+    if (!grid) return;
+    const agents = data.agents || {};
+    const order = ["training", "challenger", "official", "risk"];
+    grid.innerHTML = order.map((key) => {
+      const agent = agents[key] || {};
+      const state = agent.state || "idle";
+      return `<article data-state="${state}"><span class="rabbit-dot" aria-hidden="true"></span><div><b>${agent.label || key}</b><small>${agent.message || "等待状态"}</small></div></article>`;
+    }).join("");
+  }
+
+  async function loadFourRabbits() {
+    try {
+      const response = await fetch("/api/four-rabbits/status", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      renderFourRabbits(await response.json());
+    } catch (error) {
+      if ($("fourRabbitsMessage")) $("fourRabbitsMessage").textContent = `状态读取失败：${error.message}`;
+    }
+  }
+
+  async function controlFourRabbits(action, button) {
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch("/api/four-rabbits/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      renderFourRabbits(data);
+      if (action === "run") window.setTimeout(loadFourRabbits, 1200);
+    } catch (error) {
+      if ($("fourRabbitsMessage")) $("fourRabbitsMessage").textContent = `操作失败：${error.message}`;
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   document.addEventListener("DOMContentLoaded", bind);
