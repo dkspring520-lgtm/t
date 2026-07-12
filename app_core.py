@@ -17658,8 +17658,13 @@ LANDING_HTML = r"""<!doctype html>
 
 
 def main() -> int:
+    from services.four_rabbits import resume_enabled_workers
+
+    restored = resume_enabled_workers(sys.modules[__name__])
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"http://{HOST}:{PORT}")
+    if restored:
+        print(f"Restored {restored} continuous shadow-training worker(s).")
     server.serve_forever()
     return 0
 

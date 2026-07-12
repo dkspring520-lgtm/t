@@ -108,10 +108,11 @@
 
     const result = data.lastResult || {};
     const batch = data.batch || {};
+    const nextRun = data.nextRunAt ? String(data.nextRunAt).slice(11, 16) : "--";
     const metricItems = [
       ["批次", batch.id || "--"], ["样本", result.tested ? `${result.tested}只 / ${batch.days || 5}日` : `${batch.sample || 10}只 / ${batch.days || 5}日`],
       ["触发", result.trigger || "--"], ["胜率", result.winRate || "--"], ["净盈亏", result.pnl || "--"],
-      ["学习记录", `${Number(result.signals) || 0}信号 / ${Number(result.trades) || 0}成交`], ["耗时", result.durationSeconds != null ? `${result.durationSeconds}秒` : "--"],
+      ["学习记录", `${Number(result.signals) || 0}信号 / ${Number(result.trades) || 0}成交`], ["下轮", data.enabled && !data.paused ? `${nextRun} · 第${Number(data.totalBatches || 0) + 1}轮` : "未启用"],
     ];
     if ($("fourRabbitsMetrics")) $("fourRabbitsMetrics").innerHTML = metricItems.map(([label, value]) => `<span><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`).join("");
     const events = Array.isArray(data.events) ? data.events.slice().reverse() : [];

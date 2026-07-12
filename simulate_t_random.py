@@ -1033,7 +1033,7 @@ def save_cached_stock_pool(pool: List[Stock]) -> None:
 def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
     cached = load_cached_minutes(symbol)
     cached_days = {bar.date for bar in cached if bar.date}
-    if len(cached) >= 30 and (days <= 1 or len(cached_days) >= days):
+    if len(cached) >= 30 and (days <= 1 or len(cached_days) >= days) and minute_cache_is_fresh(symbol):
         return cached
     if days > 1:
         bars = fetch_minutes_eastmoney(symbol, days)
@@ -1077,6 +1077,20 @@ def fetch_minutes(symbol: str, days: int = 1) -> List[Bar]:
         save_cached_minutes(symbol, bars)
         return bars
     return load_cached_minutes(symbol) or load_history_price_bars(symbol)
+
+
+def minute_cache_is_fresh(symbol: str, now: datetime | None = None) -> bool:
+    """Use short cache in-session and a longer cache when bars cannot change."""
+    path = MINUTE_CACHE_DIR / f"{symbol}.json"
+    try:
+        age_seconds = max(0.0, time_module.time() - path.stat().st_mtime)
+    except OSError:
+        return False
+    current = now or datetime.now()
+    hm = current.hour * 100 + current.minute
+    market_session = current.weekday() < 5 and 925 <= hm <= 1505
+    ttl_seconds = 4 * 60 if market_session else 4 * 60 * 60
+    return age_seconds <= ttl_seconds
 
 
 def save_cached_minutes(symbol: str, bars: List[Bar]) -> None:

@@ -12,6 +12,8 @@ from typing import Any
 
 _LOCK = threading.RLock()
 _WORKERS: dict[str, threading.Thread] = {}
+TRAIN_INTERVAL_MINUTES = 5
+WORKER_POLL_SECONDS = 15
 
 
 def _now() -> datetime:
@@ -34,6 +36,8 @@ def _default_state() -> dict[str, Any]:
         "running": False,
         "profile": "quantbrain",
         "promotionMode": "manual",
+        "intervalMinutes": TRAIN_INTERVAL_MINUTES,
+        "totalBatches": 0,
         "nextRunAt": "",
         "lastRunAt": "",
         "runStartedAt": "",
@@ -97,7 +101,14 @@ def _set_phase(state: dict[str, Any], phase: str, progress: int, message: str) -
 def status(core, email: str) -> dict[str, Any]:
     with _LOCK:
         state = _read(core, email)
+        if state.get("enabled") and not state.get("ownerEmail"):
+            state["ownerEmail"] = email
+            _write(core, email, state)
         thread = _WORKERS.get(email)
+        if state.get("enabled") and not state.get("paused") and not (thread and thread.is_alive()):
+            thread = threading.Thread(target=_worker, args=(core, email), daemon=True, name=f"four-rabbits-{email}")
+            _WORKERS[email] = thread
+            thread.start()
         state["workerAlive"] = bool(thread and thread.is_alive())
         if state.get("running") and state.get("runStartedAt"):
             try:
@@ -195,13 +206,17 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                 _update_agent(state, "training", "error", result.get("summary") or "训练失败")
                 _set_phase(state, "error", 100, result.get("summary") or "训练失败")
             state["lastRunAt"] = _now().isoformat(timespec="seconds")
-            state["nextRunAt"] = (_now() + timedelta(minutes=60)).isoformat(timespec="seconds")
+            state["totalBatches"] = int(state.get("totalBatches") or 0) + 1
+            state["nextRunAt"] = (_now() + timedelta(minutes=TRAIN_INTERVAL_MINUTES)).isoformat(timespec="seconds")
             state["running"] = False
             return _write(core, email, state)
     except Exception as exc:
         with _LOCK:
             state = _read(core, email)
             state["running"] = False
+            state["totalBatches"] = int(state.get("totalBatches") or 0) + 1
+            state["lastRunAt"] = _now().isoformat(timespec="seconds")
+            state["nextRunAt"] = (_now() + timedelta(minutes=TRAIN_INTERVAL_MINUTES)).isoformat(timespec="seconds")
             _set_phase(state, "error", 100, f"训练失败：{exc}")
             _update_agent(state, "training", "error", state["message"])
             return _write(core, email, state)
@@ -215,15 +230,43 @@ def _worker(core, email: str) -> None:
             state = _read(core, email)
         if not state.get("enabled"):
             break
-        if not state.get("paused") and not _market_time():
+        if not state.get("paused"):
             due_text = str(state.get("nextRunAt") or "")
             try:
                 due = datetime.fromisoformat(due_text) if due_text else _now()
             except ValueError:
                 due = _now()
             if _now() >= due:
-                run_once(core, email)
-        time.sleep(30)
+                # This is shadow training only.  It may replay during market
+                # hours, but promotion remains manual and cannot affect live
+                # execution until the challenger passes the risk gate.
+                run_once(core, email, force=True)
+        time.sleep(WORKER_POLL_SECONDS)
+
+
+def resume_enabled_workers(core) -> int:
+    """Restore persistent continuous-training workers after a server restart."""
+    restored = 0
+    root = getattr(core, "USER_DATA_DIR", None)
+    if not root or not Path(root).exists():
+        return restored
+    for path in Path(root).glob("*_four_rabbits_status.json"):
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            email = str(saved.get("ownerEmail") or "").strip().lower()
+            if not email or not saved.get("enabled") or saved.get("paused"):
+                continue
+            with _LOCK:
+                thread = _WORKERS.get(email)
+                if thread and thread.is_alive():
+                    continue
+                thread = threading.Thread(target=_worker, args=(core, email), daemon=True, name=f"four-rabbits-{email}")
+                _WORKERS[email] = thread
+                thread.start()
+                restored += 1
+        except Exception:
+            continue
+    return restored
 
 
 def control(core, email: str, action: str) -> dict[str, Any]:
@@ -241,17 +284,21 @@ def control(core, email: str, action: str) -> dict[str, Any]:
     with _LOCK:
         state = _read(core, email)
         if action == "start":
+            state["ownerEmail"] = email
             state["enabled"] = True
             state["paused"] = False
-            state["nextRunAt"] = state.get("nextRunAt") or _now().isoformat(timespec="seconds")
-            state["message"] = "持续训练已启动，盘中自动暂停"
+            state["intervalMinutes"] = TRAIN_INTERVAL_MINUTES
+            state["nextRunAt"] = _now().isoformat(timespec="seconds")
+            state["message"] = "持续影子训练已启动，每5分钟一轮；盘中只学习，不自动晋升"
         elif action == "pause":
             state["paused"] = True
             state["message"] = "持续训练已暂停"
         elif action == "resume":
+            state["ownerEmail"] = email
             state["enabled"] = True
             state["paused"] = False
-            state["message"] = "持续训练已恢复"
+            state["nextRunAt"] = _now().isoformat(timespec="seconds")
+            state["message"] = "持续影子训练已恢复，每5分钟一轮"
         elif action == "stop":
             state["enabled"] = False
             state["paused"] = False
