@@ -49,6 +49,42 @@ class SmartTPolicyTests(unittest.TestCase):
         self.assertTrue(result["openingTrial"])
         self.assertAlmostEqual(result["positionFraction"], 1 / 6)
 
+    def test_low_gap_opening_buy_can_pass_after_reclaiming_vwap(self):
+        recovering = points([9.55, 9.50, 9.54, 9.58, 9.62, 9.68, 9.74, 9.82, 9.91, 10.02, 10.08, 10.12], start=570)
+        result = self.base(
+            time_text="09:50",
+            points=recovering,
+            price=10.12,
+            average=10.05,
+            high=10.12,
+            low=9.50,
+            signal_action="BUY_FIRST",
+            signal_score=10,
+            auction_direction="BUY_FIRST",
+            auction_state="CONFIRMED",
+        )
+        self.assertEqual(result["state"], "READY")
+        self.assertTrue(result["confirmed"])
+        self.assertGreater(result["availableSpreadPct"], result["requiredGrossSpreadPct"])
+
+    def test_high_gap_opening_sell_can_pass_after_losing_vwap(self):
+        fading = points([10.55, 10.60, 10.58, 10.52, 10.45, 10.36, 10.28, 10.20, 10.12, 10.05, 10.00, 9.95], start=570)
+        result = self.base(
+            time_text="09:50",
+            points=fading,
+            price=9.95,
+            average=10.05,
+            high=10.60,
+            low=9.95,
+            signal_action="SELL_FIRST",
+            signal_score=10,
+            auction_direction="SELL_FIRST",
+            auction_state="CONFIRMED",
+        )
+        self.assertEqual(result["state"], "READY")
+        self.assertTrue(result["confirmed"])
+        self.assertGreater(result["availableSpreadPct"], result["requiredGrossSpreadPct"])
+
     def test_observation_never_becomes_trade(self):
         result = self.base(strict_signal=False, signal_action="低位机会")
         self.assertEqual(result["state"], "WAIT_CONFIRMATION")

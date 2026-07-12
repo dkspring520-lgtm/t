@@ -14125,7 +14125,7 @@ body.rq-cute-console .rqf-tip-card small{display:block!important;margin-top:8px!
       <div class="settings-title">自定义做T策略</div>
       <div class="ai-config-grid">
         <label>策略模式<select id="strategyMode"><option>官方默认策略</option><option>自定义策略</option><option>AI复核优先</option></select></label>
-        <label>智能做T档位<select id="smartTProfile"><option value="steady">稳健｜少提醒 · 2轮</option><option value="balanced">平衡｜默认 · 3轮</option><option value="sensitive">灵敏｜多机会 · 5轮</option><option value="quantbrain">量化学习｜经验进化 · 4轮</option></select></label>
+        <label>智能做T档位<select id="smartTProfile"><option value="steady">稳健｜少提醒 · 最多2轮</option><option value="balanced">平衡｜默认 · 最多3轮</option><option value="sensitive">灵敏｜多机会 · 最多5轮</option><option value="quantbrain">量化学习｜经验进化 · 最多4轮</option></select></label>
         <label>单股每日提醒<input id="maxSignalsPerDay" type="number" min="1" max="6" placeholder="2" /></label>
         <label>低吸偏离%<input id="lowBuyDev" type="number" step="0.05" placeholder="-1.20" /></label>
         <label>高抛偏离%<input id="highSellDev" type="number" step="0.05" placeholder="1.40" /></label>
@@ -15881,7 +15881,7 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
     <label class="field"><span>单笔金额</span><input id="tradeInput" type="number" min="1000" step="1000" value="20000" oninput="tradeManual=true;syncCards()" /></label>
     <label class="field sim-sample-size" id="simSampleSize" hidden><span>随机测试股数</span><select id="sampleInput" aria-label="随机测试股数" onchange="syncCards()"><option value="5">5只</option><option value="10" selected>10只</option><option value="20">20只</option><option value="30">30只</option></select></label>
     <label class="field sim-system-field"><span>测试天数</span><select id="testDaysInput" onchange="syncCards()"><option value="1">1天</option><option value="3">3天</option><option value="5" selected>5天</option><option value="10">10天</option></select></label>
-    <label class="field"><span>做T方案</span><select id="simPlan"><option value="balanced">平衡策略｜默认 · 3轮</option><option value="steady">稳健策略｜少交易 · 2轮</option><option value="sensitive">灵敏策略｜多机会 · 5轮</option><option value="quantbrain">量化学习｜累计经验 · 4轮</option><option value="custom">自定义策略｜同步控制台</option><option value="ai-review">AI复核优先</option></select></label>
+    <label class="field"><span>做T方案</span><select id="simPlan"><option value="balanced">平衡策略｜默认 · 最多3轮</option><option value="steady">稳健策略｜少交易 · 最多2轮</option><option value="sensitive">灵敏策略｜多机会 · 最多5轮</option><option value="quantbrain">量化学习｜累计经验 · 最多4轮</option><option value="custom">自定义策略｜同步控制台</option><option value="ai-review">AI复核优先</option></select></label>
     <select id="simSmartTProfile" aria-hidden="true" tabindex="-1"><option value="steady">稳健</option><option value="balanced" selected>平衡</option><option value="sensitive">灵敏</option><option value="quantbrain">量化学习</option></select>
     <select id="simStrategyMode" aria-hidden="true" tabindex="-1"><option value="官方默认策略">官方默认策略</option><option value="自定义策略">自定义策略</option><option value="AI复核优先">AI复核优先</option></select>
     <label class="field wide" id="simCustomStocks"><span>自定义股票</span><input id="stocksInput" placeholder="如 601899,601012,600580" oninput="stocksManual=true;syncCards()" /></label>

@@ -62,6 +62,36 @@ class SimulationCycleTests(unittest.TestCase):
         floor = sim._minimum_profitable_move_pct(self.stock, 10.0, 1000.0)
         self.assertGreater(floor, 1.0)
 
+    def test_low_gap_opening_strategy_reaches_a_real_cycle(self):
+        prices = [9.60, 9.52, 9.50, 9.54, 9.58, 9.62, 9.68, 9.74, 9.82, 9.91, 10.02, 10.08]
+        prices.extend([10.10 + index * 0.012 for index in range(24)])
+        bars = []
+        for index, price in enumerate(prices):
+            minute = 9 * 60 + 30 + index
+            bars.append(sim.Bar(f"{minute // 60:02d}:{minute % 60:02d}", price, 1000.0, price * 100000.0, "2026-07-10"))
+        sim.SIM_BASE_SHARES = 6000
+        sim.SMART_T_PROFILE = "balanced"
+        sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "balanced")
+        result = sim.simulate_one(self.stock, bars, 20000.0, previous_close=10.0)
+        self.assertNotEqual(result.action, "未触发", result.reason)
+        self.assertLessEqual(result.entry_time, "10:00")
+        self.assertTrue(result.cycles)
+
+    def test_high_gap_opening_strategy_reaches_a_real_cycle(self):
+        prices = [10.40, 10.52, 10.60, 10.58, 10.54, 10.48, 10.40, 10.32, 10.24, 10.15, 10.08, 10.00]
+        prices.extend([9.98 - index * 0.012 for index in range(24)])
+        bars = []
+        for index, price in enumerate(prices):
+            minute = 9 * 60 + 30 + index
+            bars.append(sim.Bar(f"{minute // 60:02d}:{minute % 60:02d}", price, 1000.0, price * 100000.0, "2026-07-10"))
+        sim.SIM_BASE_SHARES = 6000
+        sim.SMART_T_PROFILE = "balanced"
+        sim.ACTIVE_STRATEGY = sim.apply_smart_t_profile(sim.load_adaptive_strategy(), "balanced")
+        result = sim.simulate_one(self.stock, bars, 20000.0, previous_close=10.0)
+        self.assertNotEqual(result.action, "未触发", result.reason)
+        self.assertLessEqual(result.entry_time, "10:00")
+        self.assertTrue(result.cycles)
+
     def test_dashboard_does_not_mistake_cycle_cap_for_stock_cap(self):
         command = dashboard_app.build_commands("simulate", {"sample": 6, "smartTProfile": "steady"})[0]
         index = command.index("--max-trades")

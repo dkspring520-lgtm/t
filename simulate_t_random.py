@@ -1805,7 +1805,7 @@ def _is_opening_buy_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not int(strategy.get("opening_enabled", 1)) or not _is_opening_trade_window(bar.hm) or idx < 8 or avg <= 0:
         return False
-    prices = [b.price for b in bars]
+    prices = [b.price for b in bars[: idx + 1]]
     open_price = prices[0]
     # Low-gap first leg: five minutes without a fresh low, a higher secondary
     # low, and two completed one-minute bars above both open and VWAP.
@@ -1814,7 +1814,10 @@ def _is_opening_buy_setup(
     no_fresh_low = recent_low > earlier_low * 1.0005
     higher_secondary_low = min(prices[-3:]) > earlier_low * 1.0005
     two_above = all(item.price > open_price and item.price > avg for item in bars[idx - 1: idx + 1])
-    vwap_rising = len(prices) >= 4 and avg >= sum(prices[-4:-1]) / 3.0 * 0.998
+    previous_volume = sum(max(item.volume_lot, 0.0) for item in bars[:idx])
+    previous_amount = sum(max(item.amount_yuan, 0.0) for item in bars[:idx])
+    previous_vwap = previous_amount / (previous_volume * 100.0) if previous_volume > 0 else avg
+    vwap_rising = avg >= previous_vwap * 0.9995
     return no_fresh_low and higher_secondary_low and two_above and vwap_rising and _volume_ratio(volumes) >= 0.70
 
 
@@ -1856,7 +1859,7 @@ def _is_opening_reverse_setup(
         return False
     if not _is_opening_trade_window(bar.hm) or idx < 8 or avg <= 0:
         return False
-    prices = [b.price for b in bars]
+    prices = [b.price for b in bars[: idx + 1]]
     open_price = prices[0]
     # High-gap first leg: three minutes cannot make a new high (or a lower
     # secondary high), two closes under VWAP, then a failed VWAP retest or a

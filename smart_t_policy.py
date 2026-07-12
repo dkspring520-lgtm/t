@@ -207,6 +207,10 @@ def evaluate_trade_decision(
                 radar_block = "RADAR_RISK_OFF_BUY_BLOCKED"
             elif direction == "SELL_FIRST":
                 radar_adjustment = 2
+    auction_preference = str(auction_direction or "")
+    auction_gate_state = str(auction_state or "NEUTRAL").upper()
+    auction_confirmed = auction_gate_state == "CONFIRMED" and auction_preference in {"BUY_FIRST", "SELL_FIRST"}
+    opening_trial = 9 * 60 + 35 <= minute <= 10 * 60
     required_score = min(10, selected.confirmed_score + radar_adjustment)
     required_gross = selected.min_expected_net_pct + max(0.0, estimated_cycle_cost_pct) + 2 * max(0.0, slippage_per_side_pct)
     # The executable target is the current VWAP reversion, not an optimistic
@@ -218,17 +222,21 @@ def evaluate_trade_decision(
         available_space = max(0.0, (current - avg) / max(current, 1e-9) * 100.0)
     else:
         available_space = 0.0
+    if opening_trial and auction_confirmed and current > 0 and day_high > day_low > 0:
+        # The confirmed opening strategy is a staged continuation trade:
+        # low-gap BUY enters only after reclaiming VWAP, while high-gap SELL
+        # enters only after losing VWAP.  Requiring the normal mean-reversion
+        # side of VWAP here made both valid opening directions impossible.
+        # Use a conservative fraction of the range observed *so far* instead;
+        # this stays causal and still requires enough room to cover costs.
+        observed_opening_range = (day_high - day_low) / current * 100.0
+        available_space = max(available_space, observed_opening_range * 0.35)
 
     state = "WAIT_CONFIRMATION"
     reason = "观察状态不直接成交，等待反转确认。"
     confirmed = False
     new_cycle_allowed = False
     force_close = minute >= 14 * 60 + 50
-    auction_preference = str(auction_direction or "")
-    auction_gate_state = str(auction_state or "NEUTRAL").upper()
-    auction_confirmed = auction_gate_state == "CONFIRMED" and auction_preference in {"BUY_FIRST", "SELL_FIRST"}
-    opening_trial = 9 * 60 + 35 <= minute <= 10 * 60
-
     if quote_stale or current <= 0 or avg <= 0:
         state, reason = "DATA_RISK", "行情延迟或价格数据不完整，暂停开启新循环。"
     elif str(market_status) != "交易中":
