@@ -6,6 +6,27 @@ import simulate_t_random as sim
 
 
 class SimulationCycleTests(unittest.TestCase):
+    def test_reward_floor_matches_entry_structural_risk(self):
+        strategy = dict(sim.DEFAULT_STRATEGY)
+        strategy["min_reward_risk_ratio"] = 1.25
+        strategy["min_structural_risk_pct"] = 0.35
+        strategy["max_structural_risk_pct"] = 0.80
+
+        buy_floor = sim._entry_reward_floor_pct(10.0, 9.94, "BUY_FIRST", strategy)
+        sell_floor = sim._entry_reward_floor_pct(10.0, 10.06, "SELL_FIRST", strategy)
+
+        self.assertAlmostEqual(buy_floor, 0.75, places=6)
+        self.assertAlmostEqual(sell_floor, 0.75, places=6)
+
+    def test_reward_floor_uses_bounded_risk_when_stop_is_missing(self):
+        strategy = dict(sim.DEFAULT_STRATEGY)
+        strategy["normal_stop_pct"] = -0.60
+        strategy["min_reward_risk_ratio"] = 1.25
+
+        floor = sim._entry_reward_floor_pct(10.0, None, "BUY_FIRST", strategy)
+
+        self.assertAlmostEqual(floor, 0.75, places=6)
+
     def setUp(self):
         self.stock = sim.Stock("测试股", "000001", "sz000001")
         self.bars = [sim.Bar("09:30", 10.0, 100.0, 100000.0, "2026-07-10")]

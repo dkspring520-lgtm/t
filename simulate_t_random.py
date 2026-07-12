@@ -49,13 +49,13 @@ DEFAULT_STRATEGY = {
     "min_stop_minutes": 8,
     "fast_take_profit_pct": 1.8,
     "emergency_stop_pct": -1.35,
-    "normal_stop_pct": -0.75,
+    "normal_stop_pct": -0.60,
     "opening_invalidation_pct": -0.45,
     "breakeven_trigger_pct": 1.20,
     "trailing_pullback_pct": 0.60,
-    "min_reward_risk_ratio": 1.25,
+    "min_reward_risk_ratio": 1.50,
     "min_structural_risk_pct": 0.35,
-    "max_structural_risk_pct": 0.80,
+    "max_structural_risk_pct": 0.60,
     "risk_first_enabled": 1,
     "vwap_take_profit_pct": 0.25,
     "normal_take_profit_pct": 0.6,
@@ -682,13 +682,13 @@ def load_adaptive_strategy() -> dict[str, float]:
     strategy["min_stop_minutes"] = max(5, min(20, int(strategy.get("min_stop_minutes", 8))))
     strategy["fast_take_profit_pct"] = max(1.2, min(3.0, float(strategy.get("fast_take_profit_pct", 1.8))))
     strategy["emergency_stop_pct"] = max(-2.0, min(-1.0, float(strategy.get("emergency_stop_pct", -1.35))))
-    strategy["normal_stop_pct"] = max(-1.2, min(-0.45, float(strategy.get("normal_stop_pct", -0.75))))
+    strategy["normal_stop_pct"] = max(-1.2, min(-0.45, float(strategy.get("normal_stop_pct", -0.60))))
     strategy["opening_invalidation_pct"] = max(-0.80, min(-0.25, float(strategy.get("opening_invalidation_pct", -0.45))))
     strategy["breakeven_trigger_pct"] = max(0.35, min(1.20, float(strategy.get("breakeven_trigger_pct", 0.55))))
     strategy["trailing_pullback_pct"] = max(0.15, min(0.70, float(strategy.get("trailing_pullback_pct", 0.30))))
-    strategy["min_reward_risk_ratio"] = max(1.0, min(2.5, float(strategy.get("min_reward_risk_ratio", 1.25))))
+    strategy["min_reward_risk_ratio"] = max(1.0, min(2.5, float(strategy.get("min_reward_risk_ratio", 1.50))))
     strategy["min_structural_risk_pct"] = max(0.20, min(0.60, float(strategy.get("min_structural_risk_pct", 0.35))))
-    strategy["max_structural_risk_pct"] = max(0.50, min(1.50, float(strategy.get("max_structural_risk_pct", 0.80))))
+    strategy["max_structural_risk_pct"] = max(0.50, min(1.50, float(strategy.get("max_structural_risk_pct", 0.60))))
     if strategy["max_structural_risk_pct"] < strategy["min_structural_risk_pct"]:
         strategy["max_structural_risk_pct"] = strategy["min_structural_risk_pct"]
     strategy["risk_first_enabled"] = max(0, min(1, int(strategy.get("risk_first_enabled", 1))))
@@ -1481,9 +1481,9 @@ def _shared_policy_allows(
         market_radar_score=SIM_MARKET_RADAR_SCORE,
         learned_params=SIM_LEARNED_PARAMS,
         structural_stop_price=structural_stop,
-        min_reward_risk_ratio=float(strategy.get("min_reward_risk_ratio", 1.25)) if risk_first else 0.0,
+        min_reward_risk_ratio=float(strategy.get("min_reward_risk_ratio", 1.50)) if risk_first else 0.0,
         min_structural_risk_pct=float(strategy.get("min_structural_risk_pct", 0.35)),
-        max_structural_risk_pct=float(strategy.get("max_structural_risk_pct", 0.80)),
+        max_structural_risk_pct=float(strategy.get("max_structural_risk_pct", 0.60)),
     )
     return bool(decision.get("confirmed"))
 
@@ -1501,7 +1501,7 @@ def _candidate_structural_stop(
         return None
     current = bars[idx].price
     config = strategy or ACTIVE_STRATEGY or DEFAULT_STRATEGY
-    risk_cap = float(config.get("max_structural_risk_pct", 0.80)) / 100.0
+    risk_cap = float(config.get("max_structural_risk_pct", 0.60)) / 100.0
     if opening_entry:
         risk_cap = abs(float(config.get("opening_invalidation_pct", -0.45))) / 100.0
     if direction == "BUY_FIRST":
@@ -1558,6 +1558,29 @@ def _minimum_profitable_move_pct(stock: Stock, price: float, trade_amount: float
     ) / amount * 100.0
     slippage_pct = SIM_COST_MODEL.slippage_bps / 100.0 * 2.0
     return fee_pct + slippage_pct + max(0.0, net_buffer_pct)
+
+
+def _entry_reward_floor_pct(
+    entry_price: float,
+    structural_stop: float | None,
+    direction: str,
+    strategy: dict,
+) -> float:
+    """Keep exit targets consistent with the reward/risk promised at entry."""
+    if entry_price <= 0:
+        return 0.0
+    if structural_stop and structural_stop > 0:
+        if direction == "BUY_FIRST":
+            raw_risk = (entry_price - structural_stop) / entry_price * 100.0
+        else:
+            raw_risk = (structural_stop - entry_price) / entry_price * 100.0
+    else:
+        raw_risk = abs(float(strategy.get("normal_stop_pct", -0.60)))
+    min_risk = float(strategy.get("min_structural_risk_pct", 0.35))
+    max_risk = float(strategy.get("max_structural_risk_pct", 0.60))
+    risk_pct = max(min_risk, min(max_risk, raw_risk))
+    reward_ratio = float(strategy.get("min_reward_risk_ratio", 1.50))
+    return max(0.0, risk_pct * reward_ratio)
 
 
 def _executable_trade_budget(requested_amount: float, price: float, hard_cap: float | None = None) -> float:
@@ -1708,16 +1731,17 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             hold_limit = int(strategy.get("hold_exit_minutes", 25))
             min_stop = int(strategy.get("min_stop_minutes", 8))
             emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
-            normal_stop = float(strategy.get("normal_stop_pct", -0.75))
+            normal_stop = float(strategy.get("normal_stop_pct", -0.60))
             min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
             fast_take_profit = float(strategy.get("fast_take_profit_pct", 1.8))
             vwap_take_profit = float(strategy.get("vwap_take_profit_pct", 0.25))
             normal_take_profit = float(strategy.get("normal_take_profit_pct", 0.6))
             late_take_profit = float(strategy.get("late_take_profit_pct", 0.45))
             profitable_floor = _minimum_profitable_move_pct(stock, buy.price, active_trade_amount)
-            vwap_take_profit = max(vwap_take_profit, profitable_floor)
-            normal_take_profit = max(normal_take_profit, profitable_floor)
-            late_take_profit = max(late_take_profit, profitable_floor)
+            reward_floor = _entry_reward_floor_pct(buy.price, entry_structural_stop, "BUY_FIRST", strategy)
+            vwap_take_profit = max(vwap_take_profit, profitable_floor, reward_floor)
+            normal_take_profit = max(normal_take_profit, profitable_floor, reward_floor)
+            late_take_profit = max(late_take_profit, profitable_floor, reward_floor)
             exit_buffer = float(strategy.get("vwap_exit_buffer_pct", 0.20))
             near_or_above_vwap = bar.price >= avg * (1.0 - exit_buffer / 100.0)
             if (
@@ -1742,7 +1766,7 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             fixed_stop = normal_stop if risk_first else -0.90
             if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _trade_result(stock, "正T止损", buy, bar, active_trade_amount, "确认破位后止损" + entry_note)
-            if hold_minutes >= hold_limit and sell_dev >= 0.7 and pnl > 0:
+            if hold_minutes >= hold_limit and sell_dev >= 0.7 and pnl >= profitable_floor:
                 return _trade_result(stock, "正T高抛", buy, bar, active_trade_amount, "回到均价上方" + entry_note)
 
         if mode == "反T" and sell_first is not None:
@@ -1753,16 +1777,17 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             hold_limit = int(strategy.get("hold_exit_minutes", 25))
             min_stop = int(strategy.get("min_stop_minutes", 8))
             emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
-            normal_stop = float(strategy.get("normal_stop_pct", -0.75))
+            normal_stop = float(strategy.get("normal_stop_pct", -0.60))
             min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
             fast_take_profit = float(strategy.get("fast_take_profit_pct", 1.8))
             vwap_take_profit = float(strategy.get("vwap_take_profit_pct", 0.25))
             normal_take_profit = float(strategy.get("normal_take_profit_pct", 0.6))
             late_take_profit = float(strategy.get("late_take_profit_pct", 0.45))
             profitable_floor = _minimum_profitable_move_pct(stock, sell_first.price, active_trade_amount)
-            vwap_take_profit = max(vwap_take_profit, profitable_floor)
-            normal_take_profit = max(normal_take_profit, profitable_floor)
-            late_take_profit = max(late_take_profit, profitable_floor)
+            reward_floor = _entry_reward_floor_pct(sell_first.price, entry_structural_stop, "SELL_FIRST", strategy)
+            vwap_take_profit = max(vwap_take_profit, profitable_floor, reward_floor)
+            normal_take_profit = max(normal_take_profit, profitable_floor, reward_floor)
+            late_take_profit = max(late_take_profit, profitable_floor, reward_floor)
             exit_buffer = float(strategy.get("vwap_exit_buffer_pct", 0.20))
             near_or_below_vwap = bar.price <= avg * (1.0 + exit_buffer / 100.0)
             if (
@@ -1787,7 +1812,7 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             fixed_stop = normal_stop if risk_first else -0.90
             if pnl <= emergency_stop or (hold_minutes >= min_stop and pnl <= fixed_stop):
                 return _reverse_t_result(stock, "反T止损", sell_first, bar, active_trade_amount, "确认继续走强后止损" + entry_note)
-            if hold_minutes >= hold_limit and buy_dev <= -0.3 and pnl > 0:
+            if hold_minutes >= hold_limit and buy_dev <= -0.3 and pnl >= profitable_floor:
                 return _reverse_t_result(stock, "反T买回", sell_first, bar, active_trade_amount, "回落到均价下方" + entry_note)
 
     if buy is not None:

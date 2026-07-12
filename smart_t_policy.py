@@ -132,9 +132,9 @@ def evaluate_trade_decision(
     slippage_per_side_pct: float = 0.02,
     market_radar_score: object = None,
     structural_stop_price: object = None,
-    min_reward_risk_ratio: float = 1.25,
+    min_reward_risk_ratio: float = 1.50,
     min_structural_risk_pct: float = 0.35,
-    max_structural_risk_pct: float = 0.80,
+    max_structural_risk_pct: float = 0.60,
 ) -> dict:
     """Single Smart-T decision gate used by live monitoring and replay.
 
@@ -237,7 +237,7 @@ def evaluate_trade_decision(
         available_space = max(available_space, observed_opening_range * 0.35)
 
     risk_floor = max(0.10, _number(min_structural_risk_pct, 0.35))
-    risk_cap = max(risk_floor, _number(max_structural_risk_pct, 0.80))
+    risk_cap = max(risk_floor, _number(max_structural_risk_pct, 0.60))
     explicit_stop = _number(structural_stop_price)
     recent_prices = [_number(point.get("price")) for point in point_list[-6:]]
     recent_prices = [value for value in recent_prices if value > 0]
@@ -257,7 +257,7 @@ def evaluate_trade_decision(
     structural_risk = max(risk_floor, structural_risk)
     # Zero is reserved for deterministic legacy A/B replay.  Production
     # profiles clamp the configured value to at least 1.0 before reaching here.
-    required_reward_risk = max(0.0, _number(min_reward_risk_ratio, 1.25))
+    required_reward_risk = max(0.0, _number(min_reward_risk_ratio, 1.50))
     reward_risk_ratio = available_space / structural_risk if structural_risk > 0 else 0.0
 
     state = "WAIT_CONFIRMATION"
