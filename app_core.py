@@ -489,9 +489,9 @@ html body.rq-cute-console .rqf-trade-card.active>span:after{content:""!important
         if 'body class="rq-cute-console' in html and "/assets/dashboard.js" not in html:
             html = html.replace("</body>", '<script src="/assets/dashboard.js?v=1"></script></body>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.css" not in html:
-            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=4"></head>', 1)
+            html = html.replace("</head>", '<link rel="stylesheet" href="/assets/simulation.css?v=5"></head>', 1)
         if "rq-page-simulation" in html and "/assets/simulation.js" not in html:
-            html = html.replace("</body>", '<script src="/assets/simulation.js?v=3"></script></body>', 1)
+            html = html.replace("</body>", '<script src="/assets/simulation.js?v=4"></script></body>', 1)
         if "/assets/app-navigation.js" not in html:
             html = html.replace("</body>", '<script src="/assets/app-navigation.js?v=1"></script></body>', 1)
         if "/assets/layout-unified.js" not in html:
@@ -15902,7 +15902,10 @@ body.rq-cute-console, body.rq-v8-console{background:radial-gradient(circle at 82
   </div>
   <section class="four-rabbits" id="fourRabbits" aria-labelledby="fourRabbitsTitle">
     <div class="four-rabbits-head"><div><b id="fourRabbitsTitle">四兔持续训练</b><span id="fourRabbitsMessage">读取训练状态…</span></div><div class="four-rabbits-actions"><button type="button" data-rabbit-action="start">启动</button><button type="button" data-rabbit-action="run">立即训练</button><button type="button" data-rabbit-action="promote">人工晋升</button><button type="button" data-rabbit-action="pause">暂停</button></div></div>
+    <div class="four-rabbits-progress" id="fourRabbitsProgress" data-running="0"><div class="four-rabbits-progress-line"><b id="fourRabbitsPhase">等待训练</b><span id="fourRabbitsProgressText">0%</span></div><div class="four-rabbits-progress-track" aria-hidden="true"><i id="fourRabbitsProgressBar"></i></div></div>
+    <div class="four-rabbits-metrics" id="fourRabbitsMetrics" aria-live="polite"></div>
     <div class="four-rabbits-grid" id="fourRabbitsGrid"></div>
+    <details class="four-rabbits-log"><summary>查看本轮训练记录</summary><ol id="fourRabbitsEvents"><li>尚无训练记录</li></ol></details>
   </section>
   <div id="loading" class="bar"></div>
   <div id="progress" class="progress">

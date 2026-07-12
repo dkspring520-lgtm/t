@@ -30,6 +30,10 @@ class QuantbrainSimulationBridgeTest(unittest.TestCase):
             self.assertFalse(first["enabled"])
             self.assertFalse(second["enabled"])
             self.assertEqual(set(first["agents"]), {"training", "challenger", "official", "risk"})
+            self.assertEqual(first["phase"], "idle")
+            self.assertEqual(first["progress"], 0)
+            self.assertEqual(first["lastResult"], {})
+            self.assertEqual(first["events"], [])
 
 
 if __name__ == "__main__":

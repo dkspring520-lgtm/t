@@ -14,6 +14,8 @@
     custom: { profile: "balanced", strategy: "自定义策略" },
     "ai-review": { profile: "balanced", strategy: "AI复核优先" },
   };
+  let rabbitPollTimer = 0;
+  const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
   function applyPlan() {
     const plan = plans[$("simPlan")?.value] || plans.balanced;
@@ -94,17 +96,41 @@
     grid.innerHTML = order.map((key) => {
       const agent = agents[key] || {};
       const state = agent.state || "idle";
-      return `<article data-state="${state}"><span class="rabbit-dot" aria-hidden="true"></span><div><b>${agent.label || key}</b><small>${agent.message || "等待状态"}</small></div></article>`;
+      return `<article data-state="${escapeHtml(state)}"><span class="rabbit-dot" aria-hidden="true"></span><div><b>${escapeHtml(agent.label || key)}</b><small>${escapeHtml(agent.message || "等待状态")}</small></div></article>`;
     }).join("");
+
+    const phaseLabels = { idle: "等待训练", replaying: "影子回放中", completed: "本轮已完成", error: "训练异常", paused: "已暂停" };
+    const progress = Math.max(0, Math.min(100, Number(data.progress) || 0));
+    if ($("fourRabbitsPhase")) $("fourRabbitsPhase").textContent = phaseLabels[data.phase] || data.phase || "等待训练";
+    if ($("fourRabbitsProgressText")) $("fourRabbitsProgressText").textContent = data.running ? `${progress}% · ${Number(data.elapsedSeconds) || 0}秒` : `${progress}%`;
+    if ($("fourRabbitsProgressBar")) $("fourRabbitsProgressBar").style.width = `${progress}%`;
+    if ($("fourRabbitsProgress")) $("fourRabbitsProgress").dataset.running = data.running ? "1" : "0";
+
+    const result = data.lastResult || {};
+    const batch = data.batch || {};
+    const metricItems = [
+      ["批次", batch.id || "--"], ["样本", result.tested ? `${result.tested}只 / ${batch.days || 5}日` : `${batch.sample || 10}只 / ${batch.days || 5}日`],
+      ["触发", result.trigger || "--"], ["胜率", result.winRate || "--"], ["净盈亏", result.pnl || "--"],
+      ["学习记录", `${Number(result.signals) || 0}信号 / ${Number(result.trades) || 0}成交`], ["耗时", result.durationSeconds != null ? `${result.durationSeconds}秒` : "--"],
+    ];
+    if ($("fourRabbitsMetrics")) $("fourRabbitsMetrics").innerHTML = metricItems.map(([label, value]) => `<span><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`).join("");
+    const events = Array.isArray(data.events) ? data.events.slice().reverse() : [];
+    if ($("fourRabbitsEvents")) $("fourRabbitsEvents").innerHTML = events.length ? events.map((event) => `<li><time>${escapeHtml(String(event.time || "").slice(11, 19))}</time><span>${escapeHtml(event.message || event.phase || "状态更新")}</span></li>`).join("") : "<li>尚无训练记录</li>";
   }
 
   async function loadFourRabbits() {
+    let delay = 12000;
     try {
       const response = await fetch("/api/four-rabbits/status", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      renderFourRabbits(await response.json());
+      const data = await response.json();
+      renderFourRabbits(data);
+      delay = data.running ? 2000 : 12000;
     } catch (error) {
       if ($("fourRabbitsMessage")) $("fourRabbitsMessage").textContent = `状态读取失败：${error.message}`;
+    } finally {
+      window.clearTimeout(rabbitPollTimer);
+      rabbitPollTimer = window.setTimeout(loadFourRabbits, delay);
     }
   }
 
@@ -120,7 +146,8 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
       renderFourRabbits(data);
-      if (action === "run") window.setTimeout(loadFourRabbits, 1200);
+      window.clearTimeout(rabbitPollTimer);
+      rabbitPollTimer = window.setTimeout(loadFourRabbits, action === "run" ? 500 : 1500);
     } catch (error) {
       if ($("fourRabbitsMessage")) $("fourRabbitsMessage").textContent = `操作失败：${error.message}`;
     } finally {

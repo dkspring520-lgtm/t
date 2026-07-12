@@ -36,6 +36,12 @@ def _default_state() -> dict[str, Any]:
         "promotionMode": "manual",
         "nextRunAt": "",
         "lastRunAt": "",
+        "runStartedAt": "",
+        "phase": "idle",
+        "progress": 0,
+        "batch": {},
+        "lastResult": {},
+        "events": [],
         "message": "持续训练尚未启动",
         "agents": {
             "training": {"label": "训练兔", "state": "idle", "message": "等待后台复盘"},
@@ -80,11 +86,24 @@ def _update_agent(state: dict[str, Any], name: str, status: str, message: str, *
     state["agents"][name] = agent
 
 
+def _set_phase(state: dict[str, Any], phase: str, progress: int, message: str) -> None:
+    """Persist truthful coarse-grained progress around the blocking replay."""
+    state.update({"phase": phase, "progress": max(0, min(100, int(progress))), "message": message})
+    events = list(state.get("events") or [])
+    events.append({"time": _now().isoformat(timespec="seconds"), "phase": phase, "message": message})
+    state["events"] = events[-12:]
+
+
 def status(core, email: str) -> dict[str, Any]:
     with _LOCK:
         state = _read(core, email)
         thread = _WORKERS.get(email)
         state["workerAlive"] = bool(thread and thread.is_alive())
+        if state.get("running") and state.get("runStartedAt"):
+            try:
+                state["elapsedSeconds"] = max(0, int((_now() - datetime.fromisoformat(state["runStartedAt"])).total_seconds()))
+            except (TypeError, ValueError):
+                state["elapsedSeconds"] = 0
         return state
 
 
@@ -97,9 +116,12 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             state["message"] = "盘中保护：训练兔暂停，收盘后再运行"
             _update_agent(state, "training", "idle", state["message"])
             return _write(core, email, state)
+        started = _now()
         state["running"] = True
-        state["message"] = "训练兔正在进行近5日影子复盘"
-        _update_agent(state, "training", "running", state["message"])
+        state["runStartedAt"] = started.isoformat(timespec="seconds")
+        state["batch"] = {"id": started.strftime("%Y%m%d-%H%M%S"), "days": 5, "sample": 10, "profile": "量化学习"}
+        _set_phase(state, "replaying", 20, "正在获取10只股票并进行近5日影子回放")
+        _update_agent(state, "training", "running", state["message"], days=5, sample=10)
         _write(core, email, state)
 
     token = core.REQUEST_EMAIL.set(email)
@@ -117,10 +139,36 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
         })
         with _LOCK:
             state = _read(core, email)
-            adaptive = dict((result.get("stats") or {}).get("adaptiveLearning") or {})
+            stats = dict(result.get("stats") or {})
+            adaptive = dict(stats.get("adaptiveLearning") or {})
+            started_text = str(state.get("runStartedAt") or "")
+            try:
+                duration = max(0, int((_now() - datetime.fromisoformat(started_text)).total_seconds()))
+            except (TypeError, ValueError):
+                duration = 0
+            state["lastResult"] = {
+                "tested": len(result.get("stocks") or []),
+                "trigger": stats.get("trigger") or "--",
+                "winRate": stats.get("win") or "--",
+                "pnl": stats.get("pnl") or "--",
+                "fees": stats.get("fees") or "--",
+                "signals": adaptive.get("recordedSignals", 0),
+                "trades": adaptive.get("recordedTrades", 0),
+                "skipped": adaptive.get("skippedPriceOnly", 0),
+                "durationSeconds": duration,
+            }
             if result.get("ok"):
+                win_rate = str(stats.get("win") or "--")
+                trigger = str(stats.get("trigger") or "--")
+                triggered, _total = core.parse_trigger(trigger)
+                if triggered <= 0:
+                    result_message = f"影子复盘完成：{trigger}，本轮没有满足条件的交易，不计为亏损"
+                elif win_rate.startswith("0"):
+                    result_message = f"影子复盘完成：触发 {trigger}，本轮有成交但没有盈利，候选不得晋升"
+                else:
+                    result_message = f"影子复盘完成：触发 {trigger}，胜率 {win_rate}"
                 _update_agent(
-                    state, "training", "success", "影子复盘已完成",
+                    state, "training", "success", result_message,
                     signals=adaptive.get("recordedSignals", 0), trades=adaptive.get("recordedTrades", 0),
                 )
                 proposal = dict(adaptive.get("proposal") or {})
@@ -142,10 +190,10 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                         _update_agent(state, "risk", "ready", "风险检查通过", **risk)
                 except Exception as exc:
                     _update_agent(state, "risk", "warning", f"风险检查暂不可用：{exc}")
-                state["message"] = "四兔本轮训练完成；挑战者仍需人工晋升"
+                _set_phase(state, "completed", 100, f"{result_message}，净盈亏 {stats.get('pnl') or '--'}")
             else:
                 _update_agent(state, "training", "error", result.get("summary") or "训练失败")
-                state["message"] = result.get("summary") or "训练失败"
+                _set_phase(state, "error", 100, result.get("summary") or "训练失败")
             state["lastRunAt"] = _now().isoformat(timespec="seconds")
             state["nextRunAt"] = (_now() + timedelta(minutes=60)).isoformat(timespec="seconds")
             state["running"] = False
@@ -154,7 +202,7 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
         with _LOCK:
             state = _read(core, email)
             state["running"] = False
-            state["message"] = f"训练失败：{exc}"
+            _set_phase(state, "error", 100, f"训练失败：{exc}")
             _update_agent(state, "training", "error", state["message"])
             return _write(core, email, state)
     finally:
