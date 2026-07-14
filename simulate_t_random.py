@@ -15,7 +15,7 @@ import sys
 import time as time_module
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -28,7 +28,7 @@ from services.market_data_quality import (
     sanitize_incremental_records,
 )
 from services.trade_engine import PositionState, TradeCostModel
-from smart_t_policy import evaluate_trade_decision
+from smart_t_policy import evaluate_trade_decision, intraday_reversal_context
 
 BASE_DIR = Path(__file__).resolve().parent
 STOCK_POOL_CACHE = BASE_DIR / "a_share_pool_cache.json"
@@ -36,7 +36,8 @@ MINUTE_CACHE_DIR = BASE_DIR / "minute_cache"
 SIM_HISTORY_PATH = BASE_DIR / "simulation_history.jsonl"
 ADAPTIVE_STRATEGY_PATH = Path(os.environ.get("ADAPTIVE_STRATEGY_PATH") or BASE_DIR / "adaptive_strategy.json")
 DEFAULT_STRATEGY = {
-    "buy_min_dev": -1.8,
+    "buy_min_dev": -1.5,
+    "normal_buy_min_dev": -2.4,
     "buy_max_dev": -2.8,
     "buy_rebound": 0.45,
     "buy_confirm": 5,
@@ -47,6 +48,7 @@ DEFAULT_STRATEGY = {
     "hold_exit_minutes": 25,
     "min_take_profit_minutes": 25,
     "min_stop_minutes": 8,
+    "opening_min_stop_minutes": 10,
     "fast_take_profit_pct": 1.8,
     "emergency_stop_pct": -1.35,
     "normal_stop_pct": -0.60,
@@ -72,6 +74,9 @@ DEFAULT_STRATEGY = {
     "reverse_t_enabled": 1,
     "trade_end_hm": "14:00",
     "opening_reverse_strict": 0,
+    # Opening probes are only one sixth of the planned T amount.  Fixed
+    # minimum commissions can otherwise consume the whole statistical edge.
+    "opening_max_cycle_cost_pct": 0.65,
     "min_trade_quality": 9,
     "second_confirm_enabled": 1,
     "version": 11,
@@ -81,7 +86,11 @@ SIM_RELAX_CONFIRM = 0
 SIM_DAYS = 1
 SMART_T_PROFILE = "balanced"
 SIM_MODE = "strict"
-SIM_BASE_SHARES = 6000
+SIM_BASE_AMOUNT = 10000.0
+# Non-zero only for legacy/source-level tests that explicitly require a fixed
+# inventory. Normal simulation derives each stock's base shares from its own
+# reference price and SIM_BASE_AMOUNT.
+SIM_BASE_SHARES = 0
 SIM_MARKET_RADAR_SCORE: float | None = None
 SIM_COST_MODEL = TradeCostModel()
 SIM_LEARNED_PARAMS: dict = {}
@@ -130,6 +139,8 @@ class Result:
     fees_yuan: float = 0.0
     position: dict | None = None
     daily_results: tuple[dict, ...] = ()
+    base_amount: float = 0.0
+    base_reference_price: float = 0.0
 
     @property
     def entry_time(self) -> str:
@@ -159,7 +170,7 @@ def _is_reverse_action(action: object) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_SHARES, SIM_MARKET_RADAR_SCORE, SIM_COST_MODEL, SIM_LEARNED_PARAMS
+    global ACTIVE_STRATEGY, SIM_DAYS, SMART_T_PROFILE, SIM_MODE, SIM_BASE_AMOUNT, SIM_BASE_SHARES, SIM_MARKET_RADAR_SCORE, SIM_COST_MODEL, SIM_LEARNED_PARAMS
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -178,30 +189,35 @@ def main(argv: list[str]) -> int:
         except Exception:
             SIM_LEARNED_PARAMS = {}
     sample_size = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 10
-    total_cash = _arg_float(argv, "--cash", 100000.0)
-    per_trade = _arg_float(argv, "--per-trade", 20000.0)
+    legacy_cash = _arg_float(argv, "--cash", 10000.0)
+    SIM_BASE_AMOUNT = max(0.0, _arg_float(argv, "--base-amount", legacy_cash))
+    per_trade = _arg_float(argv, "--per-trade", SIM_BASE_AMOUNT * 0.5)
     days = max(1, min(10, int(_arg_float(argv, "--days", 1.0))))
     SIM_DAYS = days
     SIM_MODE = _arg_value(argv, "--mode", "strict")
     if SIM_MODE not in {"strict", "scan"}:
         SIM_MODE = "strict"
-    SIM_BASE_SHARES = max(0, int(_arg_float(argv, "--base-shares", 6000.0)) // 100 * 100)
+    SIM_BASE_SHARES = max(0, int(_arg_float(argv, "--base-shares", 0.0)) // 100 * 100)
     radar_value = _arg_value(argv, "--market-radar-score", "")
     try:
         SIM_MARKET_RADAR_SCORE = max(0.0, min(100.0, float(radar_value))) if radar_value != "" else None
     except (TypeError, ValueError):
         SIM_MARKET_RADAR_SCORE = None
     SIM_COST_MODEL = TradeCostModel(
-        commission_rate=max(0.0, _arg_float(argv, "--commission-rate", 0.0003)),
-        min_commission=max(0.0, _arg_float(argv, "--min-commission", 5.0)),
+        commission_rate=max(0.0, _arg_float(argv, "--commission-rate", 0.00025)),
+        min_commission=max(0.0, _arg_float(argv, "--min-commission", 0.0)),
         stamp_duty_rate=max(0.0, _arg_float(argv, "--stamp-duty-rate", 0.0005)),
-        transfer_fee_rate=max(0.0, _arg_float(argv, "--transfer-fee-rate", 0.00001)),
+        transfer_fee_rate=max(0.0, _arg_float(argv, "--transfer-fee-rate", 0.0)),
         slippage_bps=max(0.0, _arg_float(argv, "--slippage-bps", 2.0)),
     )
     max_trades = int(_arg_float(argv, "--max-trades", 0.0))
     json_file = _arg_value(argv, "--json-file", "")
     if per_trade <= 0:
-        per_trade = max(total_cash / max(sample_size, 1), 1000.0)
+        per_trade = SIM_BASE_AMOUNT * 0.5
+    per_trade = min(max(0.0, per_trade), SIM_BASE_AMOUNT) if SIM_BASE_AMOUNT > 0 else max(0.0, per_trade)
+    seed = int(_arg_float(argv, "--seed", 0.0))
+    if seed:
+        random.seed(seed)
     custom_stocks = _arg_value(argv, "--stocks", "")
     pool = build_random_pool()
     custom_pool = parse_custom_stock_pool(custom_stocks, pool)
@@ -210,9 +226,12 @@ def main(argv: list[str]) -> int:
         pool = custom_pool
         sample_size = min(max(sample_size, len(custom_pool)), len(custom_pool))
 
-    # Candidate fetching already owns the fallback pool. Expanding the target
-    # again here turned a 10-stock test into up to 120 network requests.
-    scan_size = sample_size
+    # Strict replay measures the untouched random sample. Opportunity scan is
+    # intentionally a broader search: it evaluates more stocks with the same
+    # execution gates and then returns at most the requested result count. It
+    # raises opportunity coverage without pretending every random stock should
+    # trade or loosening Smart-T risk controls.
+    scan_size = _simulation_scan_size(sample_size, SIM_MODE, custom_mode)
     results: List[Result] = []
     minute_map: dict[str, List[Bar]] = {}
     random.shuffle(pool)
@@ -228,7 +247,9 @@ def main(argv: list[str]) -> int:
         print("\u4eca\u65e5\u5206\u65f6\u6570\u636e\u4e0d\u8db3\uff0c\u6682\u65f6\u65e0\u6cd5\u6a21\u62df\u3002")
         return 0
 
-    results = apply_cash_constraints(results, total_cash)
+    # Each stock is an independent replay ledger. Cross-stock cash contention
+    # would incorrectly reject valid positive-T cycles while reverse-T cycles
+    # bypassed the same shared pool.
     results = apply_daily_trade_limit(results, max_trades)
     results = select_display_results(results, sample_size, SIM_MODE)
     traded = [r for r in results if r.action != "\u672a\u89e6\u53d1"]
@@ -238,8 +259,10 @@ def main(argv: list[str]) -> int:
     total_pnl = sum(r.pnl_yuan for r in traded)
     total_gross = sum(r.gross_pnl_yuan for r in traded)
     total_fees = sum(r.fees_yuan for r in traded)
-    ending_cash = total_cash + total_pnl
-    cash_return = total_pnl / total_cash * 100 if total_cash > 0 else 0.0
+    target_base_total = SIM_BASE_AMOUNT * len(results)
+    actual_base_total = sum(max(0.0, r.base_amount) for r in results)
+    ending_cash = actual_base_total + total_pnl
+    cash_return = total_pnl / actual_base_total * 100 if actual_base_total > 0 else 0.0
     win_rate = len(wins) / len(traded) * 100 if traded else 0.0
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -248,16 +271,19 @@ def main(argv: list[str]) -> int:
         print(f"\u8bf4\u660e\uff1a\u6309\u80a1\u7968\u9010\u65e5\u8ba1\u7b97VWAP\u548c\u4e70\u5356\u70b9\uff0c\u6c47\u603b\u771f\u5b9e\u65e5\u5ea6\u51c0\u6536\u76ca\uff0c\u4e0d\u518d\u6311\u9009\u4ee3\u8868\u65e5\u3002")
     else:
         print(f"\u3010\u968f\u673a{len(results)}\u80a1\u5f53\u65e5\u505aT\u6a21\u62df\u3011{today}")
-    print(f"\u8d44\u91d1 {total_cash:,.0f}\u5143  \u5355\u7b14 {per_trade:,.0f}\u5143")
-    print(f"\u56de\u6d4b\u6a21\u5f0f {'\u4e25\u683c\u968f\u673a' if SIM_MODE == 'strict' else '\u673a\u4f1a\u626b\u63cf'}  \u5e95\u4ed3 {SIM_BASE_SHARES}\u80a1  \u53ef\u5356\u4ec5\u9650\u6628\u4ed3")
+    print(f"\u6bcf\u80a1\u5e95\u4ed3 {SIM_BASE_AMOUNT:,.0f}\u5143  \u6bcf\u80a1T\u989d\u5ea6 {per_trade:,.0f}\u5143")
+    print(f"\u5b9e\u9645\u5e95\u4ed3\u603b\u989d {actual_base_total:,.2f}\u5143  \u76ee\u6807\u5e95\u4ed3\u603b\u989d {target_base_total:,.2f}\u5143")
+    print(f"\u56de\u6d4b\u6a21\u5f0f {'\u4e25\u683c\u968f\u673a' if SIM_MODE == 'strict' else '\u673a\u4f1a\u626b\u63cf'}  \u5e95\u4ed3\u6309\u80a1\u7968\u53c2\u8003\u4ef7\u81ea\u52a8\u6362\u7b97  \u53ef\u5356\u4ec5\u9650\u6628\u4ed3")
+    if seed:
+        print(f"\u968f\u673a\u79cd\u5b50 {seed}")
     print(f"智能做T档位 {SMART_T_PROFILE_LABELS[SMART_T_PROFILE]}（正T/反T双向）")
     print(f"\u89e6\u53d1 {len(traded)}/{len(results)}  \u5b8c\u6210T\u5faa\u73af {completed_cycles}\u8f6e  \u80dc\u7387 {win_rate:.1f}%  \u5e73\u5747 {avg:+.2f}%")
     print(f"\u4ea4\u6613\u8d39\u7528 {total_fees:,.2f}\u5143  \u6bdb\u6536\u76ca {total_gross:+,.2f}\u5143")
-    print(f"\u6a21\u62df\u76c8\u4e8f {total_pnl:+,.2f}\u5143  \u8d44\u91d1\u6536\u76ca {cash_return:+.2f}%")
-    print(f"\u6eda\u52a8\u8d44\u91d1 {ending_cash:,.2f}\u5143")
+    print(f"\u6a21\u62df\u76c8\u4e8f {total_pnl:+,.2f}\u5143  \u7ec4\u5408\u6536\u76ca {cash_return:+.2f}%")
+    print(f"\u671f\u672b\u6a21\u62df\u6743\u76ca {ending_cash:,.2f}\u5143")
     print(
         "\u81ea\u9002\u5e94\u7b56\u7565 "
-        f"\u6b63T\u504f\u79bb{ACTIVE_STRATEGY['buy_min_dev']:.2f}%/{ACTIVE_STRATEGY['buy_max_dev']:.2f}% "
+        f"盘中正T偏离{_normal_buy_min_dev(ACTIVE_STRATEGY):.2f}%/{ACTIVE_STRATEGY['buy_max_dev']:.2f}% "
         f"\u786e\u8ba4{int(ACTIVE_STRATEGY['buy_confirm'])} "
         f"\u53cdT\u504f\u79bb{ACTIVE_STRATEGY['sell_min_dev']:.2f}%/{ACTIVE_STRATEGY['sell_max_dev']:.2f}% "
         f"\u786e\u8ba4{int(ACTIVE_STRATEGY['sell_confirm'])}"
@@ -284,11 +310,12 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
     # Keep random tests responsive: scan enough symbols for variety, but do not
     # let slow quote providers hold the UI hostage.
     scan_factor = 2 if days > 1 else 3
-    max_attempts = min(len(pool), max(sample_size * scan_factor, sample_size + 8), 60)
+    max_attempts = min(len(pool), max(sample_size * scan_factor, sample_size + 8), 120)
     candidates = pool[:max_attempts]
     if not candidates:
         return []
     out: list[tuple[Stock, List[Bar]]] = []
+    candidate_rank = {stock: index for index, stock in enumerate(candidates)}
     workers = min(12, max(4, min(sample_size, 30)))
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
     # Batch replay has its own overall deadline.  Each worker therefore uses a
@@ -298,7 +325,7 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
     try:
         deadline = time_module.time() + (12 if days > 1 else 8)
         pending = set(futures)
-        while pending and len(out) < sample_size and time_module.time() < deadline:
+        while pending and time_module.time() < deadline:
             done, pending = concurrent.futures.wait(pending, timeout=0.6, return_when=concurrent.futures.FIRST_COMPLETED)
             for fut in done:
                 stock = futures[fut]
@@ -309,13 +336,28 @@ def fetch_simulation_candidates(pool: List[Stock], sample_size: int, days: int =
                 if len(bars) < 30:
                     continue
                 out.append((stock, bars))
-                if len(out) >= sample_size:
+            if len(out) >= sample_size:
+                selected_ranks = sorted(candidate_rank[stock] for stock, _bars in out)
+                cutoff = selected_ranks[sample_size - 1]
+                # A slow earlier candidate must not be replaced merely because
+                # a later network request completed first. This keeps seeded
+                # replay samples reproducible without waiting for irrelevant
+                # lower-ranked requests.
+                if not any(candidate_rank[futures[fut]] < cutoff for fut in pending):
                     break
         for fut in pending:
             fut.cancel()
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-    return out
+    return sorted(out, key=lambda item: candidate_rank[item[0]])[:sample_size]
+
+
+def _simulation_scan_size(sample_size: int, mode: str, custom_mode: bool = False) -> int:
+    """Return a bounded candidate count without changing the requested rows."""
+    requested = max(1, int(sample_size or 1))
+    if custom_mode or mode != "scan":
+        return requested
+    return min(100, max(requested * 5, requested + 20))
 
 
 def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, days: int) -> Result:
@@ -354,13 +396,14 @@ def simulate_across_days(stock: Stock, bars: List[Bar], trade_amount: float, day
         for date, result in daily_results
         for cycle in result.cycles
     )
-    base_amount = max(trade_amount * max(active_days, 1), 1.0)
+    base_amount = max(latest.base_amount, 1.0)
     return Result(
         stock, f"\u8fd1{len(daily_results)}\u65e5\u6c47\u603b", latest.buy_time, latest.buy_price,
         latest.sell_time, latest.sell_price, net_pnl / base_amount * 100.0, net_pnl,
         trade_amount, latest.shares,
         f"\u8fd1{len(daily_results)}\u65e5\u771f\u5b9e\u805a\u5408\uff1a\u89e6\u53d1{active_days}\u65e5\uff0c\u76c8\u5229{winning_days}\u65e5\uff0c\u6bcf\u65e5\u72ec\u7acb\u6062\u590d\u5e95\u4ed3\u3002\u6700\u8fd1\u65e5{latest_date}\uff1a{latest.reason}",
         all_cycles, gross_pnl, fees, latest.position, daily_payload,
+        latest.base_amount, latest.base_reference_price,
     )
 
 
@@ -396,6 +439,8 @@ def clone_result_with_reason(result: Result, stock: Stock, reason: str) -> Resul
         result.fees_yuan,
         result.position,
         result.daily_results,
+        result.base_amount,
+        result.base_reference_price,
     )
 
 
@@ -513,6 +558,9 @@ def apply_daily_trade_limit(results: List[Result], max_trades: int) -> List[Resu
                     0.0,
                     0,
                     f"超过当日测试交易上限：候选质量{quality}，未计入本次模拟",
+                    position=result.position,
+                    base_amount=result.base_amount,
+                    base_reference_price=result.base_reference_price,
                 )
             )
         else:
@@ -672,6 +720,7 @@ def load_adaptive_strategy() -> dict[str, float]:
         except Exception:
             strategy[key] = default
     strategy["buy_min_dev"] = max(-2.2, min(-0.7, float(strategy["buy_min_dev"])))
+    strategy["normal_buy_min_dev"] = max(-2.8, min(-1.2, float(strategy.get("normal_buy_min_dev", -2.4))))
     strategy["buy_max_dev"] = max(-3.0, min(-1.5, float(strategy["buy_max_dev"])))
     strategy["buy_rebound"] = max(0.15, min(1.2, float(strategy["buy_rebound"])))
     strategy["buy_confirm"] = max(3, min(6, int(strategy["buy_confirm"])))
@@ -682,6 +731,10 @@ def load_adaptive_strategy() -> dict[str, float]:
     strategy["hold_exit_minutes"] = max(15, min(35, int(strategy["hold_exit_minutes"])))
     strategy["min_take_profit_minutes"] = max(15, min(35, int(strategy.get("min_take_profit_minutes", 25))))
     strategy["min_stop_minutes"] = max(5, min(20, int(strategy.get("min_stop_minutes", 8))))
+    strategy["opening_min_stop_minutes"] = max(
+        strategy["min_stop_minutes"],
+        min(20, int(strategy.get("opening_min_stop_minutes", 10))),
+    )
     strategy["fast_take_profit_pct"] = max(1.2, min(3.0, float(strategy.get("fast_take_profit_pct", 1.8))))
     strategy["emergency_stop_pct"] = max(-2.0, min(-1.0, float(strategy.get("emergency_stop_pct", -1.35))))
     strategy["normal_stop_pct"] = max(-1.2, min(-0.45, float(strategy.get("normal_stop_pct", -0.60))))
@@ -718,6 +771,10 @@ def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str,
     out = dict(strategy)
     if profile == "steady":
         out["buy_min_dev"] = min(-2.0, float(out.get("buy_min_dev", -1.8)))
+        # The post-10:00 setup reads ``normal_buy_min_dev`` rather than the
+        # opening threshold above.  Keep the conservative profile deep while
+        # still making the selected profile effective in the real evaluator.
+        out["normal_buy_min_dev"] = min(-2.6, float(out.get("normal_buy_min_dev", -2.4)))
         out["sell_min_dev"] = max(2.0, float(out.get("sell_min_dev", 1.8)))
         out["min_trade_quality"] = max(12, int(out.get("min_trade_quality", 9)))
         out["buy_confirm"] = min(6, max(5, int(out.get("buy_confirm", 5))))
@@ -728,7 +785,11 @@ def apply_smart_t_profile(strategy: dict[str, float], profile: str) -> dict[str,
         # The sensitive profile explicitly trades frequency for selectivity.
         # Other profiles keep the strategy file's real deviation threshold.
         out["buy_min_dev"] = max(-1.3, float(out.get("buy_min_dev", -1.8)))
-        out["sell_min_dev"] = min(1.5, float(out.get("sell_min_dev", 1.8)))
+        # Sensitive is deliberately the least restrictive profile.  The
+        # structural confirmations still gate entry, so relaxing deviation
+        # here does not turn a one-bar fluctuation into a trade.
+        out["normal_buy_min_dev"] = max(-1.2, float(out.get("normal_buy_min_dev", -1.5)))
+        out["sell_min_dev"] = min(1.2, float(out.get("sell_min_dev", 1.5)))
         out["min_trade_quality"] = min(7, int(out.get("min_trade_quality", 9)))
         out["buy_confirm"] = max(3, int(out.get("buy_confirm", 5)) - 1)
         out["sell_confirm"] = max(3, int(out.get("sell_confirm", 6)) - 1)
@@ -777,6 +838,8 @@ def write_json_result(path: str, results: List[Result], minute_map: dict[str, Li
                 "cycles": list(result.cycles),
                 "position": result.position or {},
                 "dailyResults": list(result.daily_results),
+                "baseAmount": result.base_amount,
+                "baseReferencePrice": result.base_reference_price,
                 "prices": [
                     {
                         "time": b.hm,
@@ -1367,17 +1430,66 @@ def _minute_text(total: int) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
+def _base_position_allocation(bars: List[Bar], previous_close: float | None = None) -> tuple[int, float, float, float]:
+    """Return exchange-lot shares, reference price, actual amount and budget."""
+    reference_price = 0.0
+    try:
+        candidate = float(previous_close or 0.0)
+        if candidate > 0 and candidate == candidate:
+            reference_price = candidate
+    except (TypeError, ValueError):
+        reference_price = 0.0
+    if reference_price <= 0:
+        reference_price = next((float(item.price) for item in bars if item.price > 0), 0.0)
+    if reference_price <= 0:
+        return 0, 0.0, 0.0, max(0.0, SIM_BASE_AMOUNT)
+    if SIM_BASE_SHARES > 0:
+        shares = max(0, int(SIM_BASE_SHARES // 100 * 100))
+        actual = shares * reference_price
+        return shares, reference_price, actual, actual
+    budget = max(0.0, float(SIM_BASE_AMOUNT or 0.0))
+    shares = max(0, int(budget / reference_price / 100) * 100)
+    actual = shares * reference_price
+    return shares, reference_price, actual, budget
+
+
+def _opening_layer_share_cap(base_shares: int, opening_legs_used: int) -> int:
+    """Cap each 09:35-10:00 probe and the two probes together at one third."""
+    if opening_legs_used < 0 or opening_legs_used >= 2:
+        return 0
+    base_shares = max(0, int(base_shares // 100 * 100))
+    total_cap = int(base_shares / 3 / 100) * 100
+    if total_cap < 100:
+        return 0
+    per_leg = int(base_shares / 6 / 100) * 100
+    per_leg = max(100, per_leg)
+    remaining = max(0, total_cap - opening_legs_used * per_leg)
+    return max(0, min(per_leg, remaining) // 100 * 100)
+
+
 def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_close: float | None = None) -> Result:
     """Run several independent closed T cycles while keeping full-day VWAP."""
     bars = _sanitize_bars(bars)
     if not bars:
         return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "分钟行情未通过数据质量检查")
+    base_shares, base_reference_price, base_amount, base_budget = _base_position_allocation(bars, previous_close)
+    position = PositionState(
+        base_shares,
+        base_budget=base_budget,
+        base_reference_price=base_reference_price,
+    )
+    if base_shares < 100:
+        return Result(
+            stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0,
+            f"每股底仓金额不足一手：参考价{base_reference_price:.2f}元，预算{base_budget:,.0f}元",
+            position=position.snapshot(), base_amount=base_amount,
+            base_reference_price=base_reference_price,
+        )
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     limit = max(1, min(5, int(strategy.get("max_daily_cycles", 3))))
     cooldown = max(3, min(30, int(strategy.get("cycle_cooldown_minutes", 10))))
     cycles: list[Result] = []
     global ACTIVE_POSITION
-    position = PositionState(SIM_BASE_SHARES)
     ACTIVE_POSITION = position
     entry_after = ""
     opening_legs_used = 0
@@ -1413,19 +1525,25 @@ def simulate_one(stock: Stock, bars: List[Bar], trade_amount: float, previous_cl
             break
         entry_after = _minute_text(end_minute + cooldown)
     if not cycles:
-        return last_result or Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "无有效循环")
+        result = last_result or Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, "无有效循环")
+        return replace(
+            result,
+            position=result.position or position.snapshot(),
+            base_amount=base_amount,
+            base_reference_price=base_reference_price,
+        )
     payload = tuple(_cycle_dict(item) for item in cycles)
     if len(cycles) == 1:
         item = cycles[0]
-        return Result(stock, item.action, item.buy_time, item.buy_price, item.sell_time, item.sell_price, item.pnl_pct, item.pnl_yuan, item.trade_amount, item.shares, item.reason, payload, item.gross_pnl_yuan, item.fees_yuan, item.position)
+        return Result(stock, item.action, item.buy_time, item.buy_price, item.sell_time, item.sell_price, item.pnl_pct, item.pnl_yuan, item.trade_amount, item.shares, item.reason, payload, item.gross_pnl_yuan, item.fees_yuan, item.position or position.snapshot(), (), base_amount, base_reference_price)
     total_money = sum(item.pnl_yuan for item in cycles)
     total_gross = sum(item.gross_pnl_yuan for item in cycles)
     total_fees = sum(item.fees_yuan for item in cycles)
-    base_amount = max((item.trade_amount for item in cycles), default=trade_amount)
+    max_trade_amount = max((item.trade_amount for item in cycles), default=trade_amount)
     total_pct = total_money / base_amount * 100.0 if base_amount > 0 else 0.0
     first, last = cycles[0], cycles[-1]
     directions = " / ".join(item.action for item in cycles)
-    return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, base_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}；底仓已恢复", payload, total_gross, total_fees, position.snapshot())
+    return Result(stock, f"智能做T{len(cycles)}轮", first.buy_time, first.buy_price, last.sell_time, last.sell_price, total_pct, total_money, max_trade_amount, min(item.shares for item in cycles), f"完成{len(cycles)}轮闭环：{directions}；底仓已恢复", payload, total_gross, total_fees, position.snapshot(), (), base_amount, base_reference_price)
 
 
 def _shared_policy_allows(
@@ -1490,6 +1608,28 @@ def _shared_policy_allows(
         max_structural_risk_pct=float(strategy.get("max_structural_risk_pct", 0.60)),
     )
     return bool(decision.get("confirmed"))
+
+
+def _opening_order_is_economical(stock: Stock, price: float, trade_amount: float) -> bool:
+    """Reject a staged opening order whose round-trip friction is excessive.
+
+    The 09:35-10:00 plan deliberately starts with one sixth.  On small T
+    budgets that can become a one-lot order where the configured commission,
+    stamp duty and slippage dominate the expected swing.  The
+    check is based only on executable amount and the configured cost model.
+    """
+    if price <= 0 or trade_amount <= 0:
+        return False
+    shares = int(trade_amount / price / 100) * 100
+    if shares < 100:
+        return False
+    amount = shares * price
+    round_trip_cost_pct = (
+        SIM_COST_MODEL.fee("buy", amount, stock.code)
+        + SIM_COST_MODEL.fee("sell", amount, stock.code)
+    ) / amount * 100.0 + SIM_COST_MODEL.slippage_bps / 100.0 * 2.0
+    strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
+    return round_trip_cost_pct <= float(strategy.get("opening_max_cycle_cost_pct", 0.65))
 
 
 def _candidate_structural_stop(
@@ -1629,7 +1769,14 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
     if False and day_amp < 2.0:
         return Result(stock, "未触发", "--:--", 0.0, "--:--", 0.0, 0.0, 0.0, 0.0, 0, f"日内振幅{day_amp:.1f}%，空间不足2%")
 
-    position = position or ACTIVE_POSITION or PositionState(SIM_BASE_SHARES)
+    position = position or ACTIVE_POSITION
+    if position is None:
+        base_shares, base_reference_price, _base_amount, base_budget = _base_position_allocation(bars, previous_close)
+        position = PositionState(
+            base_shares,
+            base_budget=base_budget,
+            base_reference_price=base_reference_price,
+        )
     total_vol = 0.0
     total_amt = 0.0
     buy: Optional[Bar] = None
@@ -1690,8 +1837,15 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             if not opening_trial and observed_range < float(strategy.get("min_observed_range_pct", 0.65)):
                 continue
             opening_wait = gate_state in {"PENDING_CONFIRMATION", "WAIT_DATA"} and bar.hm < "09:45"
-            allow_buy = not opening_wait and not (gate_state == "CONFIRMED" and preference != "BUY_FIRST")
-            allow_sell = not opening_wait and not (gate_state == "CONFIRMED" and preference != "SELL_FIRST")
+            # Auction bias is an opening plan, not an all-day direction lock.
+            # After 10:00 the selected Smart-T profile must be free to react to
+            # a new, independently confirmed intraday structure.
+            allow_buy = not opening_wait and not (
+                opening_trial and gate_state == "CONFIRMED" and preference != "BUY_FIRST"
+            )
+            allow_sell = not opening_wait and not (
+                opening_trial and gate_state == "CONFIRMED" and preference != "SELL_FIRST"
+            )
             if opening_trial:
                 # The opening layer is shared by every profile.  It must follow
                 # a confirmed auction direction and uses only one sixth size;
@@ -1704,7 +1858,7 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 else:
                     buy_setup = gate_state == "CONFIRMED" and preference == "BUY_FIRST" and _is_opening_buy_add_setup(bars, idx, bar, avg)
                     sell_setup = gate_state == "CONFIRMED" and preference == "SELL_FIRST" and _is_opening_reverse_add_setup(bars, idx, bar, avg)
-                opening_share_cap = max(100, int(position.base_shares / 6 / 100) * 100)
+                opening_share_cap = _opening_layer_share_cap(position.base_shares, opening_legs_used)
                 opening_amount_cap = opening_share_cap * bar.price
                 full_round_cap = float(planned_trade_amount or trade_amount)
                 candidate_trade_amount = _executable_trade_budget(
@@ -1717,6 +1871,10 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
                 sell_setup = _is_better_reverse_t_setup(bars, idx, bar, dev, highs, avg_prices, volumes)
                 candidate_trade_amount = _executable_trade_budget(trade_amount, bar.price, trade_amount)
             if candidate_trade_amount <= 0:
+                buy_setup = sell_setup = False
+            elif opening_trial and not _opening_order_is_economical(
+                stock, bar.price, candidate_trade_amount
+            ):
                 buy_setup = sell_setup = False
             # QuantBrain's unified policy gate already evaluates causal RSI,
             # volume ratio and learned score. Do not apply a second hard RSI
@@ -1757,6 +1915,8 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             sell_dev = (bar.price - avg) / avg * 100.0
             hold_limit = int(strategy.get("hold_exit_minutes", 25))
             min_stop = int(strategy.get("min_stop_minutes", 8))
+            if entry_opening:
+                min_stop = max(min_stop, int(strategy.get("opening_min_stop_minutes", 10)))
             emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
             normal_stop = float(strategy.get("normal_stop_pct", -0.60))
             min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
@@ -1808,6 +1968,8 @@ def _simulate_one_cycle(stock: Stock, bars: List[Bar], trade_amount: float, prev
             buy_dev = (bar.price - avg) / avg * 100.0
             hold_limit = int(strategy.get("hold_exit_minutes", 25))
             min_stop = int(strategy.get("min_stop_minutes", 8))
+            if entry_opening:
+                min_stop = max(min_stop, int(strategy.get("opening_min_stop_minutes", 10)))
             emergency_stop = float(strategy.get("emergency_stop_pct", -1.35))
             normal_stop = float(strategy.get("normal_stop_pct", -0.60))
             min_take_profit = int(strategy.get("min_take_profit_minutes", 25))
@@ -1903,15 +2065,17 @@ def _no_trigger_reason(bars: List[Bar], day_low: float, day_high: float) -> str:
 
     sm = _smart_money_reason(bars)
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
-    buy_ok = best_buy["dev"] <= float(strategy["buy_min_dev"])
+    buy_ok = best_buy["dev"] <= _normal_buy_min_dev(strategy)
     sell_ok = best_sell["dev"] >= float(strategy["sell_min_dev"])
     notes = [f"日内振幅{amp:.1f}%"]
     if not buy_ok and not sell_ok:
         notes.append(f"VWAP偏离不足：低位{best_buy['dev']:.2f}%，高位{best_sell['dev']:.2f}%")
-    elif buy_ok and best_buy["score"] < 2:
-        notes.append(f"低吸候选确认不足：{best_buy['hm']} 偏离{best_buy['dev']:.2f}%，拐头确认{best_buy['score']}/2")
-    elif sell_ok and best_sell["score"] < 2:
-        notes.append(f"反T候选确认不足：{best_sell['hm']} 偏离{best_sell['dev']:.2f}%，回落确认{best_sell['score']}/2")
+    elif buy_ok and best_buy["score"] < _setup_candidate_score(str(best_buy["hm"])):
+        required = _setup_candidate_score(str(best_buy["hm"]))
+        notes.append(f"低吸候选确认不足：{best_buy['hm']} 偏离{best_buy['dev']:.2f}%，拐头确认{best_buy['score']}/{required}")
+    elif sell_ok and best_sell["score"] < _setup_candidate_score(str(best_sell["hm"])):
+        required = _setup_candidate_score(str(best_sell["hm"]))
+        notes.append(f"反T候选确认不足：{best_sell['hm']} 偏离{best_sell['dev']:.2f}%，回落确认{best_sell['score']}/{required}")
     else:
         notes.append("有波动但买卖闭合空间或风控条件不足")
     notes.append(sm)
@@ -2008,10 +2172,13 @@ def _is_better_buy_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not _is_low_buy_window(bar.hm):
         return False
+    contextual = _contextual_reversal_setup(bars, idx, avg_prices, "BUY_FIRST")
+    if contextual:
+        return True
     # Respect the selected strategy's actual threshold.  The former -0.65%
     # floor silently overrode user/adaptive settings and admitted noise whose
     # available VWAP space could not cover fees plus structural risk.
-    buy_min_dev = float(strategy["buy_min_dev"])
+    buy_min_dev = _normal_buy_min_dev(strategy)
     if dev > buy_min_dev or dev <= float(strategy["buy_max_dev"]):
         return False
     if not _vwap_reclaiming(bars, idx, avg_prices, max(0.30, float(strategy.get("vwap_reclaim_pct", 0.35)) * 0.75)):
@@ -2019,7 +2186,11 @@ def _is_better_buy_setup(
     if not _vwap_not_falling(avg_prices):
         return False
     vol_ratio = _volume_ratio(volumes)
-    if vol_ratio > 4.8:
+    # A >=3x bar is an event, not a normal pullback.  It may enter only through
+    # the contextual exhaustion branch above, after two right-side bars and a
+    # VWAP repair; otherwise a falling continuation is easily mistaken for a
+    # bottom.
+    if vol_ratio >= 3.0:
         return False
     day_low = min(lows) if lows else bar.price
     rebound = (bar.price - day_low) / day_low * 100.0 if day_low > 0 else 0.0
@@ -2031,6 +2202,8 @@ def _is_better_buy_setup(
         if drop10 <= -2.2:
             return False
     prices = [b.price for b in bars]
+    if not _medium_term_direction_supported(prices, avg_prices, idx, "BUY_FIRST"):
+        return False
     recent_resistance = max(prices[max(0, idx - 5) : idx])
     if bar.price < recent_resistance:
         return False
@@ -2058,6 +2231,13 @@ def _is_better_buy_setup(
     return _buy_confirmation_score(bars, idx, lows, volumes) >= _setup_candidate_score(bar.hm)
 
 
+def _normal_buy_min_dev(strategy: dict[str, float]) -> float:
+    """Keep post-10:00 positive-T entries in the validated deep-pullback band."""
+    configured = float(strategy.get("buy_min_dev", -1.8))
+    safety_floor = float(strategy.get("normal_buy_min_dev", -2.4))
+    return min(configured, safety_floor)
+
+
 def _is_better_reverse_t_setup(
     bars: List[Bar],
     idx: int,
@@ -2070,6 +2250,9 @@ def _is_better_reverse_t_setup(
     strategy = ACTIVE_STRATEGY or DEFAULT_STRATEGY
     if not int(strategy.get("reverse_t_enabled", 0)):
         return False
+    contextual = _contextual_reversal_setup(bars, idx, avg_prices, "SELL_FIRST")
+    if contextual:
+        return True
     # Do not silently relax the real strategy threshold to +0.65%.
     sell_min_dev = float(strategy["sell_min_dev"])
     if dev < sell_min_dev or dev >= float(strategy["sell_max_dev"]):
@@ -2085,6 +2268,8 @@ def _is_better_reverse_t_setup(
     if not _vwap_flat_or_down(avg_prices):
         return False
     vol_ratio = _volume_ratio(volumes)
+    if vol_ratio >= 3.0:
+        return False
     min_sell_vol = 1.25 if _is_opening_first_half(bar.hm) else 1.0
     if vol_ratio < min_sell_vol or vol_ratio > 5.5:
         return False
@@ -2100,6 +2285,8 @@ def _is_better_reverse_t_setup(
     if bar.price >= min(bars[idx - 1].price, bars[idx - 2].price):
         return False
     prices = [b.price for b in bars]
+    if not _medium_term_direction_supported(prices, avg_prices, idx, "SELL_FIRST"):
+        return False
     recent_support = min(prices[max(0, idx - 5) : idx])
     if bar.price > recent_support:
         return False
@@ -2111,6 +2298,56 @@ def _is_better_reverse_t_setup(
     ):
         return False
     return _sell_confirmation_score(bars, idx, highs, volumes) >= _setup_candidate_score(bar.hm)
+
+
+def _contextual_reversal_setup(
+    bars: List[Bar],
+    idx: int,
+    avg_prices: List[float],
+    direction: str,
+) -> bool:
+    """Submit confirmed impulse/climax exhaustion to the shared policy gate.
+
+    This is the exceptional-event entrance, so a normal 3x volume bar is not
+    enough on its own.  Require either a price impulse exhaustion or super
+    volume, then wait for two right-side bars and a measurable VWAP repair.
+    The final decision still checks regime, spread, fees and reward/risk.
+    """
+    if idx < 11 or len(avg_prices) < 3:
+        return False
+    current = bars[idx].price
+    average = avg_prices[-1]
+    points = [
+        {
+            "time": item.hm,
+            "price": item.price,
+            "volumeDelta": item.volume_lot,
+            "amountDelta": item.amount_yuan,
+        }
+        for item in bars[: idx + 1]
+    ]
+    context = intraday_reversal_context(
+        points,
+        current=current,
+        high=max(item.price for item in bars[: idx + 1]),
+        low=min(item.price for item in bars[: idx + 1]),
+    )
+    if context["direction"] != direction:
+        return False
+    volume = context.get("volume") or {}
+    impulse = context.get("impulse") or {}
+    super_volume = volume.get("tier") in {"SUPER_5X", "EXTREME_8X"}
+    if direction == "BUY_FIRST":
+        impulse_exhausted = impulse.get("phase") == "BOTTOM_IMPULSE_EXHAUSTION"
+        right_side_turn = current > bars[idx - 1].price >= bars[idx - 2].price
+        vwap_orientation = current < average and avg_prices[-1] >= avg_prices[-3]
+        vwap_repair = _vwap_reclaiming(bars, idx, avg_prices, 0.30)
+    else:
+        impulse_exhausted = impulse.get("phase") == "TOP_IMPULSE_EXHAUSTION"
+        right_side_turn = current < bars[idx - 1].price <= bars[idx - 2].price
+        vwap_orientation = current > average and avg_prices[-1] <= avg_prices[-3]
+        vwap_repair = _vwap_fading(bars, idx, avg_prices, 0.30)
+    return (super_volume or impulse_exhausted) and right_side_turn and vwap_orientation and vwap_repair
 
 
 def _is_opening_buy_setup(
@@ -2126,18 +2363,17 @@ def _is_opening_buy_setup(
         return False
     prices = [b.price for b in bars[: idx + 1]]
     open_price = prices[0]
-    # Low-gap first leg: five minutes without a fresh low, a higher secondary
-    # low, and two completed one-minute bars above both open and VWAP.
-    recent_low = min(prices[max(0, idx - 4): idx + 1])
-    earlier_low = min(prices[: max(1, idx - 4)])
-    no_fresh_low = recent_low > earlier_low * 1.0005
-    higher_secondary_low = min(prices[-3:]) > earlier_low * 1.0005
+    # Low-gap first leg: the last three minutes hold above the already observed
+    # low, two completed bars reclaim both open and VWAP, and the current bar
+    # turns up.  Equality is intentional: a double bottom is valid right-side
+    # confirmation and should not require an arbitrary 0.05% higher low.
+    held_observed_low = min(prices[-3:]) >= min(prices[:-3])
     two_above = all(item.price > open_price and item.price > avg for item in bars[idx - 1: idx + 1])
-    previous_volume = sum(max(item.volume_lot, 0.0) for item in bars[:idx])
-    previous_amount = sum(max(item.amount_yuan, 0.0) for item in bars[:idx])
-    previous_vwap = previous_amount / (previous_volume * 100.0) if previous_volume > 0 else avg
-    vwap_rising = avg >= previous_vwap * 0.9995
-    return no_fresh_low and higher_secondary_low and two_above and vwap_rising and _volume_ratio(volumes) >= 0.70
+    # Standing above VWAP is not enough if the candidate minute is already
+    # rolling over.  Enter only on the renewed upward turn; this prevents a
+    # low-gap rebound from being bought after its first peak has passed.
+    renewed_upturn = bar.price > bars[idx - 1].price
+    return held_observed_low and two_above and renewed_upturn and _volume_ratio(volumes) >= 0.50
 
 
 def _second_buy_confirm(bars: List[Bar], idx: int) -> bool:
@@ -2180,15 +2416,16 @@ def _is_opening_reverse_setup(
         return False
     prices = [b.price for b in bars[: idx + 1]]
     open_price = prices[0]
-    # High-gap first leg: three minutes cannot make a new high (or a lower
-    # secondary high), two closes under VWAP, then a failed VWAP retest or a
-    # close below the opening price.
-    high_before = max(prices[: max(1, idx - 2)])
-    no_new_high = max(prices[-3:]) < high_before * 0.9995
-    lower_secondary_high = max(prices[-2:]) < max(prices[-5:-2]) * 0.9995
+    # High-gap first leg mirrors the buy side: the last three minutes cannot
+    # exceed the observed peak, two bars remain below VWAP, and the latest bar
+    # turns down after a failed VWAP/open retest.  A flat double top is valid.
+    held_observed_high = max(prices[-3:]) <= max(prices[:-3])
     two_below_vwap = all(item.price < avg for item in bars[idx - 1: idx + 1])
     failed_retest = max(prices[-3:]) < avg or bar.price < open_price
-    return (no_new_high or lower_secondary_high) and two_below_vwap and failed_retest and _volume_ratio(volumes) >= 0.70
+    # A price below the open can still be in the middle of a rebound.  The
+    # reverse-T order is valid only after that rebound turns down again.
+    renewed_downturn = bar.price < bars[idx - 1].price
+    return held_observed_high and two_below_vwap and failed_retest and renewed_downturn and _volume_ratio(volumes) >= 0.50
 
 
 def _is_opening_buy_add_setup(bars: List[Bar], idx: int, bar: Bar, avg: float) -> bool:
@@ -2391,6 +2628,32 @@ def _vwap_not_falling(avg_prices: List[float]) -> bool:
     if not recent or not earlier:
         return False
     return (sum(recent) / len(recent)) >= (sum(earlier) / len(earlier)) * 0.998
+
+
+def _vwap_medium_term_stable(avg_prices: List[float], direction: str) -> bool:
+    """Keep a short bounce/fade from overriding the wider intraday slope."""
+    if len(avg_prices) < 16 or avg_prices[-16] <= 0:
+        return False
+    change_pct = (avg_prices[-1] - avg_prices[-16]) / avg_prices[-16] * 100.0
+    if direction == "BUY_FIRST":
+        return change_pct >= -0.20
+    if direction == "SELL_FIRST":
+        return change_pct <= 0.20
+    return False
+
+
+def _medium_term_direction_supported(
+    prices: List[float], avg_prices: List[float], idx: int, direction: str
+) -> bool:
+    """Confirm that a five-minute turn is supported by the wider intraday path."""
+    if idx < 30:
+        return False
+    momentum_30 = _roc(prices, idx, 30)
+    if direction == "BUY_FIRST" and momentum_30 < 0.30:
+        return False
+    if direction == "SELL_FIRST" and momentum_30 > -0.30:
+        return False
+    return _vwap_medium_term_stable(avg_prices, direction)
 
 
 def _vwap_not_rising_too_fast(avg_prices: List[float]) -> bool:

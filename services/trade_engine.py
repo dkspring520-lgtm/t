@@ -9,10 +9,10 @@ from dataclasses import dataclass
 class TradeCostModel:
     """A-share order costs; rates are configurable per simulation run."""
 
-    commission_rate: float = 0.0003
-    min_commission: float = 5.0
+    commission_rate: float = 0.00025
+    min_commission: float = 0.0
     stamp_duty_rate: float = 0.0005
-    transfer_fee_rate: float = 0.00001
+    transfer_fee_rate: float = 0.0
     slippage_bps: float = 2.0
 
     def execution_price(self, price: float, side: str) -> float:
@@ -35,6 +35,8 @@ class PositionState:
     completed_cycles: int = 0
     sold_today: int = 0
     bought_today: int = 0
+    base_budget: float = 0.0
+    base_reference_price: float = 0.0
 
     def __post_init__(self) -> None:
         self.base_shares = max(0, int(self.base_shares // 100 * 100))
@@ -52,9 +54,12 @@ class PositionState:
         self.bought_today += shares
         self.completed_cycles += 1
 
-    def snapshot(self) -> dict[str, int | str]:
+    def snapshot(self) -> dict[str, int | float | str]:
         return {
             "baseShares": self.base_shares,
+            "baseBudget": round(max(0.0, float(self.base_budget or 0.0)), 2),
+            "baseReferencePrice": round(max(0.0, float(self.base_reference_price or 0.0)), 4),
+            "baseAmount": round(self.base_shares * max(0.0, float(self.base_reference_price or 0.0)), 2),
             "sellableShares": int(self.sellable_shares or 0),
             "soldToday": self.sold_today,
             "boughtToday": self.bought_today,

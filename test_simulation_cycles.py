@@ -6,6 +6,65 @@ import simulate_t_random as sim
 
 
 class SimulationCycleTests(unittest.TestCase):
+    def _context_bars(self, prices):
+        return [
+            sim.Bar(f"10:{index:02d}", price, 1000.0, price * 100000.0, "2026-07-10")
+            for index, price in enumerate(prices)
+        ]
+
+    def test_plain_three_x_volume_cannot_bypass_normal_entry_confirmation(self):
+        bars = self._context_bars([10.0] * 6 + [9.92, 9.91, 9.90, 9.92, 9.94, 9.96])
+        context = {
+            "direction": "BUY_FIRST",
+            "quality": "STRONG",
+            "volume": {"tier": "SPIKE_3X", "phase": "BOTTOM_EXHAUSTION"},
+            "impulse": {"phase": "NONE"},
+        }
+        with patch.object(sim, "intraday_reversal_context", return_value=context):
+            self.assertFalse(sim._contextual_reversal_setup(bars, 11, [10.0] * 12, "BUY_FIRST"))
+
+    def test_super_volume_requires_two_right_side_bars_and_vwap_repair(self):
+        context = {
+            "direction": "BUY_FIRST",
+            "quality": "EXTREME",
+            "volume": {"tier": "SUPER_5X", "phase": "BOTTOM_EXHAUSTION"},
+            "impulse": {"phase": "NONE"},
+        }
+        confirmed = self._context_bars([10.0] * 6 + [9.92, 9.91, 9.90, 9.92, 9.94, 9.96])
+        one_bar_only = self._context_bars([10.0] * 6 + [9.92, 9.91, 9.90, 9.94, 9.92, 9.96])
+        with patch.object(sim, "intraday_reversal_context", return_value=context):
+            self.assertTrue(sim._contextual_reversal_setup(confirmed, 11, [10.0] * 12, "BUY_FIRST"))
+            self.assertFalse(sim._contextual_reversal_setup(one_bar_only, 11, [10.0] * 12, "BUY_FIRST"))
+
+    def test_medium_term_vwap_slope_blocks_a_short_countertrend_bounce(self):
+        falling = [10.0 - index * 0.0015 for index in range(16)]
+        rising = [10.0 + index * 0.0015 for index in range(16)]
+        self.assertFalse(sim._vwap_medium_term_stable(falling, "BUY_FIRST"))
+        self.assertTrue(sim._vwap_medium_term_stable(falling, "SELL_FIRST"))
+        self.assertTrue(sim._vwap_medium_term_stable(rising, "BUY_FIRST"))
+        self.assertFalse(sim._vwap_medium_term_stable(rising, "SELL_FIRST"))
+
+    def test_normal_positive_t_uses_deep_pullback_floor(self):
+        strategy = dict(sim.DEFAULT_STRATEGY)
+        strategy["buy_min_dev"] = -1.3
+        strategy["normal_buy_min_dev"] = -2.4
+        self.assertEqual(sim._normal_buy_min_dev(strategy), -2.4)
+        strategy["buy_min_dev"] = -2.6
+        self.assertEqual(sim._normal_buy_min_dev(strategy), -2.6)
+
+    def test_profiles_change_the_effective_post_1000_buy_floor(self):
+        base = dict(sim.DEFAULT_STRATEGY)
+        floors = {
+            name: sim._normal_buy_min_dev(sim.apply_smart_t_profile(base, name))
+            for name in ("steady", "balanced", "sensitive", "quantbrain")
+        }
+        self.assertEqual(floors["steady"], -2.6)
+        self.assertEqual(floors["balanced"], -2.4)
+        self.assertEqual(floors["sensitive"], -1.3)
+        self.assertEqual(floors["quantbrain"], -2.4)
+        self.assertLess(floors["steady"], floors["balanced"])
+        self.assertLess(floors["balanced"], floors["sensitive"])
+
     def test_reward_floor_matches_entry_structural_risk(self):
         strategy = dict(sim.DEFAULT_STRATEGY)
         strategy["min_reward_risk_ratio"] = 1.25
@@ -123,6 +182,11 @@ class SimulationCycleTests(unittest.TestCase):
         self.assertTrue(sim._is_opening_trade_window("10:00"))
         self.assertFalse(sim._is_opening_trade_window("10:01"))
 
+    def test_opening_probe_has_a_longer_minimum_stop_window(self):
+        strategy = sim.load_adaptive_strategy()
+        self.assertEqual(strategy["min_stop_minutes"], 8)
+        self.assertEqual(strategy["opening_min_stop_minutes"], 10)
+
     def test_opening_setup_is_not_blocked_by_generic_intraday_range(self):
         bars = []
         for index in range(11):
@@ -138,10 +202,57 @@ class SimulationCycleTests(unittest.TestCase):
             sim._simulate_one_cycle(self.stock, bars, 20000.0, previous_close=10.4)
         self.assertTrue(opening_setup.called)
 
-    def test_small_trade_profit_target_covers_cost_and_slippage(self):
+    def test_small_trade_profit_target_uses_no_minimum_commission_costs(self):
         sim.SIM_COST_MODEL = sim.TradeCostModel()
         floor = sim._minimum_profitable_move_pct(self.stock, 10.0, 1000.0)
-        self.assertGreater(floor, 1.0)
+        self.assertAlmostEqual(floor, 0.22, places=4)
+
+    def test_small_opening_probe_is_economical_without_minimum_commission(self):
+        sim.SIM_COST_MODEL = sim.TradeCostModel()
+        sim.ACTIVE_STRATEGY = dict(sim.DEFAULT_STRATEGY)
+        self.assertTrue(sim._opening_order_is_economical(self.stock, 7.0, 700.0))
+        self.assertTrue(sim._opening_order_is_economical(self.stock, 30.0, 3000.0))
+
+    def test_minimum_commission_remains_configurable_for_other_accounts(self):
+        sim.SIM_COST_MODEL = sim.TradeCostModel(min_commission=5.0)
+        sim.ACTIVE_STRATEGY = dict(sim.DEFAULT_STRATEGY)
+        self.assertFalse(sim._opening_order_is_economical(self.stock, 7.0, 700.0))
+
+    def test_opening_buy_does_not_enter_while_rebound_is_rolling_over(self):
+        prices = [17.98, 18.14, 18.23, 18.11, 18.14, 18.16, 18.25, 18.19, 18.16, 18.19, 18.39, 18.45, 18.51, 18.47, 18.42]
+        bars = [
+            sim.Bar(f"{(571 + index) // 60:02d}:{(571 + index) % 60:02d}", price, 1000.0, price * 100000.0)
+            for index, price in enumerate(prices)
+        ]
+        average = sum(item.amount_yuan for item in bars) / (sum(item.volume_lot for item in bars) * 100.0)
+        self.assertFalse(sim._is_opening_buy_setup(bars, len(bars) - 1, bars[-1], average, prices, [1000.0] * len(bars)))
+
+    def test_opening_buy_accepts_current_turn_after_two_bar_reclaim(self):
+        prices = [18.10, 18.00, 17.95, 18.02, 18.08, 18.12, 18.16, 18.20, 18.24, 18.29, 18.35, 18.33, 18.34]
+        bars = [
+            sim.Bar(f"{(570 + index) // 60:02d}:{(570 + index) % 60:02d}", price, 1000.0, price * 100000.0)
+            for index, price in enumerate(prices)
+        ]
+        average = 18.10
+        self.assertTrue(sim._is_opening_buy_setup(bars, len(bars) - 1, bars[-1], average, prices, [1000.0] * len(bars)))
+
+    def test_opening_reverse_does_not_sell_during_vwap_rebound(self):
+        prices = [35.22, 34.80, 34.64, 34.46, 34.41, 34.65, 34.58, 34.57, 34.70, 34.84, 34.72, 34.78, 34.97, 35.00, 34.84, 34.79, 34.68, 34.70, 34.68, 34.79, 34.64, 34.66, 34.67, 34.62, 34.69]
+        bars = [
+            sim.Bar(f"{(571 + index) // 60:02d}:{(571 + index) % 60:02d}", price, 1000.0, price * 100000.0)
+            for index, price in enumerate(prices)
+        ]
+        average = sum(item.amount_yuan for item in bars) / (sum(item.volume_lot for item in bars) * 100.0)
+        self.assertFalse(sim._is_opening_reverse_setup(bars, len(bars) - 1, bars[-1], average, prices, [1000.0] * len(bars)))
+
+    def test_opening_reverse_accepts_current_turn_after_two_bars_below_vwap(self):
+        prices = [34.20, 34.45, 34.60, 34.72, 34.80, 34.77, 34.72, 34.68, 34.63, 34.59, 34.55, 34.57, 34.56]
+        bars = [
+            sim.Bar(f"{(570 + index) // 60:02d}:{(570 + index) % 60:02d}", price, 1000.0, price * 100000.0)
+            for index, price in enumerate(prices)
+        ]
+        average = 34.70
+        self.assertTrue(sim._is_opening_reverse_setup(bars, len(bars) - 1, bars[-1], average, prices, [1000.0] * len(bars)))
 
     def test_one_lot_never_exceeds_single_round_budget(self):
         self.assertEqual(sim._executable_trade_budget(20000.0, 620.0, 20000.0), 0.0)
@@ -177,8 +288,20 @@ class SimulationCycleTests(unittest.TestCase):
         self.assertLessEqual(result.buy_time, "14:30")
 
     def test_low_gap_opening_strategy_reaches_a_real_cycle(self):
-        prices = [9.60, 9.52, 9.50, 9.54, 9.58, 9.62, 9.68, 9.74, 9.82, 9.91, 10.02, 10.08]
-        prices.extend([10.10 + index * 0.012 for index in range(24)])
+        prices = [9.60, 9.30]
+        price = 9.30
+        for _index in range(9):
+            price += 0.08
+            prices.append(round(price, 2))
+            price -= 0.05
+            prices.append(round(price, 2))
+        for _index in range(12):
+            price += 0.05
+            prices.append(round(price, 2))
+            price += 0.03
+            prices.append(round(price, 2))
+            price -= 0.02
+            prices.append(round(price, 2))
         bars = []
         for index, price in enumerate(prices):
             minute = 9 * 60 + 30 + index
@@ -192,8 +315,14 @@ class SimulationCycleTests(unittest.TestCase):
         self.assertTrue(result.cycles)
 
     def test_high_gap_opening_strategy_reaches_a_real_cycle(self):
-        prices = [10.40, 10.52, 10.60, 10.58, 10.54, 10.48, 10.40, 10.32, 10.24, 10.15, 10.08, 10.00]
-        prices.extend([9.98 - index * 0.012 for index in range(24)])
+        # Realistic high-gap reversal: the first ten minutes retain enough
+        # two-way trading to avoid selling an already exhausted straight-line
+        # drop, followed by two consecutive lower closes under VWAP.
+        prices = [
+            10.40, 10.55, 10.65, 10.58, 10.63, 10.60, 10.62, 10.58,
+            10.60, 10.55, 10.58, 10.54, 10.57, 10.53, 10.50, 10.47,
+            10.44, 10.41, 10.38, 10.35, 10.38, 10.42, 10.46,
+        ]
         bars = []
         for index, price in enumerate(prices):
             minute = 9 * 60 + 30 + index

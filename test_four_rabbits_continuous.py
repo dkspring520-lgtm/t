@@ -102,6 +102,12 @@ class FourRabbitsContinuousTests(unittest.TestCase):
         state = four_rabbits._default_state()
         self.assertEqual(state["intervalMinutes"], 5)
 
+    def test_curriculum_moves_from_loose_to_strict(self):
+        stages = [four_rabbits._curriculum_stage(index) for index in range(3)]
+        self.assertEqual([stage["profile"] for stage in stages], ["sensitive", "balanced", "quantbrain"])
+        self.assertEqual([stage["promotionAllowed"] for stage in stages], [False, False, True])
+        self.assertEqual(four_rabbits._curriculum_stage(3)["round"], 2)
+
     def test_start_runs_immediately_and_restores_worker(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(four_rabbits.threading, "Thread", _Thread):
             core = _Core(Path(temp))
@@ -149,6 +155,9 @@ class FourRabbitsContinuousTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch("adaptive_profiles._service") as service_factory:
             service_factory.return_value.monitor_and_rollback.return_value = {"rolledBack": False}
             core = _ResultCore(Path(temp), self._success_result())
+            core.user_data_path("rabbit@example.com", "four_rabbits_status.json").write_text(
+                json.dumps({"totalBatches": 2}), encoding="utf-8"
+            )
             state = four_rabbits.run_once(core, "rabbit@example.com", force=True)
             challenger = state["agents"]["challenger"]
             self.assertEqual(challenger["state"], "pending")
@@ -162,8 +171,21 @@ class FourRabbitsContinuousTests(unittest.TestCase):
             self.assertEqual(manifest["reproducibility"], "limited")
             self.assertFalse(manifest["seedApplied"])
             self.assertIn("seed", core.last_options)
+            self.assertEqual(core.last_options["smartTProfile"], "quantbrain")
+            self.assertEqual(core.last_options["learningProfile"], "quantbrain")
             persisted = json.loads(core.user_data_path("rabbit@example.com", "four_rabbits_status.json").read_text(encoding="utf-8"))
             self.assertEqual(persisted["batchManifest"], manifest)
+
+    def test_loose_stage_collects_evidence_but_cannot_promote(self):
+        with tempfile.TemporaryDirectory() as temp, patch("adaptive_profiles._service") as service_factory:
+            service_factory.return_value.monitor_and_rollback.return_value = {"rolledBack": False}
+            core = _ResultCore(Path(temp), self._success_result())
+            state = four_rabbits.run_once(core, "rabbit@example.com", force=True)
+            self.assertEqual(core.last_options["smartTProfile"], "sensitive")
+            self.assertEqual(core.last_options["learningProfile"], "quantbrain")
+            self.assertEqual(state["curriculum"]["phase"], "discovery")
+            self.assertFalse(state["lastResult"]["promotionEligible"])
+            self.assertIn("仅积累影子证据", state["agents"]["challenger"]["message"])
 
     def test_losing_batch_with_existing_challenger_is_wait_not_pending(self):
         with tempfile.TemporaryDirectory() as temp, patch("adaptive_profiles._service") as service_factory:
