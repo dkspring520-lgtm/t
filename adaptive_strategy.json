@@ -1,5 +1,6 @@
 {
-  "buy_min_dev": -1.8,
+  "buy_min_dev": -1.5,
+  "normal_buy_min_dev": -2.4,
   "buy_max_dev": -2.8,
   "buy_rebound": 0.45,
   "buy_confirm": 5,

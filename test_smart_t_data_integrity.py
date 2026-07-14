@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -88,6 +89,28 @@ class SmartTDataIntegrityTests(unittest.TestCase):
             selected = sim.fetch_simulation_candidates([stock], 1, 1)
         self.assertEqual(len(selected), 1)
         fetch.assert_called_once_with(stock.symbol, 1, True)
+
+    def test_candidate_fetch_preserves_pool_order_when_workers_finish_out_of_order(self):
+        stocks = [sim.Stock(str(index), f"60000{index}", f"sh60000{index}") for index in range(3)]
+        bars = [
+            sim.Bar(f"09:{30 + index:02d}", 10.0, 100.0, 100000.0, "2026-07-10")
+            for index in range(30)
+        ]
+
+        def fetch(symbol, days, quick):
+            if symbol == stocks[0].symbol:
+                time.sleep(0.03)
+            return bars
+
+        with patch.object(sim, "fetch_minutes", side_effect=fetch):
+            selected = sim.fetch_simulation_candidates(stocks, 2, 1)
+        self.assertEqual([stock.symbol for stock, _bars in selected], [stocks[0].symbol, stocks[1].symbol])
+
+    def test_opportunity_scan_expands_candidates_but_keeps_custom_and_strict_counts(self):
+        self.assertEqual(sim._simulation_scan_size(20, "scan"), 100)
+        self.assertEqual(sim._simulation_scan_size(10, "scan"), 50)
+        self.assertEqual(sim._simulation_scan_size(20, "strict"), 20)
+        self.assertEqual(sim._simulation_scan_size(20, "scan", True), 20)
 
     def test_quick_http_attempt_does_not_retry_three_times(self):
         with patch.object(sim.urllib.request, "urlopen", side_effect=OSError("offline")) as opener:

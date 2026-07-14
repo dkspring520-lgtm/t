@@ -12,6 +12,26 @@ def points(values, start_minute=30):
 
 
 class AuctionDirectionTests(unittest.TestCase):
+    def test_small_low_gap_enters_buy_first_plan_but_same_high_gap_stays_neutral(self):
+        low_gate = evaluate_auction_gate(
+            pre_close=100,
+            open_price=99.94,
+            current_price=99.94,
+            average=99.94,
+            points=[{"time": "09:30", "price": 99.94}],
+            time_text="09:30",
+        )
+        high_gate = evaluate_auction_gate(
+            pre_close=100,
+            open_price=100.21,
+            current_price=100.21,
+            average=100.21,
+            points=[{"time": "09:30", "price": 100.21}],
+            time_text="09:30",
+        )
+        self.assertEqual(low_gate["preferredDirection"], "BUY_FIRST")
+        self.assertEqual(high_gate["preferredDirection"], "")
+
     def test_high_open_weakness_confirms_reverse_t(self):
         gate = evaluate_auction_gate(
             pre_close=100,
@@ -24,7 +44,22 @@ class AuctionDirectionTests(unittest.TestCase):
         )
         self.assertEqual(gate["state"], "CONFIRMED")
         self.assertEqual(gate["preferredDirection"], "SELL_FIRST")
-        self.assertGreaterEqual(gate["confirmationCount"], 2)
+        self.assertGreaterEqual(gate["confirmationCount"], 3)
+
+    def test_high_open_reverse_confirms_two_conditions_before_execution_gate(self):
+        gate = evaluate_auction_gate(
+            pre_close=100,
+            open_price=101,
+            current_price=100.8,
+            average=100.7,
+            points=points([101.0, 101.0, 100.9, 100.8]),
+            time_text="09:36",
+            auction_price=101,
+        )
+        self.assertEqual(gate["preferredDirection"], "SELL_FIRST")
+        self.assertEqual(gate["confirmationCount"], 2)
+        self.assertEqual(gate["state"], "CONFIRMED")
+        self.assertTrue(gate["confirmed"])
 
     def test_low_open_recovery_confirms_positive_t(self):
         gate = evaluate_auction_gate(

@@ -16,6 +16,26 @@ _LOCK = threading.RLock()
 _WORKERS: dict[str, threading.Thread] = {}
 TRAIN_INTERVAL_MINUTES = 5
 WORKER_POLL_SECONDS = 15
+CURRICULUM_STAGES = (
+    {
+        "phase": "discovery",
+        "label": "宽松发现",
+        "profile": "sensitive",
+        "description": "扩大影子候选，只记录、不晋升",
+    },
+    {
+        "phase": "screening",
+        "label": "平衡筛选",
+        "profile": "balanced",
+        "description": "用费用后收益淘汰噪声候选",
+    },
+    {
+        "phase": "confirmation",
+        "label": "严格确认",
+        "profile": "quantbrain",
+        "description": "仅严格样本允许进入人工晋升评审",
+    },
+)
 
 
 def _now() -> datetime:
@@ -46,6 +66,7 @@ def _default_state() -> dict[str, Any]:
         "phase": "idle",
         "progress": 0,
         "batch": {},
+        "curriculum": {},
         "batchManifest": {},
         "lastResult": {},
         "events": [],
@@ -57,6 +78,26 @@ def _default_state() -> dict[str, Any]:
             "risk": {"label": "风控兔", "state": "ready", "message": "自动监控异常与回退"},
         },
     }
+
+
+def _curriculum_stage(total_batches: int) -> dict[str, Any]:
+    """Cycle broad discovery -> balanced screening -> strict confirmation.
+
+    All stages are shadow-only.  Evidence is accumulated in the quantbrain
+    learner, while only the strict confirmation stage may expose a challenger
+    for manual promotion.
+    """
+    completed = max(0, int(total_batches or 0))
+    index = completed % len(CURRICULUM_STAGES)
+    stage = dict(CURRICULUM_STAGES[index])
+    stage.update({
+        "index": index + 1,
+        "total": len(CURRICULUM_STAGES),
+        "round": completed // len(CURRICULUM_STAGES) + 1,
+        "learningProfile": "quantbrain",
+        "promotionAllowed": stage["phase"] == "confirmation",
+    })
+    return stage
 
 
 def _state_path(core, email: str) -> Path:
@@ -236,6 +277,8 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
         started = _now()
         batch_id = started.strftime("%Y%m%d-%H%M%S")
         batch_seed = int(hashlib.sha256(batch_id.encode("utf-8")).hexdigest()[:8], 16)
+        curriculum = _curriculum_stage(int(state.get("totalBatches") or 0))
+        state["curriculum"] = curriculum
         state["running"] = True
         state["runStartedAt"] = started.isoformat(timespec="seconds")
         state["batch"] = {
@@ -243,9 +286,17 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             "seed": batch_seed,
             "days": 5,
             "sample": 10,
-            "profile": "量化学习",
+            "profile": curriculum["label"],
+            "executionProfile": curriculum["profile"],
+            "learningProfile": curriculum["learningProfile"],
+            "curriculumPhase": curriculum["phase"],
         }
-        _set_phase(state, "replaying", 20, "正在获取10只股票并进行近5日影子回放")
+        _set_phase(
+            state,
+            "replaying",
+            20,
+            f"第{curriculum['round']}轮 · {curriculum['label']}：正在获取10只股票并进行近5日影子回放",
+        )
         _update_agent(state, "training", "running", state["message"], days=5, sample=10)
         _write(core, email, state)
 
@@ -258,7 +309,8 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
             "days": 5,
             "random": True,
             "simMode": "strict",
-            "smartTProfile": "quantbrain",
+            "smartTProfile": curriculum["profile"],
+            "learningProfile": curriculum["learningProfile"],
             "baseShares": 6000,
             "shadowTraining": True,
             # Kept in the manifest even on older simulators that do not yet
@@ -304,11 +356,18 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                     signals=adaptive.get("recordedSignals", 0), trades=adaptive.get("recordedTrades", 0),
                 )
                 proposal_version = _proposal_version(adaptive)
-                promotion_eligible = bool(triggered > 0 and net_pnl > 0 and proposal_version)
+                promotion_eligible = bool(
+                    curriculum["promotionAllowed"]
+                    and triggered > 0
+                    and net_pnl > 0
+                    and proposal_version
+                )
                 state["lastResult"].update({
                     "promotionEligible": promotion_eligible,
                     "promotionStatus": "CANDIDATE" if promotion_eligible else "WAIT",
                     "challengerVersion": proposal_version,
+                    "curriculumPhase": curriculum["phase"],
+                    "curriculumLabel": curriculum["label"],
                 })
                 if promotion_eligible:
                     _update_agent(
@@ -319,7 +378,24 @@ def run_once(core, email: str, force: bool = False) -> dict[str, Any]:
                         version=proposal_version,
                         promotionEligible=True,
                     )
-                elif proposal_version and net_pnl <= 0:
+                elif not proposal_version:
+                    _update_agent(
+                        state,
+                        "challenger",
+                        "wait",
+                        "WAIT｜本批次未产生可晋升候选",
+                        promotionEligible=False,
+                    )
+                elif not curriculum["promotionAllowed"]:
+                    _update_agent(
+                        state,
+                        "challenger",
+                        "wait",
+                        f"WAIT｜{curriculum['label']}仅积累影子证据，完成严格确认后才允许晋升",
+                        version=proposal_version,
+                        promotionEligible=False,
+                    )
+                elif net_pnl <= 0:
                     _update_agent(
                         state,
                         "challenger",

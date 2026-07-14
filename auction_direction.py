@@ -69,7 +69,11 @@ def evaluate_auction_gate(
     plan_label = "平开观察"
     if gap_pct >= 0.30:
         preferred, plan_label = "SELL_FIRST", "高开转弱候选"
-    elif gap_pct <= -0.30:
+    # Cross-sectional replay showed that a shallow low gap can still be useful
+    # once the five-minute reclaim and right-side execution checks confirm it.
+    # The same relaxation on high-gap reverse-T created sell-fly-away losses,
+    # so keep the directions asymmetric and let 09:35 structure decide.
+    elif gap_pct <= -0.05:
         preferred, plan_label = "BUY_FIRST", "低开转强候选"
 
     payload = {
@@ -124,9 +128,14 @@ def evaluate_auction_gate(
     matched = [label for ok, label in checks if ok]
     payload["conditions"] = matched
     payload["confirmationCount"] = len(matched)
+    # The execution layer independently requires a failed VWAP/open retest,
+    # a renewed downturn and the observed high to hold.  Requiring three
+    # auction checks here counted the same reversal evidence twice and made
+    # otherwise valid high-gap reverse-T setups much rarer than low-gap buys.
+    required_confirmations = 2
     if invalid:
         payload.update(state="INVALIDATED", invalidated=True, label="竞价方向已失效", reason=invalid_reason)
-    elif len(matched) >= 2:
+    elif len(matched) >= required_confirmations:
         payload.update(
             state="CONFIRMED",
             confirmed=True,
@@ -134,5 +143,5 @@ def evaluate_auction_gate(
             reason=f"已确认{len(matched)}项：{'、'.join(matched)}。",
         )
     else:
-        payload["reason"] = f"09:35后仅确认{len(matched)}项，未达到两项门槛。"
+        payload["reason"] = f"09:35后仅确认{len(matched)}项，未达到{required_confirmations}项门槛。"
     return payload

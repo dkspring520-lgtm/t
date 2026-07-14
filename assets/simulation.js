@@ -15,6 +15,7 @@
     "ai-review": { profile: "balanced", strategy: "AI复核优先" },
   };
   let rabbitPollTimer = 0;
+  let observationPollTimer = 0;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 
   function applyPlan() {
@@ -83,7 +84,9 @@
     syncPlan();
     updateSource();
     loadFourRabbits();
+    loadPaperObservation();
     document.querySelectorAll("[data-rabbit-action]").forEach((button) => button.addEventListener("click", () => controlFourRabbits(button.dataset.rabbitAction, button)));
+    document.querySelectorAll("[data-observation-action]").forEach((button) => button.addEventListener("click", () => controlPaperObservation(button.dataset.observationAction, button)));
   }
 
   function renderFourRabbits(data) {
@@ -151,6 +154,64 @@
       rabbitPollTimer = window.setTimeout(loadFourRabbits, action === "run" ? 500 : 1500);
     } catch (error) {
       if ($("fourRabbitsMessage")) $("fourRabbitsMessage").textContent = `操作失败：${error.message}`;
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  function renderPaperObservation(data) {
+    const message = $("paperObservationMessage");
+    if (message) message.textContent = data.message || "等待新样本";
+    const metrics = data.metrics || {};
+    const criteria = data.criteria || {};
+    const verdictLabels = {
+      NOT_STARTED: "未开始", COLLECTING: "采集中", PAUSED: "已暂停", STOPPED: "已停止",
+      CONTAMINATED: "样本污染", KEEP_OBSERVING: "继续观察", READY_FOR_REVIEW: "可人工评审", DO_NOT_PROMOTE: "不建议晋升",
+    };
+    const items = [
+      ["状态", verdictLabels[data.verdict] || data.verdict || "--"],
+      ["交易日", `${Number(metrics.tradingDays) || 0}/${Number(criteria.minTradingDays) || 20}`],
+      ["完成闭环", `${Number(metrics.completedCycles) || 0}/${Number(criteria.minCompletedCycles) || 30}`],
+      ["市场状态", `${Number(metrics.marketRegimeCount) || 0}/${Number(criteria.minMarketRegimes) || 2}`],
+      ["胜率", metrics.completedCycles ? `${Number(metrics.winRate || 0).toFixed(1)}%` : "--"],
+      ["净盈亏", metrics.completedCycles ? `${Number(metrics.netPnl || 0) >= 0 ? "+" : ""}${Number(metrics.netPnl || 0).toFixed(2)}元` : "--"],
+      ["盈亏比", metrics.completedCycles ? Number(metrics.profitFactor || 0).toFixed(2) : "--"],
+    ];
+    if ($("paperObservationMetrics")) $("paperObservationMetrics").innerHTML = items.map(([label, value]) => `<span><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`).join("");
+    document.querySelectorAll("[data-observation-action]").forEach((button) => {
+      if (button.dataset.observationAction === "pause") button.hidden = !data.enabled || data.paused;
+      if (button.dataset.observationAction === "resume") button.hidden = !data.enabled || !data.paused;
+    });
+  }
+
+  async function loadPaperObservation() {
+    try {
+      const response = await fetch("/api/paper-observation/status", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      renderPaperObservation(await response.json());
+    } catch (error) {
+      if ($("paperObservationMessage")) $("paperObservationMessage").textContent = `观察状态读取失败：${error.message}`;
+    } finally {
+      window.clearTimeout(observationPollTimer);
+      observationPollTimer = window.setTimeout(loadPaperObservation, 15000);
+    }
+  }
+
+  async function controlPaperObservation(action, button) {
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch("/api/paper-observation/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      renderPaperObservation(data);
+      loadFourRabbits();
+    } catch (error) {
+      if ($("paperObservationMessage")) $("paperObservationMessage").textContent = `操作失败：${error.message}`;
     } finally {
       if (button) button.disabled = false;
     }
